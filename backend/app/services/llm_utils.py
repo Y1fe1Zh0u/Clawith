@@ -50,6 +50,7 @@ def get_tool_params(provider: str) -> dict:
 # Per-provider / per-model max_tokens limits.
 # Qwen models: qwen-max is limited to 8192; qwen-long/qwen-plus can do more.
 _MAX_TOKENS_BY_PROVIDER: dict[str, int] = {
+    "deepseek": 8192,   # DeepSeek chat completions rejects max_tokens above 8192
     "qwen": 8192,       # conservative default; qwen-max hard limit
     "anthropic": 4096,  # claude native max output
     "minimax": 16384,   # MiniMax-M2.5 supports large output
@@ -76,4 +77,3 @@ def get_max_tokens(provider: str, model: str | None = None) -> int:
                 return limit
     # Fall back to provider-level default, otherwise use 16384
     return _MAX_TOKENS_BY_PROVIDER.get(provider, 16384)
-

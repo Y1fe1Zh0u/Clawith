@@ -17,6 +17,18 @@ from app.services.feishu_service import feishu_service
 router = APIRouter(tags=["feishu"])
 
 
+def _extract_feishu_message_id(response: dict | None) -> str | None:
+    """Extract message_id from Feishu send-message responses when available."""
+    if not isinstance(response, dict):
+        return None
+    data = response.get("data")
+    if isinstance(data, dict):
+        message_id = data.get("message_id")
+        if message_id:
+            return str(message_id)
+    return None
+
+
 # ─── OAuth ──────────────────────────────────────────────
 
 @router.post("/auth/feishu/callback", response_model=TokenResponse)
@@ -176,6 +188,7 @@ async def feishu_event_webhook(
 
     if event_type == "im.message.receive_v1":
         message = event.get("message", {})
+        message_id = message.get("message_id", "")
         sender = event.get("sender", {}).get("sender_id", {})
         sender_open_id = sender.get("open_id", "")
         msg_type = message.get("message_type", "text")
@@ -286,29 +299,39 @@ async def feishu_event_webhook(
             # Load recent conversation history via session (session UUID may already exist)
             from app.models.audit import ChatMessage
             from app.models.agent import Agent as AgentModel
-            from app.services.channel_session import find_or_create_channel_session
+            from app.models.chat_session import ChatSession as _ChatSession
+            from app.services.channel_session import find_or_create_channel_session, load_shared_channel_history
             agent_r = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
             agent_obj = agent_r.scalar_one_or_none()
             creator_id = agent_obj.creator_id if agent_obj else agent_id
             ctx_size = agent_obj.context_window_size if agent_obj else 100
 
-            # Pre-resolve session so history lookup uses the UUID  (session created later if new)
-            _pre_sess_r = await db.execute(
-                select(__import__('app.models.chat_session', fromlist=['ChatSession']).ChatSession).where(
-                    __import__('app.models.chat_session', fromlist=['ChatSession']).ChatSession.agent_id == agent_id,
-                    __import__('app.models.chat_session', fromlist=['ChatSession']).ChatSession.external_conv_id == conv_id,
+            if chat_type == "group" and chat_id:
+                history = await load_shared_channel_history(
+                    db,
+                    current_agent_id=agent_id,
+                    external_conv_id=conv_id,
+                    source_channel="feishu",
+                    limit=ctx_size,
                 )
-            )
-            _pre_sess = _pre_sess_r.scalar_one_or_none()
-            _history_conv_id = str(_pre_sess.id) if _pre_sess else conv_id
-            history_result = await db.execute(
-                select(ChatMessage)
-                .where(ChatMessage.agent_id == agent_id, ChatMessage.conversation_id == _history_conv_id)
-                .order_by(ChatMessage.created_at.desc())
-                .limit(ctx_size)
-            )
-            history_msgs = history_result.scalars().all()
-            history = [{"role": m.role, "content": m.content} for m in reversed(history_msgs)]
+            else:
+                # Keep P2P behavior unchanged: use the current agent's own session history.
+                _pre_sess_r = await db.execute(
+                    select(_ChatSession).where(
+                        _ChatSession.agent_id == agent_id,
+                        _ChatSession.external_conv_id == conv_id,
+                    )
+                )
+                _pre_sess = _pre_sess_r.scalar_one_or_none()
+                _history_conv_id = str(_pre_sess.id) if _pre_sess else conv_id
+                history_result = await db.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.agent_id == agent_id, ChatMessage.conversation_id == _history_conv_id)
+                    .order_by(ChatMessage.created_at.desc())
+                    .limit(ctx_size)
+                )
+                history_msgs = history_result.scalars().all()
+                history = [{"role": m.role, "content": m.content} for m in reversed(history_msgs)]
 
             # --- Resolve Feishu sender identity & find/create platform user ---
             import uuid as _uuid
@@ -393,7 +416,16 @@ async def feishu_event_webhook(
             session_conv_id = str(_sess.id)
 
             # Save user message
-            db.add(ChatMessage(agent_id=agent_id, user_id=platform_user_id, role="user", content=user_text, conversation_id=session_conv_id))
+            db.add(
+                ChatMessage(
+                    agent_id=agent_id,
+                    user_id=platform_user_id,
+                    role="user",
+                    content=user_text,
+                    conversation_id=session_conv_id,
+                    external_message_id=message_id or None,
+                )
+            )
             _sess.last_message_at = _dt.now(_tz.utc)
             await db.commit()
 
@@ -487,27 +519,39 @@ async def feishu_event_webhook(
                     except Exception as e:
                         print(f"[Feishu] Failed to create task: {e}")
 
-            # Save assistant reply to history (use platform_user_id so messages stay in one session)
-            db.add(ChatMessage(agent_id=agent_id, user_id=platform_user_id, role="assistant", content=reply_text, conversation_id=session_conv_id))
-            _sess.last_message_at = _dt.now(_tz.utc)
-            await db.commit()
             # Send reply via Feishu
+            sent_message_id = None
             try:
                 if chat_type == "group" and chat_id:
-                    await feishu_service.send_message(
+                    _send_resp = await feishu_service.send_message(
                         config.app_id, config.app_secret,
                         chat_id, "text",
                         json.dumps({"text": reply_text}),
                         receive_id_type="chat_id",
                     )
                 else:
-                    await feishu_service.send_message(
+                    _send_resp = await feishu_service.send_message(
                         config.app_id, config.app_secret,
                         sender_open_id, "text",
                         json.dumps({"text": reply_text}),
                     )
+                sent_message_id = _extract_feishu_message_id(_send_resp)
             except Exception as e:
                 print(f"[Feishu] Failed to send message: {e}")
+
+            # Save assistant reply to history (use platform_user_id so messages stay in one session)
+            db.add(
+                ChatMessage(
+                    agent_id=agent_id,
+                    user_id=platform_user_id,
+                    role="assistant",
+                    content=reply_text,
+                    conversation_id=session_conv_id,
+                    external_message_id=sent_message_id,
+                )
+            )
+            _sess.last_message_at = _dt.now(_tz.utc)
+            await db.commit()
 
     return {"code": 0, "msg": "ok"}
 
@@ -617,8 +661,16 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
 
         # Store user message as file path
         user_msg_content = f"[file:{filename}]"
-        db.add(ChatMessage(agent_id=agent_id, user_id=platform_user_id, role="user",
-                           content=user_msg_content, conversation_id=session_conv_id))
+        db.add(
+            ChatMessage(
+                agent_id=agent_id,
+                user_id=platform_user_id,
+                role="user",
+                content=user_msg_content,
+                conversation_id=session_conv_id,
+                external_message_id=message_id or None,
+            )
+        )
         _sess.last_message_at = _dt.now(_tz.utc)
         await db.commit()
 
@@ -627,24 +679,34 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
 
     # Send random ack via Feishu first
     ack = random.choice(_FILE_ACK_MESSAGES)
+    ack_message_id = None
     try:
         if chat_type == "group" and chat_id:
-            await feishu_service.send_message(
+            _ack_resp = await feishu_service.send_message(
                 config.app_id, config.app_secret, chat_id, "text",
                 json.dumps({"text": ack}), receive_id_type="chat_id",
             )
         else:
-            await feishu_service.send_message(
+            _ack_resp = await feishu_service.send_message(
                 config.app_id, config.app_secret, sender_open_id, "text",
                 json.dumps({"text": ack}),
             )
+        ack_message_id = _extract_feishu_message_id(_ack_resp)
     except Exception as e:
         print(f"[Feishu] Failed to send ack: {e}")
 
     # Store ack in DB
     async with _async_session() as db2:
-        db2.add(ChatMessage(agent_id=agent_id, user_id=platform_user_id, role="assistant",
-                            content=ack, conversation_id=session_conv_id))
+        db2.add(
+            ChatMessage(
+                agent_id=agent_id,
+                user_id=platform_user_id,
+                role="assistant",
+                content=ack,
+                conversation_id=session_conv_id,
+                external_message_id=ack_message_id,
+            )
+        )
         await db2.commit()
 
 
@@ -722,5 +784,3 @@ async def _call_agent_llm(db: AsyncSession, agent_id: uuid.UUID, user_text: str,
         error_msg = str(e) or repr(e)
         print(f"[LLM] Error: {error_msg}")
         return f"⚠️ 调用模型出错: {error_msg[:150]}"
-
-
