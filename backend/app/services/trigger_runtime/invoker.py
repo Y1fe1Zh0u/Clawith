@@ -20,7 +20,17 @@ from app.services.trigger_runtime import (
 
 async def resolve_trigger_delivery_target(agent: Agent, triggers: list[AgentTrigger]) -> dict | None:
     from app.models.chat_session import ChatSession
-    from app.services.chat_session_service import ensure_primary_platform_session
+    from app.services import chat_session_service
+
+    def _target_from_session(session: ChatSession, *, kind: str = "session") -> dict:
+        return {
+            "kind": kind,
+            "session_id": str(session.id),
+            "owner_user_id": str(session.user_id),
+            "source_channel": session.source_channel,
+            "external_conv_id": session.external_conv_id,
+            "is_group": session.is_group,
+        }
 
     for trigger in triggers:
         cfg = trigger.config or {}
@@ -31,12 +41,7 @@ async def resolve_trigger_delivery_target(agent: Agent, triggers: list[AgentTrig
                     session = await db.get(ChatSession, uuid.UUID(a2a_sid))
                     if not session:
                         return None
-                    return {
-                        "kind": "session",
-                        "session_id": str(session.id),
-                        "owner_user_id": str(session.user_id),
-                        "source_channel": session.source_channel,
-                    }
+                    return _target_from_session(session)
             except Exception:
                 return None
 
@@ -53,36 +58,200 @@ async def resolve_trigger_delivery_target(agent: Agent, triggers: list[AgentTrig
     origin_session_id = origin_cfg.get("_origin_session_id")
     origin_user_id = origin_cfg.get("_origin_user_id")
 
-    if origin_source_channel == "agent" and origin_session_id:
+    if origin_session_id:
         try:
             async with async_session() as db:
                 session = await db.get(ChatSession, uuid.UUID(origin_session_id))
-                if not session:
-                    return None
-                return {
-                    "kind": "session",
-                    "session_id": str(session.id),
-                    "owner_user_id": str(session.user_id),
-                    "source_channel": "agent",
-                }
+                if session and session.source_channel != "trigger":
+                    return _target_from_session(session)
         except Exception:
-            return None
+            pass
 
     if origin_source_channel != "trigger" and origin_user_id:
         try:
             async with async_session() as db:
-                primary = await ensure_primary_platform_session(db, agent.id, uuid.UUID(origin_user_id))
+                primary = await chat_session_service.ensure_primary_platform_session(
+                    db,
+                    agent.id,
+                    uuid.UUID(origin_user_id),
+                )
                 await db.commit()
-                return {
-                    "kind": "primary_user_session",
-                    "session_id": str(primary.id),
-                    "owner_user_id": str(primary.user_id),
-                    "source_channel": primary.source_channel,
-                }
+                return _target_from_session(primary, kind="primary_user_session")
         except Exception:
             return None
 
     return None
+
+
+async def _send_external_channel_trigger_notification(
+    agent_id: uuid.UUID,
+    delivery_target: dict,
+    content: str,
+) -> bool:
+    """Send a trigger result back to the original third-party conversation when possible."""
+    source_channel = delivery_target.get("source_channel")
+    external_conv_id = str(delivery_target.get("external_conv_id") or "").strip()
+    if not source_channel or source_channel in {"web", "agent", "trigger"}:
+        return True
+    if not external_conv_id:
+        logger.warning(f"[TriggerDelivery] Missing external_conv_id for {source_channel} delivery")
+        return False
+
+    from app.models.channel_config import ChannelConfig
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(ChannelConfig).where(
+                ChannelConfig.agent_id == agent_id,
+                ChannelConfig.channel_type == source_channel,
+                ChannelConfig.is_configured.is_(True),
+            )
+        )
+        config = result.scalar_one_or_none()
+
+    if not config:
+        logger.warning(f"[TriggerDelivery] No configured {source_channel} channel for agent {agent_id}")
+        return False
+
+    try:
+        if source_channel == "feishu":
+            from app.services.feishu_service import FeishuAPIError, feishu_service
+
+            if external_conv_id.startswith("feishu_group_"):
+                receive_id = external_conv_id.removeprefix("feishu_group_")
+                receive_id_type = "chat_id"
+                response = await feishu_service.send_message(
+                    config.app_id,
+                    config.app_secret,
+                    receive_id,
+                    "text",
+                    _json.dumps({"text": content}, ensure_ascii=False),
+                    receive_id_type=receive_id_type,
+                )
+                return response.get("code") == 0
+
+            if external_conv_id.startswith("feishu_p2p_"):
+                receive_id = external_conv_id.removeprefix("feishu_p2p_")
+                for receive_id_type in ("user_id", "open_id"):
+                    try:
+                        response = await feishu_service.send_message(
+                            config.app_id,
+                            config.app_secret,
+                            receive_id,
+                            "text",
+                            _json.dumps({"text": content}, ensure_ascii=False),
+                            receive_id_type=receive_id_type,
+                        )
+                        if response.get("code") == 0:
+                            return True
+                    except FeishuAPIError:
+                        continue
+                return False
+
+        elif source_channel == "slack":
+            from app.api.slack import _send_slack_messages
+
+            bot_token = str(config.app_secret or "").strip()
+            if not bot_token:
+                return False
+            if external_conv_id.startswith("slack_dm_"):
+                import httpx
+
+                slack_user_id = external_conv_id.removeprefix("slack_dm_")
+                async with httpx.AsyncClient(timeout=10) as client:
+                    open_resp = await client.post(
+                        "https://slack.com/api/conversations.open",
+                        headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json"},
+                        json={"users": slack_user_id},
+                    )
+                    data = open_resp.json()
+                    if open_resp.status_code >= 400 or not data.get("ok"):
+                        return False
+                    channel_id = str(((data.get("channel") or {}).get("id") or "")).strip()
+            elif external_conv_id.startswith("slack_"):
+                channel_id = external_conv_id.removeprefix("slack_")
+            else:
+                channel_id = external_conv_id
+            if not channel_id:
+                return False
+            await _send_slack_messages(bot_token, channel_id, content)
+            return True
+
+        elif source_channel == "dingtalk" and external_conv_id.startswith("dingtalk_p2p_"):
+            from app.services.dingtalk_service import send_dingtalk_message
+
+            dingtalk_user_id = external_conv_id.removeprefix("dingtalk_p2p_")
+            response = await send_dingtalk_message(
+                app_id=config.app_id,
+                app_secret=config.app_secret,
+                user_id=dingtalk_user_id,
+                message=content,
+                agent_id=(config.extra_config or {}).get("agent_id"),
+            )
+            return response.get("errcode") == 0
+
+        elif source_channel == "wecom" and external_conv_id.startswith("wecom_p2p_"):
+            from app.services.wecom_service import send_wecom_message
+
+            wecom_user_id = external_conv_id.removeprefix("wecom_p2p_")
+            response = await send_wecom_message(config.app_id, config.app_secret, wecom_user_id, content)
+            return response.get("errcode") == 0
+
+        elif source_channel == "wechat" and external_conv_id.startswith("wechat_"):
+            from app.services.wechat_channel import (
+                WECHAT_ILINK_BASE_URL,
+                get_wechat_context_entry,
+                send_wechat_text_message,
+            )
+
+            wechat_user_id = external_conv_id.removeprefix("wechat_")
+            ctx_entry = get_wechat_context_entry(config.extra_config, from_user_id=wechat_user_id)
+            context_token = str((ctx_entry or {}).get("context_token") or "").strip()
+            token = str((config.extra_config or {}).get("bot_token") or "").strip()
+            if not context_token or not token:
+                return False
+            await send_wechat_text_message(
+                token=token,
+                base_url=str((config.extra_config or {}).get("baseurl") or WECHAT_ILINK_BASE_URL),
+                to_user_id=wechat_user_id,
+                context_token=context_token,
+                text=content,
+                route_tag=str((config.extra_config or {}).get("route_tag") or "").strip() or None,
+            )
+            return True
+
+        elif source_channel == "whatsapp" and external_conv_id.startswith("whatsapp_"):
+            from app.api.whatsapp import _send_whatsapp_messages
+
+            phone = external_conv_id.removeprefix("whatsapp_")
+            await _send_whatsapp_messages(config, phone, content)
+            return True
+
+        elif source_channel == "microsoft_teams":
+            from app.api.teams import _send_teams_message
+
+            await _send_teams_message(
+                config,
+                external_conv_id,
+                {
+                    "type": "message",
+                    "text": content,
+                    "conversation": {"id": external_conv_id},
+                },
+            )
+            return True
+
+        logger.warning(
+            f"[TriggerDelivery] Unsupported or non-direct {source_channel} external delivery "
+            f"for conversation {external_conv_id}"
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            f"[TriggerDelivery] Failed to send {source_channel} trigger result to "
+            f"{external_conv_id}: {exc}"
+        )
+        return False
 
 
 async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTrigger]):
@@ -324,6 +493,7 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
                 notification = f"⚡ {summary}\n\n{final_reply}"
                 target_session_id = delivery_target["session_id"]
                 owner_user_id = delivery_target.get("owner_user_id")
+                source_channel = delivery_target.get("source_channel")
 
                 async with async_session() as db:
                     from app.api.websocket import maybe_mark_session_read_for_active_viewer
@@ -358,6 +528,57 @@ async def invoke_agent_for_triggers(agent_id: uuid.UUID, triggers: list[AgentTri
                             "session_id": target_session_id,
                         },
                     )
+
+                delivered_to_external_channel = await _send_external_channel_trigger_notification(
+                    agent_id,
+                    delivery_target,
+                    notification,
+                )
+                if (
+                    not delivered_to_external_channel
+                    and source_channel not in {"web", "agent", "trigger"}
+                    and owner_user_id
+                ):
+                    try:
+                        from app.services import chat_session_service
+
+                        async with async_session() as db:
+                            fallback = await chat_session_service.ensure_primary_platform_session(
+                                db,
+                                agent_id,
+                                uuid.UUID(owner_user_id),
+                            )
+                            db.add(ChatMessage(
+                                agent_id=agent_id,
+                                conversation_id=str(fallback.id),
+                                role="assistant",
+                                content=notification,
+                                user_id=agent.creator_id,
+                            ))
+                            fallback.last_message_at = datetime.now(timezone.utc)
+                            await maybe_mark_session_read_for_active_viewer(
+                                db,
+                                agent_id=agent_id,
+                                session_id=str(fallback.id),
+                                user_id=uuid.UUID(owner_user_id),
+                            )
+                            await db.commit()
+
+                        await ws_manager.send_to_user(
+                            agent_id_str,
+                            owner_user_id,
+                            {
+                                "type": "trigger_notification",
+                                "content": notification,
+                                "triggers": [t.name for t in triggers],
+                                "session_id": str(fallback.id),
+                            },
+                        )
+                    except Exception as fallback_exc:
+                        logger.warning(
+                            f"[TriggerDelivery] Failed to fallback trigger result to primary session: "
+                            f"{fallback_exc}"
+                        )
             except Exception as e:
                 logger.error(f"Failed to push trigger result to WebSocket: {e}")
 
