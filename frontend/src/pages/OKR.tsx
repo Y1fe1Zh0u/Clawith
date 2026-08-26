@@ -14,6 +14,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../services/apiError";
 import { useNavigate } from "react-router-dom";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { fetchJson } from "../services/api";
@@ -616,8 +617,8 @@ function AddKRForm({
         }),
       });
       onCreated();
-    } catch (e: any) {
-      setError(e.message ?? "Error");
+    } catch (error) {
+      setError(caughtErrorMessage(error) ?? "Error");
     } finally {
       setSaving(false);
     }
@@ -1097,8 +1098,8 @@ function CreateObjectiveForm({
         }),
       });
       onCreated();
-    } catch (e: any) {
-      setError(e.message ?? "Error");
+    } catch (error) {
+      setError(caughtErrorMessage(error) ?? "Error");
     } finally {
       setSaving(false);
     }
@@ -2100,9 +2101,9 @@ function MembersWithoutOKRPanel({
           }),
         12000,
       );
-    } catch (e: any) {
+    } catch (error) {
       setNudgeResult(
-        e.message ??
+        caughtErrorMessage(error) ??
           (isChinese ? "催促失败，请重试" : "Failed to trigger outreach"),
       );
     } finally {

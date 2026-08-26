@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { adminApi, fetchJson } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
 import { saveAccentColor, getSavedAccentColor } from "../utils/theme";
 import { IconFilter, IconShieldCheck } from "@tabler/icons-react";
@@ -325,8 +326,8 @@ function PlatformTab() {
       await adminApi.updatePlatformSettings({ [key]: value });
       setSettings((s: any) => ({ ...s, [key]: value }));
       showToast("Setting updated");
-    } catch (e: any) {
-      showToast(e.message || "Failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Failed", "error");
     }
     setSettingsLoading(false);
   };
@@ -360,8 +361,11 @@ function PlatformTab() {
       setNbSaved(true);
       setTimeout(() => setNbSaved(false), 2000);
       return true;
-    } catch (e: any) {
-      showToast(e.message || t("common.saveFailed", "Save failed"), "error");
+    } catch (error) {
+      showToast(
+        caughtErrorMessage(error) || t("common.saveFailed", "Save failed"),
+        "error",
+      );
       return false;
     } finally {
       setNbSaving(false);
@@ -385,9 +389,10 @@ function PlatformTab() {
       setEmailConfigSaved(true);
       setTimeout(() => setEmailConfigSaved(false), 2000);
       showToast("Email config saved");
-    } catch (e: any) {
+    } catch (error) {
       showToast(
-        "Failed to save email config: " + (e.message || "Unknown error"),
+        "Failed to save email config: " +
+          (caughtErrorMessage(error) || "Unknown error"),
         "error",
       );
     } finally {
@@ -411,10 +416,10 @@ function PlatformTab() {
           "Test email sent successfully!",
         ),
       });
-    } catch (e: any) {
+    } catch (error) {
       setTestEmailResult({
         ok: false,
-        msg: e.message || "Failed to send test email",
+        msg: caughtErrorMessage(error) || "Failed to send test email",
       });
     }
     setTestEmailSending(false);
@@ -430,8 +435,11 @@ function PlatformTab() {
       setTemplatesSaved(true);
       setTimeout(() => setTemplatesSaved(false), 2000);
       showToast(t("enterprise.emailTemplates.saved", "Email templates saved"));
-    } catch (e: any) {
-      showToast(e.message || "Failed to save templates", "error");
+    } catch (error) {
+      showToast(
+        caughtErrorMessage(error) || "Failed to save templates",
+        "error",
+      );
     }
     setTemplatesSaving(false);
   };
@@ -526,9 +534,9 @@ function PlatformTab() {
         },
       }));
       showToast(`${socialProviderMeta[providerType].name} OAuth saved`);
-    } catch (e: any) {
+    } catch (error) {
       showToast(
-        e.message ||
+        caughtErrorMessage(error) ||
           `Failed to save ${socialProviderMeta[providerType].name} OAuth`,
         "error",
       );
@@ -1683,8 +1691,8 @@ function CompaniesTab() {
     try {
       const data = await adminApi.listCompanies();
       setCompanies(data);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (error) {
+      setError(caughtErrorMessage(error) ?? "");
     }
     setLoading(false);
   };
@@ -1741,8 +1749,8 @@ function CompaniesTab() {
       setNewName("");
       setShowCreate(false);
       loadCompanies();
-    } catch (e: any) {
-      showToast(e.message || "Failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Failed", "error");
     }
     setCreating(false);
   };
@@ -1764,8 +1772,8 @@ function CompaniesTab() {
       await adminApi.toggleCompany(id);
       loadCompanies();
       showToast(`Company ${action}d`);
-    } catch (e: any) {
-      showToast(e.message || "Failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Failed", "error");
     }
   };
 
@@ -2462,8 +2470,8 @@ function EditCompanyModal({
       });
       onUpdated();
       onClose();
-    } catch (e: any) {
-      setError(e.message || "Failed to update");
+    } catch (error) {
+      setError(caughtErrorMessage(error) || "Failed to update");
     }
     setSaving(false);
   };
