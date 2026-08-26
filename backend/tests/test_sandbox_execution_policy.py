@@ -560,6 +560,7 @@ async def test_real_workspace_entry_rejects_invalid_sandbox_config_before_dispat
 ) -> None:
     acquired = False
     materialized = False
+    flushed = False
     executed = False
 
     async def invalid_tool_config(*_args):
@@ -577,9 +578,14 @@ async def test_real_workspace_entry_rejects_invalid_sandbox_config_before_dispat
         nonlocal executed
         executed = True
 
+    async def forbidden_flush(*_args, **_kwargs):
+        nonlocal flushed
+        flushed = True
+
     monkeypatch.setattr(agent_tools, "_get_tool_config", invalid_tool_config)
     monkeypatch.setattr(SandboxExecutionLeaseStore, "acquire", forbidden_acquire)
     monkeypatch.setattr(agent_tools, "_prepare_temp_workspace", forbidden_materialize)
+    monkeypatch.setattr(agent_tools, "flush_temp_workspace", forbidden_flush)
     monkeypatch.setattr(agent_tools, "_execute_code_outcome", forbidden_execute)
     monkeypatch.setattr("app.config.get_sandbox_config", lambda: SandboxConfig())
 
@@ -595,7 +601,99 @@ async def test_real_workspace_entry_rejects_invalid_sandbox_config_before_dispat
     assert outcome.error_code == "sandbox_configuration_invalid"
     assert acquired is False
     assert materialized is False
+    assert flushed is False
     assert executed is False
+
+
+@pytest.mark.asyncio
+async def test_real_workspace_entry_normalizes_config_store_error_before_lifecycle(
+    monkeypatch,
+) -> None:
+    lifecycle_calls: list[str] = []
+
+    async def fail_config_store(*_args):
+        raise RuntimeError("configuration store unavailable")
+
+    async def record_acquire(*_args, **_kwargs):
+        lifecycle_calls.append("acquire")
+
+    async def record_materialize(*_args, **_kwargs):
+        lifecycle_calls.append("materialize")
+
+    async def record_flush(*_args, **_kwargs):
+        lifecycle_calls.append("flush")
+
+    async def record_dispatch(*_args, **_kwargs):
+        lifecycle_calls.append("dispatch")
+
+    monkeypatch.setattr(agent_tools, "_get_tool_config", fail_config_store)
+    monkeypatch.setattr(SandboxExecutionLeaseStore, "acquire", record_acquire)
+    monkeypatch.setattr(agent_tools, "_prepare_temp_workspace", record_materialize)
+    monkeypatch.setattr(agent_tools, "flush_temp_workspace", record_flush)
+    monkeypatch.setattr(agent_tools, "_execute_code_outcome", record_dispatch)
+
+    outcome = await agent_tools._execute_code_with_workspace_outcome(
+        agent_id=uuid.uuid4(),
+        tenant_id=str(uuid.uuid4()),
+        session_id=str(uuid.uuid4()),
+        arguments={"language": "python", "code": "print(1)"},
+        tool_name="execute_code",
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.error_code == "sandbox_configuration_invalid"
+    assert lifecycle_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "expected_error"),
+    [
+        (None, "sandbox_configuration_missing"),
+        ({}, "sandbox_configuration_missing"),
+        ({"sandbox_type": "subprocess", "api_key": "key"}, "sandbox_configuration_invalid"),
+        ({"sandbox_type": "e2b", "api_key": ""}, "sandbox_configuration_missing"),
+    ],
+)
+async def test_real_workspace_entry_rejects_invalid_e2b_before_lifecycle(
+    monkeypatch,
+    configured,
+    expected_error,
+) -> None:
+    lifecycle_calls: list[str] = []
+
+    async def tool_config(*_args):
+        return configured
+
+    async def record_acquire(*_args, **_kwargs):
+        lifecycle_calls.append("acquire")
+
+    async def record_materialize(*_args, **_kwargs):
+        lifecycle_calls.append("materialize")
+
+    async def record_flush(*_args, **_kwargs):
+        lifecycle_calls.append("flush")
+
+    async def record_dispatch(*_args, **_kwargs):
+        lifecycle_calls.append("dispatch")
+
+    monkeypatch.setattr(agent_tools, "_get_tool_config", tool_config)
+    monkeypatch.setattr(SandboxExecutionLeaseStore, "acquire", record_acquire)
+    monkeypatch.setattr(agent_tools, "_prepare_temp_workspace", record_materialize)
+    monkeypatch.setattr(agent_tools, "flush_temp_workspace", record_flush)
+    monkeypatch.setattr(agent_tools, "_execute_code_outcome", record_dispatch)
+
+    outcome = await agent_tools._execute_code_with_workspace_outcome(
+        agent_id=uuid.uuid4(),
+        tenant_id=str(uuid.uuid4()),
+        session_id=str(uuid.uuid4()),
+        arguments={"language": "python", "code": "print(1)"},
+        tool_name="execute_code_e2b",
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.error_code == expected_error
+    assert lifecycle_calls == []
 
 
 @pytest.mark.asyncio

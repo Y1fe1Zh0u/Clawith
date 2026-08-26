@@ -8,7 +8,7 @@ Status: implemented — each code execution resolves one Sandbox backend and nev
 
 ## Decision
 
-The workspace entry resolves and validates the effective `SandboxConfig` before acquiring a Session execution lease, materializing a workspace, or dispatching code. Invalid configured values return `sandbox_configuration_invalid` without starting execution or workspace lifecycle work.
+The workspace entry resolves and validates the effective `SandboxConfig` and execution venue exactly once for both `execute_code` and `execute_code_e2b`, before acquiring a Session execution lease, materializing a workspace, flushing output, or dispatching code. The executor consumes that resolved configuration and does not read the configuration store again. Invalid values and configuration-store exceptions return a deterministic typed configuration failure without starting execution or workspace lifecycle work.
 
 The resolved Sandbox backend is the sole execution venue. Pre-dispatch configuration or startup failures return a typed failure. Once `backend.execute` starts, an exception that leaves side effects unprovable returns `sandbox_execution_outcome_unknown`; it never starts a second backend. The platform may still explicitly resolve `execute_code` to the Sandbox subsystem's `subprocess` backend, including its configured isolation policy, but `agent_tools` has no independent legacy subprocess executor.
 
@@ -28,4 +28,4 @@ An unavailable or invalid configured backend is visible instead of silently runn
 
 ## Verification
 
-`backend/tests/test_sandbox_execution_policy.py` covers configured-backend failure without venue switching, invalid configuration rejection at the real workspace entry before lease/materialization/dispatch, post-dispatch unknown outcomes, and formatter failure with preserved result status and metadata. The typed E2B and content-outcome tests cover explicit cloud venue selection and the no-reexecution rule. Backend Ruff formatting, Ruff checks, Pyright, and the focused Sandbox tests are the required evidence for this boundary.
+`backend/tests/test_sandbox_execution_policy.py` covers configured-backend failure without venue switching, invalid configuration and configuration-store failure at the real workspace entry before lease/materialization/flush/dispatch, missing or invalid E2B configuration at the same boundary, post-dispatch unknown outcomes, and formatter failure with preserved result status and metadata. The typed E2B and content-outcome tests cover explicit cloud venue selection and the no-reexecution rule. Backend Ruff formatting, Ruff checks, Pyright, and the focused Sandbox tests are the required evidence for this boundary.

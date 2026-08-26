@@ -118,6 +118,8 @@ from app.services.llm.finish import (
 from app.services.sandbox.config import (
     CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
     CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
+    SandboxConfig,
+    SandboxType,
 )
 from app.services.sandbox.execution_lease import SandboxExecutionLeaseStore
 from app.services.sandbox.local.run_workspace import (
@@ -2384,6 +2386,80 @@ async def _resolve_sandbox_execution_scope(
     return SandboxExecutionScope(tenant_uuid, agent_id, session_uuid)
 
 
+async def _resolve_code_sandbox_config(
+    agent_id: uuid.UUID | None,
+    tool_name: str,
+) -> tuple[SandboxConfig | None, ToolExecutionOutcome | None]:
+    """Resolve one execution venue before any Sandbox lifecycle work starts."""
+    try:
+        tool_config = await _get_tool_config(agent_id, tool_name)
+        if tool_name == "execute_code_e2b":
+            if not isinstance(tool_config, dict) or not tool_config:
+                return None, _typed_failure(
+                    "E2B sandbox credentials are not configured.",
+                    "sandbox_configuration_missing",
+                )
+            if tool_config.get("sandbox_type") != "e2b":
+                return None, _typed_failure(
+                    "execute_code_e2b requires sandbox_type=e2b.",
+                    "sandbox_configuration_invalid",
+                )
+            api_key = tool_config.get("api_key")
+            if not isinstance(api_key, str) or not api_key.strip():
+                return None, _typed_failure(
+                    "E2B sandbox credentials are not configured.",
+                    "sandbox_configuration_missing",
+                )
+            try:
+                default_timeout = int(
+                    tool_config.get(
+                        "default_timeout",
+                        CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
+                    )
+                )
+                max_timeout = int(
+                    tool_config.get(
+                        "max_timeout",
+                        CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
+                    )
+                )
+            except (TypeError, ValueError):
+                return None, _typed_failure(
+                    "E2B timeout configuration must be numeric.",
+                    "sandbox_configuration_invalid",
+                )
+            return (
+                SandboxConfig(
+                    type=SandboxType.E2B,
+                    api_key=api_key.strip(),
+                    default_timeout=default_timeout,
+                    max_timeout=max_timeout,
+                ),
+                None,
+            )
+
+        from app.config import get_sandbox_config
+
+        fallback_config = get_sandbox_config()
+        return (
+            SandboxConfig.from_dict(tool_config, fallback_config)
+            if tool_config
+            else fallback_config,
+            None,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[Sandbox] Configuration resolution failed before dispatch: "
+            "tool={} error={}",
+            tool_name,
+            type(exc).__name__,
+        )
+        return None, _typed_failure(
+            f"Sandbox configuration could not be resolved: {type(exc).__name__}.",
+            "sandbox_configuration_invalid",
+        )
+
+
 async def _execute_code_with_workspace_outcome(
     *,
     agent_id: uuid.UUID,
@@ -2397,6 +2473,16 @@ async def _execute_code_with_workspace_outcome(
     runtime_code_timeout_seconds: float | None = None,
 ) -> ToolExecutionOutcome:
     """Resolve policy once and guard materialize/execute/publish for local Session code."""
+    sandbox_config, configuration_error = await _resolve_code_sandbox_config(
+        agent_id,
+        tool_name,
+    )
+    if configuration_error is not None or sandbox_config is None:
+        return configuration_error or _typed_failure(
+            "Sandbox configuration could not be resolved.",
+            "sandbox_configuration_invalid",
+        )
+
     if tool_name == "execute_code_e2b":
         return await _run_with_temp_workspace_outcome(
             agent_id,
@@ -2407,33 +2493,12 @@ async def _execute_code_with_workspace_outcome(
                 arguments,
                 tool_name=tool_name,
                 on_output=on_output,
+                sandbox_config=sandbox_config,
                 runtime_code_timeout_seconds=runtime_code_timeout_seconds,
             ),
             sync_back=True,
             sync_back_on_non_success=True,
         )
-
-    from app.config import get_sandbox_config
-    from app.services.sandbox.config import (
-        SandboxConfig,
-        SandboxConfigurationError,
-    )
-
-    try:
-        tool_config = await _get_tool_config(agent_id, tool_name)
-        fallback_config = get_sandbox_config()
-        sandbox_config = (
-            SandboxConfig.from_dict(tool_config, fallback_config)
-            if tool_config and tool_name == "execute_code"
-            else None
-        )
-    except SandboxConfigurationError as exc:
-        return _typed_failure(
-            f"Sandbox configuration error: {str(exc)[:300]}",
-            "sandbox_configuration_invalid",
-        )
-    if sandbox_config is None:
-        sandbox_config = fallback_config
 
     try:
         session_uuid = parse_canonical_uuid(session_id, label="session_id") if session_id else None
@@ -12063,78 +12128,20 @@ async def _execute_code_outcome(
     work_dir = ws.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # For E2B tool: do NOT fall back to local subprocess on error —
-    # the user explicitly chose cloud execution.
-    is_e2b_tool = (tool_name == "execute_code_e2b")
-
-    fallback_config = None
+    is_e2b_tool = tool_name == "execute_code_e2b"
     execution_started = False
     try:
-        # Import here to avoid circular imports
-        from app.config import get_sandbox_config
-        from app.services.sandbox.config import SandboxConfig, SandboxType
         from app.services.sandbox.registry import get_sandbox_backend
 
-        tool_config = await _get_tool_config(agent_id, tool_name)
-
-        if is_e2b_tool:
-            # The explicit E2B tool is available only with its own complete
-            # local configuration. Never inherit the platform/local sandbox
-            # fallback because that would silently execute code elsewhere.
-            if not isinstance(tool_config, dict):
-                return _typed_failure(
-                    "E2B sandbox credentials are not configured.",
-                    "sandbox_configuration_missing",
-                )
-            if tool_config.get("sandbox_type") != "e2b":
-                return _typed_failure(
-                    "execute_code_e2b requires sandbox_type=e2b.",
-                    "sandbox_configuration_invalid",
-                )
-            api_key = tool_config.get("api_key")
-            if not isinstance(api_key, str) or not api_key.strip():
-                return _typed_failure(
-                    "E2B sandbox credentials are not configured.",
-                    "sandbox_configuration_missing",
-                )
-            try:
-                default_timeout = int(
-                    tool_config.get(
-                        "default_timeout",
-                        CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
-                    )
-                )
-                max_timeout = int(
-                    tool_config.get(
-                        "max_timeout",
-                        CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
-                    )
-                )
-            except (TypeError, ValueError):
-                return _typed_failure(
-                    "E2B timeout configuration must be numeric.",
-                    "sandbox_configuration_invalid",
-                )
-            sandbox_config = SandboxConfig(
-                type=SandboxType.E2B,
-                api_key=api_key.strip(),
-                default_timeout=default_timeout,
-                max_timeout=max_timeout,
+        if sandbox_config is None:
+            sandbox_config, configuration_error = await _resolve_code_sandbox_config(
+                agent_id,
+                tool_name,
             )
-        elif sandbox_config is None:
-            # The default execute_code tool retains the established platform
-            # fallback behavior; it is a distinct explicit tool contract.
-            fallback_config = get_sandbox_config()
-            if tool_config:
-                sandbox_config = SandboxConfig.from_dict(
-                    tool_config,
-                    fallback_config,
-                )
-            else:
-                sandbox_config = fallback_config
-                logger.info(
-                    "[Sandbox] No per-agent config found for '{}', using fallback",
-                    tool_name,
+            if configuration_error is not None or sandbox_config is None:
+                return configuration_error or _typed_failure(
+                    "Sandbox configuration could not be resolved.",
+                    "sandbox_configuration_invalid",
                 )
 
         # Use the configured default when the call omits timeout, then enforce
