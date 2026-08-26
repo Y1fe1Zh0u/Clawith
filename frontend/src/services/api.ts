@@ -24,14 +24,17 @@ import type {
   FileMutationResponse,
   FilePreview,
   FileRevision,
+  FocusApiItem,
   GatewayMessage,
   InboxMessage,
   JsonValue,
   LlmModel,
   OnboardingStatus,
+  OrgDepartmentItem,
   PersonalAssistantResponse,
   PlatformSettings,
   ResolvedTenant,
+  ExperienceEntry,
   Schedule,
   ScheduleCreateRequest,
   ScheduleHistoryItem,
@@ -53,6 +56,11 @@ import type {
   UploadResponse,
   WorkspaceUploadResponse,
 } from "./apiContracts";
+export type {
+  ExperienceEntry,
+  FocusApiItem,
+  OrgDepartmentItem,
+} from "./apiContracts";
 import {
   AppError,
   parseHttpError,
@@ -60,32 +68,81 @@ import {
   normalizeUnknownError,
 } from "./apiError";
 import {
+  parseActivityListResponse,
   parseAgentCollaboratorsResponse,
   parseAgentListResponse,
   parseAgentMetricsResponse,
   parseAgentResponse,
   parseAgentTemplatesResponse,
+  parseApiKeyResponse,
+  parseAuthRegisterResponse,
+  parseChannelConfigResponse,
+  parseClawhubConfiguredResponse,
+  parseClawhubSkillResponse,
+  parseClawhubSkillsResponse,
   parseCompanyCreateResponse,
   parseCompanyStatsListResponse,
   parseCompanyStatsResponse,
   parseControlScreenshotResponse,
   parseControlStatusResponse,
   parseControlUnlockResponse,
+  parseContentResponse,
+  parseConfiguredResponse,
+  parseCredentialResponse,
+  parseCredentialsResponse,
   parseCreatedAgentResponse,
+  parseCurrentUrlResponse,
+  parseDeletedResponse,
   parseFileItemsResponse,
+  parseFileContentResponse,
   parseFileLockResponse,
   parseFileMutationResponse,
   parseFilePreviewResponse,
   parseFileRevisionsResponse,
+  parseFocusListResponse,
+  parseFocusResponse,
+  parseGatewayMessagesResponse,
+  parseInboxResponse,
+  parseLlmModelsResponse,
   parseLoginResponse,
+  parseOkMessageResponse,
+  parseOkResponse,
+  parseOnboardingStatusResponse,
+  parseOrgDepartmentsResponse,
+  parsePersonalAssistantResponse,
   parsePlatformSettingsResponse,
   parseResolvedTenantResponse,
+  parseScheduleHistoryResponse,
+  parseScheduleResponse,
+  parseScheduleRunResponse,
+  parseSchedulesResponse,
+  parseSkillImportResponse,
+  parseSkillResponse,
+  parseSkillsResponse,
+  parseSkillUrlPreviewResponse,
+  parseSwitchTenantResponse,
+  parseTaskLogsResponse,
+  parseTaskResponse,
+  parseTasksResponse,
+  parseTaskTriggerResponse,
   parseTenantChoicesResponse,
   parseTenantResponse,
   parseTenantSetupResponse,
   parseTenantTokenUsageResponse,
+  parseTriggersResponse,
   parseUploadResponse,
   parseUserResponse,
+  parseVerifyEmailResponse,
+  parseExperienceListResponse,
+  parseExperienceResponse,
+  parseExperienceDistillResponse,
+  parseExperienceReferencesResponse,
+  parseExperienceStatsResponse,
+  parseHintResponse,
+  parseRegistrationConfigResponse,
+  parseSkillSettingsResponse,
+  parseUnreadCountResponse,
+  parseWebhookUrlResponse,
   parseWorkspaceUploadResponse,
   type ResponseParser,
 } from "./apiResponseParsers";
@@ -95,11 +152,21 @@ export type { ApiErrorContext, AppErrorContext, ErrorSource } from "./apiError";
 
 const API_BASE = "/api";
 
-async function request<T>(
+function fetchJsonImpl<T>(
+  url: string,
+  options?: RequestInit,
+  parser?: undefined,
+): Promise<T extends unknown ? unknown : never>;
+function fetchJsonImpl<T>(
+  url: string,
+  options: RequestInit,
+  parser: ResponseParser<T>,
+): Promise<T>;
+async function fetchJsonImpl(
   url: string,
   options: RequestInit = {},
-  parser?: ResponseParser<T>,
-): Promise<T> {
+  parser?: ResponseParser<unknown>,
+): Promise<unknown> {
   const token = localStorage.getItem("token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -137,6 +204,7 @@ async function request<T>(
   }
 
   if (res.status === 204) {
+    if (!parser) return undefined;
     throw new AppError({
       message: "API returned no content for a JSON response",
       code: "invalid_api_response",
@@ -149,6 +217,14 @@ async function request<T>(
     return parser(value);
   }
   return res.json();
+}
+
+function request<T>(
+  url: string,
+  options: RequestInit,
+  parser: ResponseParser<T>,
+): Promise<T> {
+  return fetchJsonImpl(url, options, parser);
 }
 
 async function requestVoid(
@@ -194,7 +270,8 @@ async function requestRaw(
 }
 
 /** Legacy/Internal generic fetcher */
-export const fetchJson = request;
+export const fetchJson = fetchJsonImpl;
+export const fetchVoid = requestVoid;
 
 async function uploadFile(
   url: string,
@@ -369,7 +446,11 @@ export const authApi = {
       message: string;
       user?: User;
       needs_company_setup: boolean;
-    }>("/auth/register", { method: "POST", body: JSON.stringify(data) }),
+    }>(
+      "/auth/register",
+      { method: "POST", body: JSON.stringify(data) },
+      parseAuthRegisterResponse,
+    ),
 
   login: (data: {
     login_identifier: string;
@@ -390,20 +471,24 @@ export const authApi = {
     ),
 
   forgotPassword: (data: { email: string }) =>
-    request<{ ok: boolean; message: string }>("/auth/forgot-password", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<{ ok: boolean; message: string }>(
+      "/auth/forgot-password",
+      { method: "POST", body: JSON.stringify(data) },
+      parseOkMessageResponse,
+    ),
 
   resetPassword: (data: { token: string; new_password: string }) =>
-    request<{ ok: boolean }>("/auth/reset-password", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<{ ok: boolean }>(
+      "/auth/reset-password",
+      { method: "POST", body: JSON.stringify(data) },
+      parseOkResponse,
+    ),
 
   emailHint: (username: string) =>
     request<{ hint: string }>(
       `/auth/email-hint?username=${encodeURIComponent(username)}`,
+      {},
+      parseHintResponse,
     ),
 
   me: () => request<User>("/auth/me", {}, parseUserResponse),
@@ -422,16 +507,18 @@ export const authApi = {
       access_token: string;
       user: User;
       needs_company_setup: boolean;
-    }>("/auth/verify-email", {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    }),
+    }>(
+      "/auth/verify-email",
+      { method: "POST", body: JSON.stringify({ token }) },
+      parseVerifyEmailResponse,
+    ),
 
   resendVerification: (email: string) =>
-    request<{ ok: boolean; message: string }>("/auth/resend-verification", {
-      method: "POST",
-      body: JSON.stringify({ email }),
-    }),
+    request<{ ok: boolean; message: string }>(
+      "/auth/resend-verification",
+      { method: "POST", body: JSON.stringify({ email }) },
+      parseOkMessageResponse,
+    ),
 
   getMyTenants: () =>
     request<TenantChoice[]>("/auth/my-tenants", {}, parseTenantChoicesResponse),
@@ -440,6 +527,7 @@ export const authApi = {
     request<{ access_token: string; redirect_url?: string; message?: string }>(
       "/auth/switch-tenant",
       { method: "POST", body: JSON.stringify({ tenant_id: tenantId }) },
+      parseSwitchTenantResponse,
     ),
 };
 
@@ -465,6 +553,8 @@ export const tenantApi = {
   registrationConfig: () =>
     request<{ allow_self_create_company: boolean }>(
       "/tenants/registration-config",
+      {},
+      parseRegistrationConfigResponse,
     ),
 
   resolveByDomain: (domain: string) =>
@@ -485,13 +575,19 @@ export const tenantApi = {
 };
 
 export const onboardingApi = {
-  status: () => request<OnboardingStatus>("/onboarding/status"),
+  status: () =>
+    request<OnboardingStatus>(
+      "/onboarding/status",
+      {},
+      parseOnboardingStatusResponse,
+    ),
 
   start: (entryMode: "create" | "join") =>
-    request<OnboardingStatus>("/onboarding/start", {
-      method: "POST",
-      body: JSON.stringify({ entry_mode: entryMode }),
-    }),
+    request<OnboardingStatus>(
+      "/onboarding/start",
+      { method: "POST", body: JSON.stringify({ entry_mode: entryMode }) },
+      parseOnboardingStatusResponse,
+    ),
 
   createPersonalAssistant: (data: {
     name: string;
@@ -499,13 +595,18 @@ export const onboardingApi = {
     work_style: string;
     boundaries?: string;
   }) =>
-    request<PersonalAssistantResponse>("/onboarding/personal-assistant", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<PersonalAssistantResponse>(
+      "/onboarding/personal-assistant",
+      { method: "POST", body: JSON.stringify(data) },
+      parsePersonalAssistantResponse,
+    ),
 
   complete: () =>
-    request<OnboardingStatus>("/onboarding/complete", { method: "POST" }),
+    request<OnboardingStatus>(
+      "/onboarding/complete",
+      { method: "POST" },
+      parseOnboardingStatusResponse,
+    ),
 };
 
 export const adminApi = {
@@ -616,12 +717,18 @@ export const agentApi = {
 
   // OpenClaw gateway
   generateApiKey: (id: string) =>
-    request<{ api_key: string; message: string }>(`/agents/${id}/api-key`, {
-      method: "POST",
-    }),
+    request<{ api_key: string; message: string }>(
+      `/agents/${id}/api-key`,
+      { method: "POST" },
+      parseApiKeyResponse,
+    ),
 
   gatewayMessages: (id: string) =>
-    request<GatewayMessage[]>(`/agents/${id}/gateway-messages`),
+    request<GatewayMessage[]>(
+      `/agents/${id}/gateway-messages`,
+      {},
+      parseGatewayMessagesResponse,
+    ),
 };
 
 // ─── Tasks ────────────────────────────────────────────
@@ -630,30 +737,38 @@ export const taskApi = {
     const params = new URLSearchParams();
     if (status) params.set("status_filter", status);
     if (type) params.set("type_filter", type);
-    return request<Task[]>(`/agents/${agentId}/tasks/?${params}`);
+    return request<Task[]>(
+      `/agents/${agentId}/tasks/?${params}`,
+      {},
+      parseTasksResponse,
+    );
   },
 
   create: (agentId: string, data: TaskCreateRequest) =>
-    request<Task>(`/agents/${agentId}/tasks/`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<Task>(
+      `/agents/${agentId}/tasks/`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseTaskResponse,
+    ),
 
   update: (agentId: string, taskId: string, data: Partial<Task>) =>
-    request<Task>(`/agents/${agentId}/tasks/${taskId}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    request<Task>(
+      `/agents/${agentId}/tasks/${taskId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseTaskResponse,
+    ),
 
   getLogs: (agentId: string, taskId: string) =>
     request<
       { id: string; task_id: string; content: string; created_at: string }[]
-    >(`/agents/${agentId}/tasks/${taskId}/logs`),
+    >(`/agents/${agentId}/tasks/${taskId}/logs`, {}, parseTaskLogsResponse),
 
   trigger: (agentId: string, taskId: string) =>
-    request<TaskTriggerResponse>(`/agents/${agentId}/tasks/${taskId}/trigger`, {
-      method: "POST",
-    }),
+    request<TaskTriggerResponse>(
+      `/agents/${agentId}/tasks/${taskId}/trigger`,
+      { method: "POST" },
+      parseTaskTriggerResponse,
+    ),
 };
 
 // ─── Files ────────────────────────────────────────────
@@ -668,15 +783,18 @@ export const fileApi = {
   read: (agentId: string, path: string) =>
     request<{ path: string; content: string }>(
       `/agents/${agentId}/files/content?path=${encodeURIComponent(path)}`,
+      {},
+      parseFileContentResponse,
     ),
 
   write: (agentId: string, path: string, content: string) =>
-    request(
+    request<FileMutationResponse>(
       `/agents/${agentId}/files/content?path=${encodeURIComponent(path)}`,
       {
         method: "PUT",
         body: JSON.stringify({ content }),
       },
+      parseFileMutationResponse,
     ),
 
   autosave: (
@@ -685,7 +803,7 @@ export const fileApi = {
     content: string,
     sessionId?: string | null,
   ) =>
-    request<{ status: string; path: string; revision_id?: string }>(
+    request<FileMutationResponse>(
       `/agents/${agentId}/files/content?path=${encodeURIComponent(path)}`,
       {
         method: "PUT",
@@ -695,14 +813,16 @@ export const fileApi = {
           session_id: sessionId || undefined,
         }),
       },
+      parseFileMutationResponse,
     ),
 
   delete: (agentId: string, path: string) =>
-    request(
+    request<FileMutationResponse>(
       `/agents/${agentId}/files/content?path=${encodeURIComponent(path)}`,
       {
         method: "DELETE",
       },
+      parseFileMutationResponse,
     ),
 
   preview: (agentId: string, path: string) =>
@@ -781,27 +901,13 @@ export const fileApi = {
   },
 };
 
-export type FocusApiItem = {
-  id: string;
-  agent_id: string;
-  key: string;
-  title?: string | null;
-  description: string;
-  status: "in_progress" | "completed";
-  kind: "normal" | "system";
-  source: string;
-  metadata?: { [key: string]: JsonValue };
-  sort_order: number;
-  completed_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
 // ─── Focus ───────────────────────────────────────────
 export const focusApi = {
   list: (agentId: string, includeCompleted = true) =>
     request<FocusApiItem[]>(
       `/agents/${agentId}/focus/?include_completed=${includeCompleted ? "true" : "false"}`,
+      {},
+      parseFocusListResponse,
     ),
 
   upsert: (
@@ -816,34 +922,42 @@ export const focusApi = {
       metadata?: { [key: string]: JsonValue };
     },
   ) =>
-    request<FocusApiItem>(`/agents/${agentId}/focus/`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<FocusApiItem>(
+      `/agents/${agentId}/focus/`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseFocusResponse,
+    ),
 
   complete: (agentId: string, key: string) =>
     request<FocusApiItem>(
       `/agents/${agentId}/focus/${encodeURIComponent(key)}/complete`,
       { method: "POST" },
+      parseFocusResponse,
     ),
 };
 
 // ─── Channel Config ───────────────────────────────────
 export const channelApi = {
   get: (agentId: string) =>
-    request<ChannelConfig>(`/agents/${agentId}/channel`).catch(() => null),
+    request<ChannelConfig>(
+      `/agents/${agentId}/channel`,
+      {},
+      parseChannelConfigResponse,
+    ).catch(() => null),
 
   create: (agentId: string, data: ChannelConfigRequest) =>
-    request<ChannelConfig>(`/agents/${agentId}/channel`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ChannelConfig>(
+      `/agents/${agentId}/channel`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseChannelConfigResponse,
+    ),
 
   update: (agentId: string, data: ChannelConfigRequest) =>
-    request<ChannelConfig>(`/agents/${agentId}/channel`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+    request<ChannelConfig>(
+      `/agents/${agentId}/channel`,
+      { method: "PUT", body: JSON.stringify(data) },
+      parseChannelConfigResponse,
+    ),
 
   delete: (agentId: string) =>
     requestVoid(`/agents/${agentId}/channel`, { method: "DELETE" }),
@@ -851,6 +965,8 @@ export const channelApi = {
   webhookUrl: (agentId: string) =>
     request<{ webhook_url: string }>(
       `/agents/${agentId}/channel/webhook-url`,
+      {},
+      parseWebhookUrlResponse,
     ).catch(() => null),
 };
 
@@ -860,6 +976,8 @@ export const enterpriseApi = {
     const tid = localStorage.getItem("current_tenant_id");
     return request<LlmModel[]>(
       `/enterprise/llm-models${tid ? `?tenant_id=${tid}` : ""}`,
+      {},
+      parseLlmModelsResponse,
     );
   },
 
@@ -867,12 +985,19 @@ export const enterpriseApi = {
     requestVoid(`/enterprise/llm-models/${modelId}/set-default`, {
       method: "POST",
     }),
-  templates: () => request<AgentTemplate[]>("/agents/templates"),
+  templates: () =>
+    request<AgentTemplate[]>(
+      "/agents/templates",
+      {},
+      parseAgentTemplatesResponse,
+    ),
 
   // Enterprise Knowledge Base
   kbFiles: (path: string = "") =>
     request<FileItem[]>(
       `/enterprise/knowledge-base/files?path=${encodeURIComponent(path)}`,
+      {},
+      parseFileItemsResponse,
     ),
 
   kbUpload: (file: File, subPath: string = "") =>
@@ -884,62 +1009,93 @@ export const enterpriseApi = {
   kbRead: (path: string) =>
     request<{ path: string; content: string }>(
       `/enterprise/knowledge-base/content?path=${encodeURIComponent(path)}`,
+      {},
+      parseFileContentResponse,
     ),
 
   kbWrite: (path: string, content: string) =>
-    request(
+    request<FileMutationResponse>(
       `/enterprise/knowledge-base/content?path=${encodeURIComponent(path)}`,
       {
         method: "PUT",
         body: JSON.stringify({ content }),
       },
+      parseFileMutationResponse,
     ),
 
   kbDelete: (path: string) =>
-    request(
+    request<FileMutationResponse>(
       `/enterprise/knowledge-base/content?path=${encodeURIComponent(path)}`,
       {
         method: "DELETE",
       },
+      parseFileMutationResponse,
     ),
 };
 
 // ─── Activity Logs ────────────────────────────────────
 export const activityApi = {
   list: (agentId: string, limit = 50) =>
-    request<ActivityItem[]>(`/agents/${agentId}/activity?limit=${limit}`),
+    request<ActivityItem[]>(
+      `/agents/${agentId}/activity?limit=${limit}`,
+      {},
+      parseActivityListResponse,
+    ),
 };
 
 // ─── Messages ─────────────────────────────────────────
 export const messageApi = {
   inbox: (limit = 50) =>
-    request<InboxMessage[]>(`/messages/inbox?limit=${limit}`),
+    request<InboxMessage[]>(
+      `/messages/inbox?limit=${limit}`,
+      {},
+      parseInboxResponse,
+    ),
 
   unreadCount: () =>
-    request<{ unread_count: number }>("/messages/unread-count"),
+    request<{ unread_count: number }>(
+      "/messages/unread-count",
+      {},
+      parseUnreadCountResponse,
+    ),
 
   markRead: (messageId: string) =>
-    request<void>(`/messages/${messageId}/read`, { method: "PUT" }),
+    request<{ ok: boolean }>(
+      `/messages/${messageId}/read`,
+      { method: "PUT" },
+      parseOkResponse,
+    ).then(() => undefined),
 
-  markAllRead: () => request<void>("/messages/read-all", { method: "PUT" }),
+  markAllRead: () =>
+    request<{ ok: boolean }>(
+      "/messages/read-all",
+      { method: "PUT" },
+      parseOkResponse,
+    ).then(() => undefined),
 };
 
 // ─── Schedules ────────────────────────────────────────
 export const scheduleApi = {
   list: (agentId: string) =>
-    request<Schedule[]>(`/agents/${agentId}/schedules/`),
+    request<Schedule[]>(
+      `/agents/${agentId}/schedules/`,
+      {},
+      parseSchedulesResponse,
+    ),
 
   create: (agentId: string, data: ScheduleCreateRequest) =>
-    request<Schedule>(`/agents/${agentId}/schedules/`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<Schedule>(
+      `/agents/${agentId}/schedules/`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseScheduleResponse,
+    ),
 
   update: (agentId: string, scheduleId: string, data: ScheduleUpdateRequest) =>
-    request<Schedule>(`/agents/${agentId}/schedules/${scheduleId}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    request<Schedule>(
+      `/agents/${agentId}/schedules/${scheduleId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseScheduleResponse,
+    ),
 
   delete: (agentId: string, scheduleId: string) =>
     requestVoid(`/agents/${agentId}/schedules/${scheduleId}`, {
@@ -952,47 +1108,61 @@ export const scheduleApi = {
       {
         method: "POST",
       },
+      parseScheduleRunResponse,
     ),
 
   history: (agentId: string, scheduleId: string) =>
     request<ScheduleHistoryItem[]>(
       `/agents/${agentId}/schedules/${scheduleId}/history`,
+      {},
+      parseScheduleHistoryResponse,
     ),
 };
 
 // ─── Skills ───────────────────────────────────────────
 export const skillApi = {
-  list: () => request<Skill[]>("/skills/"),
-  get: (id: string) => request<Skill>(`/skills/${id}`),
+  list: () => request<Skill[]>("/skills/", {}, parseSkillsResponse),
+  get: (id: string) => request<Skill>(`/skills/${id}`, {}, parseSkillResponse),
   create: (data: SkillMutationRequest) =>
-    request<Skill>("/skills/", { method: "POST", body: JSON.stringify(data) }),
+    request<Skill>(
+      "/skills/",
+      { method: "POST", body: JSON.stringify(data) },
+      parseSkillResponse,
+    ),
   update: (id: string, data: Partial<SkillMutationRequest>) =>
-    request<Skill>(`/skills/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+    request<Skill>(
+      `/skills/${id}`,
+      { method: "PUT", body: JSON.stringify(data) },
+      parseSkillResponse,
+    ),
   delete: (id: string) => requestVoid(`/skills/${id}`, { method: "DELETE" }),
   // Path-based browse for FileBrowser
   browse: {
     list: (path: string) =>
       request<FileItem[]>(
         `/skills/browse/list?path=${encodeURIComponent(path)}`,
+        {},
+        parseFileItemsResponse,
       ),
     read: (path: string) =>
       request<{ content: string }>(
         `/skills/browse/read?path=${encodeURIComponent(path)}`,
+        {},
+        parseContentResponse,
       ),
     write: (path: string, content: string) =>
-      request<FileMutationResponse>("/skills/browse/write", {
-        method: "PUT",
-        body: JSON.stringify({ path, content }),
-      }),
+      request<FileMutationResponse>(
+        "/skills/browse/write",
+        { method: "PUT", body: JSON.stringify({ path, content }) },
+        parseFileMutationResponse,
+      ),
     delete: (path: string) =>
       request<FileMutationResponse>(
         `/skills/browse/delete?path=${encodeURIComponent(path)}`,
         {
           method: "DELETE",
         },
+        parseFileMutationResponse,
       ),
   },
   // ClawHub marketplace integration
@@ -1000,25 +1170,34 @@ export const skillApi = {
     search: (q: string) =>
       request<ClawhubSkill[]>(
         `/skills/clawhub/search?q=${encodeURIComponent(q)}`,
+        {},
+        parseClawhubSkillsResponse,
       ),
     detail: (slug: string) =>
-      request<ClawhubSkill>(`/skills/clawhub/detail/${slug}`),
+      request<ClawhubSkill>(
+        `/skills/clawhub/detail/${slug}`,
+        {},
+        parseClawhubSkillResponse,
+      ),
     install: (slug: string) =>
-      request<SkillImportResult>("/skills/clawhub/install", {
-        method: "POST",
-        body: JSON.stringify({ slug }),
-      }),
+      request<SkillImportResult>(
+        "/skills/clawhub/install",
+        { method: "POST", body: JSON.stringify({ slug }) },
+        parseSkillImportResponse,
+      ),
   },
   importFromUrl: (url: string) =>
-    request<SkillImportResult>("/skills/import-from-url", {
-      method: "POST",
-      body: JSON.stringify({ url }),
-    }),
+    request<SkillImportResult>(
+      "/skills/import-from-url",
+      { method: "POST", body: JSON.stringify({ url }) },
+      parseSkillImportResponse,
+    ),
   previewUrl: (url: string) =>
-    request<SkillUrlPreview>("/skills/import-from-url/preview", {
-      method: "POST",
-      body: JSON.stringify({ url }),
-    }),
+    request<SkillUrlPreview>(
+      "/skills/import-from-url/preview",
+      { method: "POST", body: JSON.stringify({ url }) },
+      parseSkillUrlPreviewResponse,
+    ),
   // Tenant-level settings
   settings: {
     getToken: () =>
@@ -1028,17 +1207,19 @@ export const skillApi = {
         masked: string;
         clawhub_configured: boolean;
         clawhub_masked: string;
-      }>("/skills/settings/token"),
+      }>("/skills/settings/token", {}, parseSkillSettingsResponse),
     setToken: (github_token: string) =>
-      request<{ configured: boolean }>("/skills/settings/token", {
-        method: "PUT",
-        body: JSON.stringify({ github_token }),
-      }),
+      request<{ configured: boolean }>(
+        "/skills/settings/token",
+        { method: "PUT", body: JSON.stringify({ github_token }) },
+        parseConfiguredResponse,
+      ),
     setClawhubKey: (clawhub_key: string) =>
-      request<{ clawhub_configured: boolean }>("/skills/settings/token", {
-        method: "PUT",
-        body: JSON.stringify({ clawhub_key }),
-      }),
+      request<{ clawhub_configured: boolean }>(
+        "/skills/settings/token",
+        { method: "PUT", body: JSON.stringify({ clawhub_key }) },
+        parseClawhubConfiguredResponse,
+      ),
   },
   // Agent-level import (writes to agent workspace)
   agentImport: {
@@ -1049,51 +1230,67 @@ export const skillApi = {
           method: "POST",
           body: JSON.stringify({ slug }),
         },
+        parseSkillImportResponse,
       ),
     fromUrl: (agentId: string, url: string) =>
-      request<SkillImportResult>(`/agents/${agentId}/files/import-from-url`, {
-        method: "POST",
-        body: JSON.stringify({ url }),
-      }),
+      request<SkillImportResult>(
+        `/agents/${agentId}/files/import-from-url`,
+        { method: "POST", body: JSON.stringify({ url }) },
+        parseSkillImportResponse,
+      ),
   },
 };
 
 // ─── Triggers (Aware Engine) ──────────────────────────
 export const triggerApi = {
-  list: (agentId: string) => request<Trigger[]>(`/agents/${agentId}/triggers`),
+  list: (agentId: string) =>
+    request<Trigger[]>(
+      `/agents/${agentId}/triggers`,
+      {},
+      parseTriggersResponse,
+    ),
 
   update: (agentId: string, triggerId: string, data: TriggerUpdateRequest) =>
-    request<{ ok: boolean }>(`/agents/${agentId}/triggers/${triggerId}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    request<{ ok: boolean }>(
+      `/agents/${agentId}/triggers/${triggerId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseOkResponse,
+    ),
 
   delete: (agentId: string, triggerId: string) =>
-    request<void>(`/agents/${agentId}/triggers/${triggerId}`, {
-      method: "DELETE",
-    }),
+    request<{ ok: boolean }>(
+      `/agents/${agentId}/triggers/${triggerId}`,
+      { method: "DELETE" },
+      parseOkResponse,
+    ).then(() => undefined),
 };
 
 // ─── Agent Credentials ────────────────────────────────
 export const credentialApi = {
   list: (agentId: string) =>
-    request<Credential[]>(`/agents/${agentId}/credentials/`),
+    request<Credential[]>(
+      `/agents/${agentId}/credentials/`,
+      {},
+      parseCredentialsResponse,
+    ),
 
   create: (agentId: string, data: CredentialMutationRequest) =>
-    request<Credential>(`/agents/${agentId}/credentials/`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<Credential>(
+      `/agents/${agentId}/credentials/`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseCredentialResponse,
+    ),
 
   update: (
     agentId: string,
     credentialId: string,
     data: CredentialMutationRequest,
   ) =>
-    request<Credential>(`/agents/${agentId}/credentials/${credentialId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+    request<Credential>(
+      `/agents/${agentId}/credentials/${credentialId}`,
+      { method: "PUT", body: JSON.stringify(data) },
+      parseCredentialResponse,
+    ),
 
   delete: (agentId: string, credentialId: string) =>
     requestVoid(`/agents/${agentId}/credentials/${credentialId}`, {
@@ -1150,6 +1347,7 @@ export const controlApi = {
     request<{ status: string; url: string }>(
       `/agents/${agentId}/control/current-url`,
       { method: "POST", body: JSON.stringify(data) },
+      parseCurrentUrlResponse,
     ),
 
   screenshot: (agentId: string, data: { session_id: string }) =>
@@ -1188,34 +1386,6 @@ export const controlApi = {
 };
 
 // ─── Experience Library ───────────────────────────────
-export interface ExperienceEntry {
-  id: string;
-  // Set only for an edit draft derived from a published/retired source entry.
-  draft_of_id: string | null;
-  tenant_id: string | null;
-  title: string;
-  body: string; // 正文 — free-form markdown
-  applicability: string; // 适用条件与失效信号 — the agent's read-or-skip preview; required to publish
-  status: "draft" | "published" | "retired";
-  tags: string[];
-  // Legacy response fields; published Experience is tenant-wide.
-  visibility_scope: "company" | "department" | "user";
-  visibility_scope_id: string | null;
-  origin: "chat" | "legacy_plaza";
-  origin_session_id: string | null;
-  origin_agent_id: string | null;
-  created_by: string;
-  reviewed_by: string | null;
-  last_reviewed_at: string | null;
-  retired_at: string | null;
-  created_at: string;
-  updated_at: string | null;
-  created_by_name?: string | null;
-  origin_agent_name?: string | null;
-  // Whether the caller may edit/review/retire/re-publish (single-entry fetch only; null in lists).
-  can_manage?: boolean | null;
-}
-
 export type ExperienceView = "team" | "mine" | "all";
 
 export const experienceApi = {
@@ -1233,18 +1403,28 @@ export const experienceApi = {
     if (params.tag) qs.set("tag", params.tag);
     if (params.q) qs.set("q", params.q);
     const s = qs.toString();
-    return request<ExperienceEntry[]>(`/experience/entries${s ? `?${s}` : ""}`);
+    return request<ExperienceEntry[]>(
+      `/experience/entries${s ? `?${s}` : ""}`,
+      {},
+      parseExperienceListResponse,
+    );
   },
-  get: (id: string) => request<ExperienceEntry>(`/experience/entries/${id}`),
+  get: (id: string) =>
+    request<ExperienceEntry>(
+      `/experience/entries/${id}`,
+      {},
+      parseExperienceResponse,
+    ),
   createDraftFromContent: (data: {
     agent_id: string;
     content: string;
     session_id?: string;
   }) =>
-    request<ExperienceEntry>("/experience/drafts", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ExperienceEntry>(
+      "/experience/drafts",
+      { method: "POST", body: JSON.stringify(data) },
+      parseExperienceResponse,
+    ),
   // Distill chat content into title / body / applicability WITHOUT persisting (human confirms in the editor).
   distill: (data: { agent_id: string; content: string; session_id?: string }) =>
     request<{
@@ -1253,41 +1433,58 @@ export const experienceApi = {
       applicability: string;
       tags: string[];
       extracted: boolean;
-    }>("/experience/distill", { method: "POST", body: JSON.stringify(data) }),
+    }>(
+      "/experience/distill",
+      { method: "POST", body: JSON.stringify(data) },
+      parseExperienceDistillResponse,
+    ),
   create: (data: Partial<ExperienceEntry>) =>
-    request<ExperienceEntry>("/experience/entries", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ExperienceEntry>(
+      "/experience/entries",
+      { method: "POST", body: JSON.stringify(data) },
+      parseExperienceResponse,
+    ),
   createRevision: (id: string, data: Partial<ExperienceEntry>) =>
-    request<ExperienceEntry>(`/experience/entries/${id}/draft`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ExperienceEntry>(
+      `/experience/entries/${id}/draft`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseExperienceResponse,
+    ),
   update: (id: string, data: Partial<ExperienceEntry>) =>
-    request<ExperienceEntry>(`/experience/entries/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    request<ExperienceEntry>(
+      `/experience/entries/${id}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseExperienceResponse,
+    ),
   publish: (id: string) =>
-    request<ExperienceEntry>(`/experience/entries/${id}/publish`, {
-      method: "POST",
-    }),
+    request<ExperienceEntry>(
+      `/experience/entries/${id}/publish`,
+      { method: "POST" },
+      parseExperienceResponse,
+    ),
   retire: (id: string) =>
-    request<ExperienceEntry>(`/experience/entries/${id}/retire`, {
-      method: "POST",
-    }),
+    request<ExperienceEntry>(
+      `/experience/entries/${id}/retire`,
+      { method: "POST" },
+      parseExperienceResponse,
+    ),
   remove: (id: string) =>
-    request<{ deleted: boolean }>(`/experience/entries/${id}`, {
-      method: "DELETE",
-    }),
+    request<{ deleted: boolean }>(
+      `/experience/entries/${id}`,
+      { method: "DELETE" },
+      parseDeletedResponse,
+    ),
   review: (id: string) =>
-    request<ExperienceEntry>(`/experience/entries/${id}/review`, {
-      method: "POST",
-    }),
+    request<ExperienceEntry>(
+      `/experience/entries/${id}/review`,
+      { method: "POST" },
+      parseExperienceResponse,
+    ),
   references: (id: string) =>
     request<{ entry_id: string; read_count: number; cited_count: number }>(
       `/experience/entries/${id}/references`,
+      {},
+      parseExperienceReferencesResponse,
     ),
   stats: () =>
     request<{
@@ -1295,21 +1492,15 @@ export const experienceApi = {
       today: number;
       cited: number;
       top_contributors: { name: string; count: number }[];
-    }>("/experience/stats"),
+    }>("/experience/stats", {}, parseExperienceStatsResponse),
 };
 
 // ─── Org structure (synced from Feishu/DingTalk/WeCom; empty until org sync runs) ───
-export interface OrgDepartmentItem {
-  id: string;
-  name: string;
-  path?: string;
-  parent_id?: string | null;
-  member_count?: number;
-}
-
 export const orgApi = {
   departments: () =>
     request<{ items: OrgDepartmentItem[]; total_member: number }>(
       "/enterprise/org/departments",
+      {},
+      parseOrgDepartmentsResponse,
     ),
 };

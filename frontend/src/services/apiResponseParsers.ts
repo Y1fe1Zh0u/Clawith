@@ -1,4 +1,4 @@
-import type { Agent, TokenResponse, User } from "../types";
+import type { Agent, Task, TokenResponse, User } from "../types";
 import { AppError } from "./apiError.ts";
 import type {
   AgentCollaborator,
@@ -15,16 +15,35 @@ import type {
   FileMutationResponse,
   FilePreview,
   FileRevision,
+  FocusApiItem,
+  GatewayMessage,
   GroupWorkspaceUploadResponse,
+  InboxMessage,
   JsonValue,
+  LlmModel,
+  OnboardingStatus,
+  OrgDepartmentItem,
+  PersonalAssistantResponse,
   PlatformSettings,
   ResolvedTenant,
+  Schedule,
+  ScheduleHistoryItem,
+  ScheduleRunResponse,
+  Skill,
+  SkillImportResult,
+  SkillUrlPreview,
   Tenant,
   TenantChoice,
   TenantSetupResponse,
   TenantTokenUsage,
+  Trigger,
   UploadResponse,
   WorkspaceUploadResponse,
+  Credential,
+  ExperienceEntry,
+  ActivityItem,
+  ChannelConfig,
+  TaskTriggerResponse,
 } from "./apiContracts";
 import type { OAuthTenantChoice } from "./oauthCallbackResponse";
 
@@ -116,6 +135,88 @@ function readNumber(
   const value = record[key];
   assertNumber(value, `${path}.${key}`);
   return value;
+}
+
+function readBoolean(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+) {
+  const value = record[key];
+  assertBoolean(value, `${path}.${key}`);
+  return value;
+}
+
+function readNullableString(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+) {
+  const value = record[key];
+  assertNullableString(value, `${path}.${key}`);
+  return value;
+}
+
+function readOptionalString(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+) {
+  const value = record[key];
+  assertOptionalString(value, `${path}.${key}`);
+  return value;
+}
+
+function readOptionalNumber(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+) {
+  const value = record[key];
+  assertOptionalNumber(value, `${path}.${key}`);
+  return value;
+}
+
+function readOptionalBoolean(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+) {
+  const value = record[key];
+  assertOptionalBoolean(value, `${path}.${key}`);
+  return value;
+}
+
+function readOptionalNullableString(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+) {
+  const value = record[key];
+  assertOptionalNullableString(value, `${path}.${key}`);
+  return value;
+}
+
+function parseArray<T>(
+  value: unknown,
+  path: string,
+  parser: (item: unknown, itemPath: string) => T,
+): T[] {
+  if (!Array.isArray(value)) invalid(path, "array");
+  return value.map((item, index) => parser(item, `${path}[${index}]`));
+}
+
+function parseJsonRecord(
+  value: unknown,
+  path: string,
+): Record<string, JsonValue> {
+  assertRecord(value, path);
+  const result: Record<string, JsonValue> = {};
+  Object.entries(value).forEach(([key, item]) => {
+    assertJsonValue(item, `${path}.${key}`);
+    result[key] = item;
+  });
+  return result;
 }
 
 function assertStringArray(
@@ -868,4 +969,853 @@ export const parseLoginResponse: ResponseParser<
     };
   }
   return parseTokenResponse(value);
+};
+
+export const parseBooleanFlagResponse =
+  (key: string): ResponseParser<Record<string, boolean>> =>
+  (value) => {
+    assertRecord(value, "response");
+    return { [key]: readBoolean(value, key, "response") };
+  };
+
+export const parseStringEnvelopeResponse =
+  (key: string): ResponseParser<Record<string, string>> =>
+  (value) => {
+    assertRecord(value, "response");
+    return { [key]: readString(value, key, "response") };
+  };
+
+export const parseOkMessageResponse: ResponseParser<{
+  ok: boolean;
+  message: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    ok: readBoolean(value, "ok", "response"),
+    message: readString(value, "message", "response"),
+  };
+};
+
+export const parseOkResponse: ResponseParser<{ ok: boolean }> = (value) => {
+  assertRecord(value, "response");
+  return { ok: readBoolean(value, "ok", "response") };
+};
+
+export const parseAuthRegisterResponse: ResponseParser<{
+  user_id: string;
+  email: string;
+  access_token: string;
+  message: string;
+  user?: User;
+  needs_company_setup: boolean;
+}> = (value) => {
+  assertRecord(value, "response");
+  if (value.user !== undefined) assertUser(value.user, "response.user");
+  return {
+    user_id: readString(value, "user_id", "response"),
+    email: readString(value, "email", "response"),
+    access_token: readString(value, "access_token", "response"),
+    message: readString(value, "message", "response"),
+    needs_company_setup: readBoolean(value, "needs_company_setup", "response"),
+    ...(value.user === undefined ? {} : { user: value.user }),
+  };
+};
+
+export const parseVerifyEmailResponse: ResponseParser<{
+  ok: boolean;
+  message: string;
+  access_token: string;
+  user: User;
+  needs_company_setup: boolean;
+}> = (value) => {
+  assertRecord(value, "response");
+  assertUser(value.user, "response.user");
+  return {
+    ok: readBoolean(value, "ok", "response"),
+    message: readString(value, "message", "response"),
+    access_token: readString(value, "access_token", "response"),
+    user: value.user,
+    needs_company_setup: readBoolean(value, "needs_company_setup", "response"),
+  };
+};
+
+export const parseSwitchTenantResponse: ResponseParser<{
+  access_token: string;
+  redirect_url?: string;
+  message?: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  const redirectUrl = readOptionalString(value, "redirect_url", "response");
+  const message = readOptionalString(value, "message", "response");
+  return {
+    access_token: readString(value, "access_token", "response"),
+    ...(redirectUrl === undefined ? {} : { redirect_url: redirectUrl }),
+    ...(message === undefined ? {} : { message }),
+  };
+};
+
+function parseOnboardingStatusAt(
+  value: unknown,
+  path: string,
+): OnboardingStatus {
+  assertRecord(value, path);
+  const status = readString(value, "status", path);
+  if (
+    status !== "not_started" &&
+    status !== "in_progress" &&
+    status !== "completed"
+  ) {
+    invalid(`${path}.status`, "onboarding status");
+  }
+  const entryMode = value.entry_mode;
+  if (entryMode !== null && entryMode !== "create" && entryMode !== "join") {
+    invalid(`${path}.entry_mode`, "create, join, or null");
+  }
+  return {
+    exists: readBoolean(value, "exists", path),
+    status,
+    current_step: readString(value, "current_step", path),
+    entry_mode: entryMode,
+    personal_assistant_agent_id: readNullableString(
+      value,
+      "personal_assistant_agent_id",
+      path,
+    ),
+    completed_at: readNullableString(value, "completed_at", path),
+  };
+}
+
+export const parseOnboardingStatusResponse: ResponseParser<OnboardingStatus> = (
+  value,
+) => parseOnboardingStatusAt(value, "response");
+
+export const parsePersonalAssistantResponse: ResponseParser<
+  PersonalAssistantResponse
+> = (value) => {
+  assertRecord(value, "response");
+  assertRecord(value.agent, "response.agent");
+  return {
+    agent: {
+      id: readString(value.agent, "id", "response.agent"),
+      name: readString(value.agent, "name", "response.agent"),
+    },
+    onboarding: parseOnboardingStatusAt(
+      value.onboarding,
+      "response.onboarding",
+    ),
+  };
+};
+
+function parseTaskAt(value: unknown, path: string): Task {
+  assertRecord(value, path);
+  const type = readString(value, "type", path);
+  if (type !== "todo" && type !== "supervision")
+    invalid(`${path}.type`, "task type");
+  const status = readString(value, "status", path);
+  if (
+    status !== "pending" &&
+    status !== "doing" &&
+    status !== "done" &&
+    status !== "paused"
+  )
+    invalid(`${path}.status`, "task status");
+  const priority = readString(value, "priority", path);
+  if (
+    priority !== "low" &&
+    priority !== "medium" &&
+    priority !== "high" &&
+    priority !== "urgent"
+  )
+    invalid(`${path}.priority`, "task priority");
+  return {
+    id: readString(value, "id", path),
+    agent_id: readString(value, "agent_id", path),
+    title: readString(value, "title", path),
+    type,
+    status,
+    priority,
+    assignee: readString(value, "assignee", path),
+    created_by: readString(value, "created_by", path),
+    created_at: readString(value, "created_at", path),
+    updated_at: readString(value, "updated_at", path),
+    ...optionalStringFields(value, path, [
+      "description",
+      "creator_username",
+      "due_date",
+      "supervision_target_name",
+      "supervision_channel",
+      "remind_schedule",
+      "completed_at",
+    ]),
+  };
+}
+
+function optionalStringFields(
+  value: Record<string, unknown>,
+  path: string,
+  keys: string[],
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  keys.forEach((key) => {
+    const field = readOptionalString(value, key, path);
+    if (field !== undefined) result[key] = field;
+  });
+  return result;
+}
+
+export const parseTaskResponse: ResponseParser<Task> = (value) =>
+  parseTaskAt(value, "response");
+export const parseTasksResponse: ResponseParser<Task[]> = (value) =>
+  parseArray(value, "response", parseTaskAt);
+
+export const parseTaskLogsResponse: ResponseParser<
+  { id: string; task_id: string; content: string; created_at: string }[]
+> = (value) =>
+  parseArray(value, "response", (item, path) => {
+    assertRecord(item, path);
+    return {
+      id: readString(item, "id", path),
+      task_id: readString(item, "task_id", path),
+      content: readString(item, "content", path),
+      created_at: readString(item, "created_at", path),
+    };
+  });
+
+export const parseTaskTriggerResponse: ResponseParser<TaskTriggerResponse> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  return {
+    status: readString(value, "status", "response"),
+    task_id: readString(value, "task_id", "response"),
+  };
+};
+
+export const parseFileContentResponse: ResponseParser<{
+  path: string;
+  content: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    path: readString(value, "path", "response"),
+    content: readString(value, "content", "response"),
+  };
+};
+
+export const parseContentResponse: ResponseParser<{ content: string }> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  return { content: readString(value, "content", "response") };
+};
+
+function parseFocusAt(value: unknown, path: string): FocusApiItem {
+  assertRecord(value, path);
+  const status = readString(value, "status", path);
+  if (status !== "in_progress" && status !== "completed")
+    invalid(`${path}.status`, "focus status");
+  const kind = readString(value, "kind", path);
+  if (kind !== "normal" && kind !== "system")
+    invalid(`${path}.kind`, "focus kind");
+  const metadata =
+    value.metadata === undefined
+      ? undefined
+      : parseJsonRecord(value.metadata, `${path}.metadata`);
+  const title = readOptionalNullableString(value, "title", path);
+  const completedAt = readOptionalNullableString(value, "completed_at", path);
+  const createdAt = readOptionalNullableString(value, "created_at", path);
+  const updatedAt = readOptionalNullableString(value, "updated_at", path);
+  return {
+    id: readString(value, "id", path),
+    agent_id: readString(value, "agent_id", path),
+    key: readString(value, "key", path),
+    description: readString(value, "description", path),
+    status,
+    kind,
+    source: readString(value, "source", path),
+    sort_order: readNumber(value, "sort_order", path),
+    ...(title === undefined ? {} : { title }),
+    ...(metadata === undefined ? {} : { metadata }),
+    ...(completedAt === undefined ? {} : { completed_at: completedAt }),
+    ...(createdAt === undefined ? {} : { created_at: createdAt }),
+    ...(updatedAt === undefined ? {} : { updated_at: updatedAt }),
+  };
+}
+
+export const parseFocusResponse: ResponseParser<FocusApiItem> = (value) =>
+  parseFocusAt(value, "response");
+export const parseFocusListResponse: ResponseParser<FocusApiItem[]> = (value) =>
+  parseArray(value, "response", parseFocusAt);
+
+export const parseChannelConfigResponse: ResponseParser<ChannelConfig> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  const extraConfig =
+    value.extra_config === null
+      ? null
+      : parseJsonRecord(value.extra_config, "response.extra_config");
+  return {
+    id: readString(value, "id", "response"),
+    agent_id: readString(value, "agent_id", "response"),
+    channel_type: readString(value, "channel_type", "response"),
+    app_id: readNullableString(value, "app_id", "response"),
+    is_configured: readBoolean(value, "is_configured", "response"),
+    is_connected: readBoolean(value, "is_connected", "response"),
+    last_tested_at: readNullableString(value, "last_tested_at", "response"),
+    extra_config: extraConfig,
+    created_at: readString(value, "created_at", "response"),
+  };
+};
+
+function parseLlmModelAt(value: unknown, path: string): LlmModel {
+  assertRecord(value, path);
+  return {
+    id: readString(value, "id", path),
+    provider: readString(value, "provider", path),
+    model: readString(value, "model", path),
+    base_url: readNullableString(value, "base_url", path),
+    label: readString(value, "label", path),
+    temperature:
+      value.temperature === null
+        ? null
+        : readNumber(value, "temperature", path),
+    api_key_masked: readString(value, "api_key_masked", path),
+    max_tokens_per_day:
+      value.max_tokens_per_day === null
+        ? null
+        : readNumber(value, "max_tokens_per_day", path),
+    enabled: readBoolean(value, "enabled", path),
+    supports_vision: readBoolean(value, "supports_vision", path),
+    supports_tool_calling:
+      value.supports_tool_calling === null
+        ? null
+        : readBoolean(value, "supports_tool_calling", path),
+    tool_calling_capability_source: readNullableString(
+      value,
+      "tool_calling_capability_source",
+      path,
+    ),
+    tool_calling_checked_at: readNullableString(
+      value,
+      "tool_calling_checked_at",
+      path,
+    ),
+    tool_calling_error: readNullableString(value, "tool_calling_error", path),
+    max_output_tokens:
+      value.max_output_tokens === null
+        ? null
+        : readNumber(value, "max_output_tokens", path),
+    request_timeout:
+      value.request_timeout === null
+        ? null
+        : readNumber(value, "request_timeout", path),
+    created_at: readString(value, "created_at", path),
+    deleted_at: readNullableString(value, "deleted_at", path),
+  };
+}
+
+export const parseLlmModelsResponse: ResponseParser<LlmModel[]> = (value) =>
+  parseArray(value, "response", parseLlmModelAt);
+
+function parseActivityAt(value: unknown, path: string): ActivityItem {
+  assertRecord(value, path);
+  assertJsonValue(value.detail, `${path}.detail`);
+  return {
+    id: readString(value, "id", path),
+    action_type: readString(value, "action_type", path),
+    summary: readString(value, "summary", path),
+    detail: value.detail,
+    related_id: readNullableString(value, "related_id", path),
+    created_at: readNullableString(value, "created_at", path),
+  };
+}
+
+export const parseActivityListResponse: ResponseParser<ActivityItem[]> = (
+  value,
+) => parseArray(value, "response", parseActivityAt);
+
+function parseInboxAt(value: unknown, path: string): InboxMessage {
+  assertRecord(value, path);
+  if (value.sender_type !== "agent") invalid(`${path}.sender_type`, "agent");
+  const readAt = readOptionalNullableString(value, "read_at", path);
+  return {
+    id: readString(value, "id", path),
+    sender_type: "agent",
+    sender_name: readString(value, "sender_name", path),
+    content: readString(value, "content", path),
+    session_title: readNullableString(value, "session_title", path),
+    created_at: readNullableString(value, "created_at", path),
+    ...(readAt === undefined ? {} : { read_at: readAt }),
+  };
+}
+
+export const parseInboxResponse: ResponseParser<InboxMessage[]> = (value) =>
+  parseArray(value, "response", parseInboxAt);
+
+function parseScheduleAt(value: unknown, path: string): Schedule {
+  assertRecord(value, path);
+  return {
+    id: readString(value, "id", path),
+    agent_id: readString(value, "agent_id", path),
+    name: readString(value, "name", path),
+    instruction: readString(value, "instruction", path),
+    cron_expr: readString(value, "cron_expr", path),
+    is_enabled: readBoolean(value, "is_enabled", path),
+    last_run_at: readNullableString(value, "last_run_at", path),
+    next_run_at: readNullableString(value, "next_run_at", path),
+    run_count: readNumber(value, "run_count", path),
+    created_by: readNullableString(value, "created_by", path),
+    creator_username: readNullableString(value, "creator_username", path),
+    created_at: readNullableString(value, "created_at", path),
+    delivery_target_id: readNullableString(value, "delivery_target_id", path),
+  };
+}
+
+export const parseScheduleResponse: ResponseParser<Schedule> = (value) =>
+  parseScheduleAt(value, "response");
+export const parseSchedulesResponse: ResponseParser<Schedule[]> = (value) =>
+  parseArray(value, "response", parseScheduleAt);
+
+export const parseScheduleRunResponse: ResponseParser<ScheduleRunResponse> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  return {
+    status: readString(value, "status", "response"),
+    schedule_id: readString(value, "schedule_id", "response"),
+    run_id: readString(value, "run_id", "response"),
+  };
+};
+
+export const parseScheduleHistoryResponse: ResponseParser<
+  ScheduleHistoryItem[]
+> = (value) =>
+  parseArray(value, "response", (item, path) => {
+    assertRecord(item, path);
+    return {
+      id: readString(item, "id", path),
+      created_at: readNullableString(item, "created_at", path),
+      summary: readString(item, "summary", path),
+      instruction: readString(item, "instruction", path),
+      reply: readString(item, "reply", path),
+    };
+  });
+
+function parseSkillAt(value: unknown, path: string): Skill {
+  assertRecord(value, path);
+  const description = readOptionalNullableString(value, "description", path);
+  const icon = readOptionalNullableString(value, "icon", path);
+  const createdAt = readOptionalNullableString(value, "created_at", path);
+  return {
+    id: readString(value, "id", path),
+    name: readString(value, "name", path),
+    folder_name: readString(value, "folder_name", path),
+    is_default: readBoolean(value, "is_default", path),
+    ...(description === undefined ? {} : { description }),
+    ...(icon === undefined ? {} : { icon }),
+    ...(createdAt === undefined ? {} : { created_at: createdAt }),
+  };
+}
+
+export const parseSkillResponse: ResponseParser<Skill> = (value) =>
+  parseSkillAt(value, "response");
+export const parseSkillsResponse: ResponseParser<Skill[]> = (value) =>
+  parseArray(value, "response", parseSkillAt);
+
+function parseClawhubSkillAt(
+  value: unknown,
+  path: string,
+): {
+  slug: string;
+  name: string;
+  description?: string;
+  author?: string;
+  tier?: number;
+} {
+  assertRecord(value, path);
+  const description = readOptionalString(value, "description", path);
+  const author = readOptionalString(value, "author", path);
+  const tier = readOptionalNumber(value, "tier", path);
+  return {
+    slug: readString(value, "slug", path),
+    name: readString(value, "name", path),
+    ...(description === undefined ? {} : { description }),
+    ...(author === undefined ? {} : { author }),
+    ...(tier === undefined ? {} : { tier }),
+  };
+}
+
+export const parseClawhubSkillResponse = (value: unknown) =>
+  parseClawhubSkillAt(value, "response");
+export const parseClawhubSkillsResponse = (value: unknown) =>
+  parseArray(value, "response", parseClawhubSkillAt);
+
+export const parseSkillImportResponse: ResponseParser<SkillImportResult> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  const tier = readOptionalNumber(value, "tier", "response");
+  const path = readOptionalString(value, "path", "response");
+  const filesWritten = readOptionalNumber(value, "files_written", "response");
+  return {
+    name: readString(value, "name", "response"),
+    file_count: readNumber(value, "file_count", "response"),
+    ...(tier === undefined ? {} : { tier }),
+    ...(path === undefined ? {} : { path }),
+    ...(filesWritten === undefined ? {} : { files_written: filesWritten }),
+  };
+};
+
+export const parseSkillUrlPreviewResponse: ResponseParser<SkillUrlPreview> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  if (value.files !== undefined)
+    assertStringArray(value.files, "response.files");
+  const description = readOptionalString(value, "description", "response");
+  const tier = readOptionalNumber(value, "tier", "response");
+  return {
+    name: readString(value, "name", "response"),
+    file_count: readNumber(value, "file_count", "response"),
+    ...(description === undefined ? {} : { description }),
+    ...(tier === undefined ? {} : { tier }),
+    ...(value.files === undefined ? {} : { files: value.files }),
+  };
+};
+
+function parseTriggerAt(value: unknown, path: string): Trigger {
+  assertRecord(value, path);
+  assertRecord(value.config, `${path}.config`);
+  const config = value.config;
+  const expr = readOptionalString(config, "expr", `${path}.config`);
+  const minutes = readOptionalNumber(config, "minutes", `${path}.config`);
+  const at = readOptionalString(config, "at", `${path}.config`);
+  const url = readOptionalString(config, "url", `${path}.config`);
+  const token = readOptionalString(config, "token", `${path}.config`);
+  const fromAgentName = readOptionalString(
+    config,
+    "from_agent_name",
+    `${path}.config`,
+  );
+  const fromUserName = readOptionalString(
+    config,
+    "from_user_name",
+    `${path}.config`,
+  );
+  return {
+    id: readString(value, "id", path),
+    name: readString(value, "name", path),
+    type: readString(value, "type", path),
+    config: {
+      ...(expr === undefined ? {} : { expr }),
+      ...(minutes === undefined ? {} : { minutes }),
+      ...(at === undefined ? {} : { at }),
+      ...(url === undefined ? {} : { url }),
+      ...(token === undefined ? {} : { token }),
+      ...(fromAgentName === undefined
+        ? {}
+        : { from_agent_name: fromAgentName }),
+      ...(fromUserName === undefined ? {} : { from_user_name: fromUserName }),
+    },
+    reason: readString(value, "reason", path),
+    focus_ref: readNullableString(value, "focus_ref", path),
+    is_enabled: readBoolean(value, "is_enabled", path),
+    is_system: readBoolean(value, "is_system", path),
+    fire_count: readNumber(value, "fire_count", path),
+    max_fires:
+      value.max_fires === null ? null : readNumber(value, "max_fires", path),
+    cooldown_seconds: readNumber(value, "cooldown_seconds", path),
+    last_fired_at: readNullableString(value, "last_fired_at", path),
+    created_at: readNullableString(value, "created_at", path),
+    expires_at: readNullableString(value, "expires_at", path),
+    delivery_target_id: readNullableString(value, "delivery_target_id", path),
+  };
+}
+
+export const parseTriggersResponse: ResponseParser<Trigger[]> = (value) =>
+  parseArray(value, "response", parseTriggerAt);
+
+function parseCredentialAt(value: unknown, path: string): Credential {
+  assertRecord(value, path);
+  return {
+    id: readString(value, "id", path),
+    agent_id: readString(value, "agent_id", path),
+    credential_type: readString(value, "credential_type", path),
+    platform: readString(value, "platform", path),
+    display_name: readString(value, "display_name", path),
+    status: readString(value, "status", path),
+    cookies_updated_at: readNullableString(value, "cookies_updated_at", path),
+    last_login_at: readNullableString(value, "last_login_at", path),
+    last_injected_at: readNullableString(value, "last_injected_at", path),
+    has_cookies: readBoolean(value, "has_cookies", path),
+    created_at: readString(value, "created_at", path),
+    updated_at: readString(value, "updated_at", path),
+  };
+}
+
+export const parseCredentialResponse: ResponseParser<Credential> = (value) =>
+  parseCredentialAt(value, "response");
+export const parseCredentialsResponse: ResponseParser<Credential[]> = (value) =>
+  parseArray(value, "response", parseCredentialAt);
+
+function parseExperienceAt(value: unknown, path: string): ExperienceEntry {
+  assertRecord(value, path);
+  const status = readString(value, "status", path);
+  if (status !== "draft" && status !== "published" && status !== "retired")
+    invalid(`${path}.status`, "experience status");
+  const visibility = readString(value, "visibility_scope", path);
+  if (
+    visibility !== "company" &&
+    visibility !== "department" &&
+    visibility !== "user"
+  )
+    invalid(`${path}.visibility_scope`, "visibility scope");
+  const origin = readString(value, "origin", path);
+  if (origin !== "chat" && origin !== "legacy_plaza")
+    invalid(`${path}.origin`, "experience origin");
+  assertStringArray(value.tags, `${path}.tags`);
+  const createdByName = readOptionalNullableString(
+    value,
+    "created_by_name",
+    path,
+  );
+  const originAgentName = readOptionalNullableString(
+    value,
+    "origin_agent_name",
+    path,
+  );
+  return {
+    id: readString(value, "id", path),
+    draft_of_id: readNullableString(value, "draft_of_id", path),
+    tenant_id: readNullableString(value, "tenant_id", path),
+    title: readString(value, "title", path),
+    body: readString(value, "body", path),
+    applicability: readString(value, "applicability", path),
+    status,
+    tags: value.tags,
+    visibility_scope: visibility,
+    visibility_scope_id: readNullableString(value, "visibility_scope_id", path),
+    origin,
+    origin_session_id: readNullableString(value, "origin_session_id", path),
+    origin_agent_id: readNullableString(value, "origin_agent_id", path),
+    created_by: readString(value, "created_by", path),
+    reviewed_by: readNullableString(value, "reviewed_by", path),
+    last_reviewed_at: readNullableString(value, "last_reviewed_at", path),
+    retired_at: readNullableString(value, "retired_at", path),
+    created_at: readString(value, "created_at", path),
+    updated_at: readNullableString(value, "updated_at", path),
+    ...(createdByName === undefined ? {} : { created_by_name: createdByName }),
+    ...(originAgentName === undefined
+      ? {}
+      : { origin_agent_name: originAgentName }),
+    ...(value.can_manage === undefined
+      ? {}
+      : {
+          can_manage:
+            value.can_manage === null
+              ? null
+              : readOptionalBoolean(value, "can_manage", path),
+        }),
+  };
+}
+
+export const parseExperienceResponse: ResponseParser<ExperienceEntry> = (
+  value,
+) => parseExperienceAt(value, "response");
+export const parseExperienceListResponse: ResponseParser<ExperienceEntry[]> = (
+  value,
+) => parseArray(value, "response", parseExperienceAt);
+
+function parseOrgDepartmentAt(value: unknown, path: string): OrgDepartmentItem {
+  assertRecord(value, path);
+  const departmentPath = readOptionalString(value, "path", path);
+  const parentId = readOptionalNullableString(value, "parent_id", path);
+  const memberCount = readOptionalNumber(value, "member_count", path);
+  return {
+    id: readString(value, "id", path),
+    name: readString(value, "name", path),
+    ...(departmentPath === undefined ? {} : { path: departmentPath }),
+    ...(parentId === undefined ? {} : { parent_id: parentId }),
+    ...(memberCount === undefined ? {} : { member_count: memberCount }),
+  };
+}
+
+export const parseOrgDepartmentsResponse: ResponseParser<{
+  items: OrgDepartmentItem[];
+  total_member: number;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    items: parseArray(value.items, "response.items", parseOrgDepartmentAt),
+    total_member: readNumber(value, "total_member", "response"),
+  };
+};
+
+export const parseGatewayMessagesResponse: ResponseParser<GatewayMessage[]> = (
+  value,
+) =>
+  parseArray(value, "response", (item, path) => {
+    assertRecord(item, path);
+    assertJsonValue(item.result, `${path}.result`);
+    return {
+      id: readString(item, "id", path),
+      sender_agent_name: readNullableString(item, "sender_agent_name", path),
+      content: readString(item, "content", path),
+      status: readString(item, "status", path),
+      result: item.result,
+      created_at: readNullableString(item, "created_at", path),
+      delivered_at: readNullableString(item, "delivered_at", path),
+      completed_at: readNullableString(item, "completed_at", path),
+    };
+  });
+
+export const parseHintResponse: ResponseParser<{ hint: string }> = (value) => {
+  assertRecord(value, "response");
+  return { hint: readString(value, "hint", "response") };
+};
+
+export const parseRegistrationConfigResponse: ResponseParser<{
+  allow_self_create_company: boolean;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    allow_self_create_company: readBoolean(
+      value,
+      "allow_self_create_company",
+      "response",
+    ),
+  };
+};
+
+export const parseApiKeyResponse: ResponseParser<{
+  api_key: string;
+  message: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    api_key: readString(value, "api_key", "response"),
+    message: readString(value, "message", "response"),
+  };
+};
+
+export const parseWebhookUrlResponse: ResponseParser<{
+  webhook_url: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  return { webhook_url: readString(value, "webhook_url", "response") };
+};
+
+export const parseUnreadCountResponse: ResponseParser<{
+  unread_count: number;
+}> = (value) => {
+  assertRecord(value, "response");
+  return { unread_count: readNumber(value, "unread_count", "response") };
+};
+
+export const parseCurrentUrlResponse: ResponseParser<{
+  status: string;
+  url: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    status: readString(value, "status", "response"),
+    url: readString(value, "url", "response"),
+  };
+};
+
+export const parseSkillSettingsResponse: ResponseParser<{
+  configured: boolean;
+  source: string;
+  masked: string;
+  clawhub_configured: boolean;
+  clawhub_masked: string;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    configured: readBoolean(value, "configured", "response"),
+    source: readString(value, "source", "response"),
+    masked: readString(value, "masked", "response"),
+    clawhub_configured: readBoolean(value, "clawhub_configured", "response"),
+    clawhub_masked: readString(value, "clawhub_masked", "response"),
+  };
+};
+
+export const parseConfiguredResponse: ResponseParser<{
+  configured: boolean;
+}> = (value) => {
+  assertRecord(value, "response");
+  return { configured: readBoolean(value, "configured", "response") };
+};
+
+export const parseClawhubConfiguredResponse: ResponseParser<{
+  clawhub_configured: boolean;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    clawhub_configured: readBoolean(value, "clawhub_configured", "response"),
+  };
+};
+
+export const parseExperienceDistillResponse: ResponseParser<{
+  title: string;
+  body: string;
+  applicability: string;
+  tags: string[];
+  extracted: boolean;
+}> = (value) => {
+  assertRecord(value, "response");
+  assertStringArray(value.tags, "response.tags");
+  return {
+    title: readString(value, "title", "response"),
+    body: readString(value, "body", "response"),
+    applicability: readString(value, "applicability", "response"),
+    tags: value.tags,
+    extracted: readBoolean(value, "extracted", "response"),
+  };
+};
+
+export const parseDeletedResponse: ResponseParser<{ deleted: boolean }> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  return { deleted: readBoolean(value, "deleted", "response") };
+};
+
+export const parseExperienceReferencesResponse: ResponseParser<{
+  entry_id: string;
+  read_count: number;
+  cited_count: number;
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    entry_id: readString(value, "entry_id", "response"),
+    read_count: readNumber(value, "read_count", "response"),
+    cited_count: readNumber(value, "cited_count", "response"),
+  };
+};
+
+export const parseExperienceStatsResponse: ResponseParser<{
+  total: number;
+  today: number;
+  cited: number;
+  top_contributors: { name: string; count: number }[];
+}> = (value) => {
+  assertRecord(value, "response");
+  return {
+    total: readNumber(value, "total", "response"),
+    today: readNumber(value, "today", "response"),
+    cited: readNumber(value, "cited", "response"),
+    top_contributors: parseArray(
+      value.top_contributors,
+      "response.top_contributors",
+      (item, path) => {
+        assertRecord(item, path);
+        return {
+          name: readString(item, "name", path),
+          count: readNumber(item, "count", path),
+        };
+      },
+    ),
+  };
 };

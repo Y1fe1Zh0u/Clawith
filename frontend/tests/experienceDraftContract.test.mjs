@@ -10,9 +10,13 @@ const api = readFileSync(
   new URL("../src/services/api.ts", import.meta.url),
   "utf8",
 );
+const apiContracts = readFileSync(
+  new URL("../src/services/apiContracts.ts", import.meta.url),
+  "utf8",
+);
 
 test("editing a published experience saves through an independent revision draft", () => {
-  assert.match(api, /draft_of_id: string \| null/);
+  assert.match(apiContracts, /draft_of_id: string \| null/);
   assert.match(
     api,
     /createRevision: \(id: string, data: Partial<ExperienceEntry>\)/,

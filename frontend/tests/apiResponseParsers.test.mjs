@@ -4,10 +4,24 @@ import test from "node:test";
 
 import { AppError } from "../src/services/apiError.ts";
 import {
+  parseActivityListResponse,
+  parseChannelConfigResponse,
   parseControlScreenshotResponse,
+  parseCredentialsResponse,
+  parseExperienceListResponse,
+  parseFocusListResponse,
+  parseInboxResponse,
+  parseLlmModelsResponse,
+  parseOnboardingStatusResponse,
+  parseOrgDepartmentsResponse,
+  parseSchedulesResponse,
+  parseSkillsResponse,
+  parseTasksResponse,
   parseTenantSetupResponse,
+  parseTriggersResponse,
   parseUploadResponse,
 } from "../src/services/apiResponseParsers.ts";
+import { parseGroupsResponse } from "../src/services/groupApiResponseParsers.ts";
 
 const tenant = {
   id: "tenant-1",
@@ -83,4 +97,257 @@ test("request reads a successful JSON response body only once", () => {
     source,
     /const value: unknown = await res\.json\(\);[\s\S]{0,120}return parser \? parser\(value\) : res\.json\(\)/,
   );
+});
+
+test("remaining service contract families accept valid data and reject malformed success", () => {
+  const cases = [
+    {
+      parse: parseOnboardingStatusResponse,
+      valid: {
+        exists: true,
+        status: "in_progress",
+        current_step: "assistant",
+        entry_mode: "create",
+        personal_assistant_agent_id: null,
+        completed_at: null,
+      },
+      breakPayload: (payload) => ({ ...payload, exists: "yes" }),
+    },
+    {
+      parse: parseTasksResponse,
+      valid: [
+        {
+          id: "task-1",
+          agent_id: "agent-1",
+          title: "Ship",
+          type: "todo",
+          status: "pending",
+          priority: "high",
+          assignee: "user-1",
+          created_by: "user-1",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], priority: "maybe" }],
+    },
+    {
+      parse: parseFocusListResponse,
+      valid: [
+        {
+          id: "focus-1",
+          agent_id: "agent-1",
+          key: "launch",
+          description: "Launch",
+          status: "in_progress",
+          kind: "normal",
+          source: "user",
+          metadata: { score: 1 },
+          sort_order: 1,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], sort_order: "first" }],
+    },
+    {
+      parse: parseChannelConfigResponse,
+      valid: {
+        id: "channel-1",
+        agent_id: "agent-1",
+        channel_type: "feishu",
+        app_id: null,
+        is_configured: true,
+        is_connected: false,
+        last_tested_at: null,
+        extra_config: { connection_mode: "websocket" },
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      breakPayload: (payload) => ({ ...payload, is_connected: 1 }),
+    },
+    {
+      parse: parseLlmModelsResponse,
+      valid: [
+        {
+          id: "model-1",
+          provider: "openai",
+          model: "gpt",
+          base_url: null,
+          label: "GPT",
+          temperature: null,
+          api_key_masked: "***",
+          max_tokens_per_day: null,
+          enabled: true,
+          supports_vision: true,
+          supports_tool_calling: null,
+          tool_calling_capability_source: null,
+          tool_calling_checked_at: null,
+          tool_calling_error: null,
+          max_output_tokens: null,
+          request_timeout: null,
+          created_at: "2026-01-01T00:00:00Z",
+          deleted_at: null,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], enabled: "true" }],
+    },
+    {
+      parse: parseActivityListResponse,
+      valid: [
+        {
+          id: "activity-1",
+          action_type: "write",
+          summary: "Wrote file",
+          detail: {},
+          related_id: null,
+          created_at: null,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], detail: undefined }],
+    },
+    {
+      parse: parseInboxResponse,
+      valid: [
+        {
+          id: "message-1",
+          sender_type: "agent",
+          sender_name: "Clawiee",
+          content: "Hello",
+          session_title: null,
+          created_at: null,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], sender_type: "user" }],
+    },
+    {
+      parse: parseSchedulesResponse,
+      valid: [
+        {
+          id: "schedule-1",
+          agent_id: "agent-1",
+          name: "Daily",
+          instruction: "Report",
+          cron_expr: "0 9 * * *",
+          is_enabled: true,
+          last_run_at: null,
+          next_run_at: null,
+          run_count: 0,
+          created_by: null,
+          creator_username: null,
+          created_at: null,
+          delivery_target_id: null,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], run_count: "zero" }],
+    },
+    {
+      parse: parseSkillsResponse,
+      valid: [
+        {
+          id: "skill-1",
+          name: "Research",
+          folder_name: "research",
+          is_default: false,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], is_default: "false" }],
+    },
+    {
+      parse: parseTriggersResponse,
+      valid: [
+        {
+          id: "trigger-1",
+          name: "daily",
+          type: "cron",
+          config: { expr: "0 9 * * *" },
+          reason: "Daily",
+          focus_ref: null,
+          is_enabled: true,
+          is_system: false,
+          fire_count: 0,
+          max_fires: null,
+          cooldown_seconds: 0,
+          last_fired_at: null,
+          created_at: null,
+          expires_at: null,
+          delivery_target_id: null,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], fire_count: "zero" }],
+    },
+    {
+      parse: parseCredentialsResponse,
+      valid: [
+        {
+          id: "credential-1",
+          agent_id: "agent-1",
+          credential_type: "website",
+          platform: "example.com",
+          display_name: "Example",
+          status: "active",
+          cookies_updated_at: null,
+          last_login_at: null,
+          last_injected_at: null,
+          has_cookies: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], has_cookies: 1 }],
+    },
+    {
+      parse: parseExperienceListResponse,
+      valid: [
+        {
+          id: "experience-1",
+          draft_of_id: null,
+          tenant_id: null,
+          title: "Lesson",
+          body: "Body",
+          applicability: "When useful",
+          status: "published",
+          tags: [],
+          visibility_scope: "company",
+          visibility_scope_id: null,
+          origin: "chat",
+          origin_session_id: null,
+          origin_agent_id: null,
+          created_by: "user-1",
+          reviewed_by: null,
+          last_reviewed_at: null,
+          retired_at: null,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: null,
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], status: "active" }],
+    },
+    {
+      parse: parseOrgDepartmentsResponse,
+      valid: { items: [{ id: "department-1", name: "R&D" }], total_member: 1 },
+      breakPayload: (payload) => ({ ...payload, total_member: "one" }),
+    },
+    {
+      parse: parseGroupsResponse,
+      valid: [
+        {
+          id: "group-1",
+          tenant_id: "tenant-1",
+          name: "Launch",
+          description: null,
+          created_by_participant_id: "participant-1",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      breakPayload: (payload) => [{ ...payload[0], description: 42 }],
+    },
+  ];
+
+  cases.forEach(({ parse, valid, breakPayload }) => {
+    assert.doesNotThrow(() => parse(valid));
+    assert.throws(
+      () => parse(breakPayload(valid)),
+      (error) =>
+        error instanceof AppError && error.code === "invalid_api_response",
+    );
+  });
 });

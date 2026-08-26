@@ -495,3 +495,52 @@ export interface ControlUnlockResponse extends ControlStatusResponse {
   cookies_exported?: boolean;
   cookie_count?: number;
 }
+
+export interface FocusApiItem {
+  id: string;
+  agent_id: string;
+  key: string;
+  title?: string | null;
+  description: string;
+  status: "in_progress" | "completed";
+  kind: "normal" | "system";
+  source: string;
+  metadata?: { [key: string]: JsonValue };
+  sort_order: number;
+  completed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ExperienceEntry {
+  id: string;
+  draft_of_id: string | null;
+  tenant_id: string | null;
+  title: string;
+  body: string;
+  applicability: string;
+  status: "draft" | "published" | "retired";
+  tags: string[];
+  visibility_scope: "company" | "department" | "user";
+  visibility_scope_id: string | null;
+  origin: "chat" | "legacy_plaza";
+  origin_session_id: string | null;
+  origin_agent_id: string | null;
+  created_by: string;
+  reviewed_by: string | null;
+  last_reviewed_at: string | null;
+  retired_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+  created_by_name?: string | null;
+  origin_agent_name?: string | null;
+  can_manage?: boolean | null;
+}
+
+export interface OrgDepartmentItem {
+  id: string;
+  name: string;
+  path?: string;
+  parent_id?: string | null;
+  member_count?: number;
+}

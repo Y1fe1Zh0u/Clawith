@@ -1,8 +1,25 @@
 /** Group chat API client — /api/groups. */
 
-import { fetchJson, uploadFileWithProgress } from "./api";
+import { fetchJson, fetchVoid, uploadFileWithProgress } from "./api";
 import { parseGroupWorkspaceUploadResponse } from "./apiResponseParsers";
 import type { GroupWorkspaceUploadResponse } from "./apiContracts";
+import {
+  parseGroupCandidatesResponse,
+  parseGroupMemberResponse,
+  parseGroupMembersResponse,
+  parseGroupMessageIntakeResponse,
+  parseGroupMessagesResponse,
+  parseGroupReadReceiptResponse,
+  parseGroupResponse,
+  parseGroupRunStateResponse,
+  parseGroupRunStatesResponse,
+  parseGroupsResponse,
+  parseGroupSessionResponse,
+  parseGroupSessionsResponse,
+  parseGroupSessionSummaryResponse,
+  parseGroupTextFileResponse,
+  parseGroupWorkspaceResponse,
+} from "./groupApiResponseParsers";
 import type {
   Group,
   GroupMember,
@@ -38,67 +55,88 @@ const qs = (params: Record<string, string | number | undefined>) => {
 };
 
 export const groupApi = {
-  list: () => fetchJson<Group[]>("/groups"),
+  list: () => fetchJson<Group[]>("/groups", {}, parseGroupsResponse),
 
-  get: (groupId: string) => fetchJson<Group>(`/groups/${groupId}`),
+  get: (groupId: string) =>
+    fetchJson<Group>(`/groups/${groupId}`, {}, parseGroupResponse),
 
   create: (data: {
     name: string;
     description?: string;
     member_participant_ids?: string[];
   }) =>
-    fetchJson<Group>("/groups", { method: "POST", body: JSON.stringify(data) }),
+    fetchJson<Group>(
+      "/groups",
+      { method: "POST", body: JSON.stringify(data) },
+      parseGroupResponse,
+    ),
 
   update: (groupId: string, data: { name?: string; description?: string }) =>
-    fetchJson<Group>(`/groups/${groupId}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    fetchJson<Group>(
+      `/groups/${groupId}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseGroupResponse,
+    ),
 
   remove: (groupId: string) =>
-    fetchJson<void>(`/groups/${groupId}`, { method: "DELETE" }),
+    fetchVoid(`/groups/${groupId}`, { method: "DELETE" }),
 
   members: (groupId: string) =>
-    fetchJson<GroupMember[]>(`/groups/${groupId}/members`),
+    fetchJson<GroupMember[]>(
+      `/groups/${groupId}/members`,
+      {},
+      parseGroupMembersResponse,
+    ),
 
   tenantMemberCandidates: (participantType: ParticipantType) =>
     fetchJson<GroupMemberCandidate[]>(
       `/groups/member-candidates${qs({ participant_type: participantType })}`,
+      {},
+      parseGroupCandidatesResponse,
     ),
 
   memberCandidates: (groupId: string, participantType: ParticipantType) =>
     fetchJson<GroupMemberCandidate[]>(
       `/groups/${groupId}/member-candidates${qs({ participant_type: participantType })}`,
+      {},
+      parseGroupCandidatesResponse,
     ),
 
   inviteMember: (groupId: string, data: InviteMemberPayload) =>
-    fetchJson<GroupMember>(`/groups/${groupId}/members`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    fetchJson<GroupMember>(
+      `/groups/${groupId}/members`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseGroupMemberResponse,
+    ),
 
   removeMember: (groupId: string, memberId: string) =>
-    fetchJson<void>(`/groups/${groupId}/members/${memberId}`, {
+    fetchVoid(`/groups/${groupId}/members/${memberId}`, {
       method: "DELETE",
     }),
 
   sessions: (groupId: string) =>
-    fetchJson<GroupSession[]>(`/groups/${groupId}/sessions`),
+    fetchJson<GroupSession[]>(
+      `/groups/${groupId}/sessions`,
+      {},
+      parseGroupSessionsResponse,
+    ),
 
   createSession: (groupId: string, data: { title?: string } = {}) =>
-    fetchJson<GroupSession>(`/groups/${groupId}/sessions`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    fetchJson<GroupSession>(
+      `/groups/${groupId}/sessions`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseGroupSessionResponse,
+    ),
 
   renameSession: (groupId: string, sessionId: string, title: string) =>
-    fetchJson<GroupSession>(`/groups/${groupId}/sessions/${sessionId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ title }),
-    }),
+    fetchJson<GroupSession>(
+      `/groups/${groupId}/sessions/${sessionId}`,
+      { method: "PATCH", body: JSON.stringify({ title }) },
+      parseGroupSessionResponse,
+    ),
 
   deleteSession: (groupId: string, sessionId: string) =>
-    fetchJson<void>(`/groups/${groupId}/sessions/${sessionId}`, {
+    fetchVoid(`/groups/${groupId}/sessions/${sessionId}`, {
       method: "DELETE",
     }),
 
@@ -107,10 +145,14 @@ export const groupApi = {
       session_id: string;
       last_read_message_id: string;
       advanced: boolean;
-    }>(`/groups/${groupId}/sessions/${sessionId}/read`, {
-      method: "POST",
-      body: JSON.stringify({ message_id: messageId }),
-    }),
+    }>(
+      `/groups/${groupId}/sessions/${sessionId}/read`,
+      {
+        method: "POST",
+        body: JSON.stringify({ message_id: messageId }),
+      },
+      parseGroupReadReceiptResponse,
+    ),
 
   /**
    * Backward pager: returns the `limit` messages immediately older than `before`, ascending.
@@ -129,6 +171,8 @@ export const groupApi = {
         before: opts.before,
         after: opts.after,
       })}`,
+      {},
+      parseGroupMessagesResponse,
     ),
 
   sendMessage: (groupId: string, sessionId: string, data: SendMessagePayload) =>
@@ -138,45 +182,67 @@ export const groupApi = {
         method: "POST",
         body: JSON.stringify(data),
       },
+      parseGroupMessageIntakeResponse,
     ),
 
   runState: (groupId: string, sessionId: string, runId: string) =>
     fetchJson<GroupRunState>(
       `/groups/${groupId}/sessions/${sessionId}/runs/${runId}`,
+      {},
+      parseGroupRunStateResponse,
     ),
 
   activeRuns: (groupId: string, sessionId: string) =>
-    fetchJson<GroupRunState[]>(`/groups/${groupId}/sessions/${sessionId}/runs`),
+    fetchJson<GroupRunState[]>(
+      `/groups/${groupId}/sessions/${sessionId}/runs`,
+      {},
+      parseGroupRunStatesResponse,
+    ),
 
   cancelRun: (groupId: string, sessionId: string, runId: string) =>
     fetchJson<GroupRunState>(
       `/groups/${groupId}/sessions/${sessionId}/runs/${runId}/cancel`,
       { method: "POST" },
+      parseGroupRunStateResponse,
     ),
 
   sessionSummary: (groupId: string, sessionId: string) =>
     fetchJson<GroupSessionSummary>(
       `/groups/${groupId}/sessions/${sessionId}/summary`,
+      {},
+      parseGroupSessionSummaryResponse,
     ),
 
   announcement: (groupId: string) =>
-    fetchJson<GroupTextFile>(`/groups/${groupId}/announcement`),
+    fetchJson<GroupTextFile>(
+      `/groups/${groupId}/announcement`,
+      {},
+      parseGroupTextFileResponse,
+    ),
 
   saveAnnouncement: (
     groupId: string,
     content: string,
     expectedVersionToken?: string | null,
   ) =>
-    fetchJson<GroupTextFile>(`/groups/${groupId}/announcement`, {
-      method: "PUT",
-      body: JSON.stringify({
-        content,
-        expected_version_token: expectedVersionToken ?? null,
-      }),
-    }),
+    fetchJson<GroupTextFile>(
+      `/groups/${groupId}/announcement`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          content,
+          expected_version_token: expectedVersionToken ?? null,
+        }),
+      },
+      parseGroupTextFileResponse,
+    ),
 
   agentMemory: (groupId: string, agentId: string) =>
-    fetchJson<GroupTextFile>(`/groups/${groupId}/agents/${agentId}/memory`),
+    fetchJson<GroupTextFile>(
+      `/groups/${groupId}/agents/${agentId}/memory`,
+      {},
+      parseGroupTextFileResponse,
+    ),
 
   saveAgentMemory: (
     groupId: string,
@@ -184,20 +250,24 @@ export const groupApi = {
     content: string,
     expectedVersionToken?: string | null,
   ) =>
-    fetchJson<GroupTextFile>(`/groups/${groupId}/agents/${agentId}/memory`, {
-      method: "PUT",
-      body: JSON.stringify({
-        content,
-        expected_version_token: expectedVersionToken ?? null,
-      }),
-    }),
+    fetchJson<GroupTextFile>(
+      `/groups/${groupId}/agents/${agentId}/memory`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          content,
+          expected_version_token: expectedVersionToken ?? null,
+        }),
+      },
+      parseGroupTextFileResponse,
+    ),
 
   deleteAgentMemory: (
     groupId: string,
     agentId: string,
     expectedVersionToken?: string | null,
   ) =>
-    fetchJson<void>(
+    fetchVoid(
       `/groups/${groupId}/agents/${agentId}/memory${qs({
         expected_version_token: expectedVersionToken ?? undefined,
       })}`,
@@ -207,11 +277,15 @@ export const groupApi = {
   workspace: (groupId: string, path = "") =>
     fetchJson<GroupWorkspaceEntry[]>(
       `/groups/${groupId}/workspace${qs({ path })}`,
+      {},
+      parseGroupWorkspaceResponse,
     ),
 
   workspaceFile: (groupId: string, path: string) =>
     fetchJson<GroupTextFile>(
       `/groups/${groupId}/workspace/file${qs({ path })}`,
+      {},
+      parseGroupTextFileResponse,
     ),
 
   saveWorkspaceFile: (
@@ -231,6 +305,7 @@ export const groupApi = {
           require_absent: requireAbsent,
         }),
       },
+      parseGroupTextFileResponse,
     ),
 
   uploadWorkspaceFile: (
@@ -270,7 +345,7 @@ export const groupApi = {
     path: string,
     expectedVersionToken?: string | null,
   ) =>
-    fetchJson<void>(
+    fetchVoid(
       `/groups/${groupId}/workspace/file${qs({
         path,
         expected_version_token: expectedVersionToken ?? undefined,
