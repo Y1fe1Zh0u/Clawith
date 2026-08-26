@@ -4,10 +4,13 @@ import React, {
   useMemo,
   useRef,
   useCallback,
+  useEffectEvent,
 } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import type { QueryClient } from "@tanstack/react-query";
 
 import ConfirmModal from "../../components/ConfirmModal";
 import { useDialog } from "../../components/Dialog/DialogProvider";
@@ -17,9 +20,9 @@ import FileBrowser from "../../components/FileBrowser";
 import MarkdownRenderer from "../../components/MarkdownRenderer";
 import {
   DraftEditor as ExperienceDraftEditor,
-  bodyExcerpt,
   type Draft as ExperienceDraft,
 } from "../../components/ExperienceDraftEditor";
+import { bodyExcerpt } from "../../components/ExperienceDraftEditor.shared";
 import { EntryDrawer } from "../../components/ExperienceDetailDrawer";
 import PromptModal from "../../components/PromptModal";
 import {
@@ -38,9 +41,7 @@ import {
   experienceApi,
   fileApi,
   focusApi,
-  scheduleApi,
   skillApi,
-  taskApi,
   tenantApi,
   triggerApi,
   uploadFileWithProgress,
@@ -123,6 +124,213 @@ import {
   runtimeErrorDisablesReconnect,
   runtimeErrorMarksAgentExpired,
 } from "../../services/runtimeError";
+import type { Agent } from "../../types";
+import type {
+  ActivityItem,
+  ClawhubSkill,
+  LlmModel,
+  Trigger,
+  UploadResponse,
+} from "../../services/apiContracts";
+
+type UnknownRecord = Record<string, unknown>;
+type Translate = TFunction;
+
+type AgentDetailData = Agent & {
+  access_level?: "use" | "manage";
+  creator_username?: string;
+  effective_timezone?: string;
+  expires_at?: string | null;
+  is_expired?: boolean;
+  llm_calls_today?: number;
+  max_llm_calls_per_day?: number;
+  max_tool_rounds?: number;
+  max_triggers?: number;
+  min_poll_interval_min?: number;
+  webhook_rate_limit?: number;
+  welcome_message?: string;
+};
+
+type AgentDetailUpdatePayload = {
+  primary_model_id?: string | null;
+  fallback_model_id?: string | null;
+  context_window_size?: number;
+  max_tool_rounds?: number;
+  max_tokens_per_day?: number | null;
+  max_tokens_per_month?: number | null;
+  max_triggers?: number;
+  min_poll_interval_min?: number;
+  webhook_rate_limit?: number;
+  welcome_message?: string;
+};
+
+type AgentUpdateResult = AgentDetailData & {
+  _clamped_fields?: Array<{
+    field: string;
+    requested: unknown;
+    applied: unknown;
+  }>;
+};
+
+type TriggerData = Trigger;
+
+type SessionMessage = {
+  id?: string;
+  cursor?: string;
+  role: "user" | "assistant" | "system" | "tool_call" | "tool_result";
+  content?: string;
+  thinking?: string;
+  created_at?: string;
+  participant_id?: string;
+  sender_name?: string;
+  toolName?: string;
+  toolCallId?: string;
+  toolArgs?: unknown;
+  toolStatus?: "running" | "done";
+  toolResult?: string;
+  toolThinking?: string;
+  runtime_error?: unknown;
+};
+
+type ChatMsg = {
+  id?: string;
+  role: "user" | "assistant" | "system" | "tool_call" | "tool_result";
+  content: string;
+  message?: string;
+  fileName?: string;
+  participant_id?: string;
+  sender_name?: string;
+  toolName?: string;
+  toolCallId?: string;
+  toolArgs?: unknown;
+  toolStatus?: "running" | "done";
+  toolResult?: string;
+  toolThinking?: string;
+  thinking?: string;
+  imageUrl?: string;
+  timestamp?: string;
+  runtimeError?: ReturnType<typeof normalizeRuntimeError>;
+  _streaming?: boolean;
+  _streamRunId?: string;
+  _streamAttemptId?: string;
+  _streamSequence?: number;
+};
+
+type GroupedChatEntry =
+  | { type: "analysis_group"; items: AnalysisItem[]; key: number }
+  | { type: "msg"; msg: ChatMsg; i: number };
+
+type ChatSession = {
+  id: string;
+  user_id?: string | number | null;
+  username?: string;
+  source_channel: string;
+  session_type?: string;
+  is_group: boolean;
+  unread_count: number;
+  participant_id?: string;
+  participant_type: string;
+  agent_id?: string;
+  agent_name?: string;
+  is_primary: boolean;
+  last_message_at: string;
+  message_count: number;
+  created_at: string;
+  updated_at?: string;
+  title?: string;
+};
+
+type ActivityLog = ActivityItem;
+
+function isUnknownRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unknownRecord(value: unknown): UnknownRecord {
+  return isUnknownRecord(value) ? value : {};
+}
+
+function unknownString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function useMutableValue<T>(initialValue: T) {
+  const valueRef = useRef(initialValue);
+  const getValue = useCallback(() => valueRef.current, []);
+  const setValue = useCallback((value: T) => {
+    valueRef.current = value;
+  }, []);
+  return [getValue, setValue] as const;
+}
+
+function chatSessionFromUnknown(value: unknown): ChatSession | null {
+  if (
+    !isUnknownRecord(value) ||
+    (typeof value.id !== "string" && typeof value.id !== "number")
+  ) {
+    return null;
+  }
+  return {
+    id: String(value.id),
+    user_id:
+      typeof value.user_id === "string" ||
+      typeof value.user_id === "number" ||
+      value.user_id === null
+        ? value.user_id
+        : undefined,
+    username: unknownString(value.username),
+    source_channel: unknownString(value.source_channel) || "web",
+    session_type: unknownString(value.session_type),
+    participant_type: unknownString(value.participant_type) || "user",
+    participant_id: unknownString(value.participant_id),
+    agent_id: unknownString(value.agent_id),
+    agent_name: unknownString(value.agent_name),
+    is_group: Boolean(value.is_group),
+    is_primary: Boolean(value.is_primary),
+    unread_count:
+      typeof value.unread_count === "number" ? value.unread_count : 0,
+    message_count:
+      typeof value.message_count === "number" ? value.message_count : 0,
+    last_message_at: unknownString(value.last_message_at) || "",
+    created_at: unknownString(value.created_at) || "",
+    updated_at: unknownString(value.updated_at),
+    title: unknownString(value.title),
+  };
+}
+
+function isSessionMessageRole(value: unknown): value is SessionMessage["role"] {
+  return (
+    value === "user" ||
+    value === "assistant" ||
+    value === "system" ||
+    value === "tool_call" ||
+    value === "tool_result"
+  );
+}
+
+function sessionMessageFromUnknown(value: unknown): SessionMessage | null {
+  if (!isUnknownRecord(value) || !isSessionMessageRole(value.role)) return null;
+  return {
+    id: unknownString(value.id),
+    cursor: unknownString(value.cursor),
+    role: value.role,
+    content: unknownString(value.content),
+    thinking: unknownString(value.thinking),
+    created_at: unknownString(value.created_at),
+    participant_id: unknownString(value.participant_id),
+    sender_name: unknownString(value.sender_name),
+    toolName: unknownString(value.toolName),
+    toolCallId: unknownString(value.toolCallId),
+    toolArgs: value.toolArgs,
+    toolStatus:
+      value.toolStatus === "running" || value.toolStatus === "done"
+        ? value.toolStatus
+        : undefined,
+    toolResult: unknownString(value.toolResult),
+    toolThinking: unknownString(value.toolThinking),
+    runtime_error: value.runtime_error,
+  };
+}
 
 const WORKSPACE_TOOLS = new Set([
   "write_file",
@@ -145,6 +353,7 @@ const AWARE_TOOLS = new Set([
   "upsert_focus_item",
   "complete_focus_item",
 ]);
+const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
 const trimLeadingPictograph = (value: string) =>
   value.replace(/^\p{Extended_Pictographic}\s*/u, "");
@@ -245,11 +454,11 @@ function parseWorkspaceDraftArgs(
   tool: string,
   raw: string,
 ): Pick<WorkspaceLiveDraft, "path" | "content"> {
-  let parsed: any = null;
+  let parsed: UnknownRecord = {};
   try {
-    parsed = JSON.parse(raw || "{}");
+    parsed = unknownRecord(JSON.parse(raw || "{}"));
   } catch {
-    parsed = null;
+    parsed = {};
   }
   const getString = (key: string) => {
     const parsedValue = parsed?.[key];
@@ -268,62 +477,7 @@ function parseWorkspaceDraftArgs(
   return { path, content };
 }
 
-function parseFocusItems(raw: string): FocusItem[] {
-  const lines = raw.split("\n");
-  const focusItems: FocusItem[] = [];
-  let currentItem: FocusItem | null = null;
-  let currentSection: FocusItem["section"] = "active";
-  for (const line of lines) {
-    const heading = line.match(/^##\s+(.+?)\s*$/);
-    if (heading) {
-      const title = heading[1].trim().toLowerCase();
-      if (title === "已完成" || title === "completed")
-        currentSection = "completed";
-      else if (
-        title === "系统 focus" ||
-        title === "system focus" ||
-        title === "system"
-      )
-        currentSection = "system";
-      else if (
-        title === "进行中" ||
-        title === "in progress" ||
-        title === "active"
-      )
-        currentSection = "active";
-      continue;
-    }
-    const match = line.match(/^\s*-\s*\[([ x/])\]\s*(.+)/i);
-    if (match) {
-      if (currentItem) focusItems.push(currentItem);
-      const marker = match[1];
-      const fullText = match[2].trim();
-      const systemKeyMatch = fullText.match(/^(system:[^:]+)\s*:\s*(.*)$/);
-      const colonIdx = systemKeyMatch ? -1 : fullText.indexOf(":");
-      const itemName =
-        colonIdx > 0 ? fullText.substring(0, colonIdx).trim() : fullText;
-      const itemDesc =
-        colonIdx > 0 ? fullText.substring(colonIdx + 1).trim() : "";
-      currentItem = {
-        id: systemKeyMatch ? systemKeyMatch[1] : itemName,
-        name: systemKeyMatch ? systemKeyMatch[1] : itemName,
-        description: systemKeyMatch ? systemKeyMatch[2] : itemDesc,
-        done: marker.toLowerCase() === "x" || currentSection === "completed",
-        inProgress: marker === "/",
-        section: systemKeyMatch ? "system" : currentSection,
-        system: currentSection === "system" || !!systemKeyMatch,
-      };
-    } else if (currentItem && line.trim() && /^\s{2,}/.test(line)) {
-      currentItem.description = currentItem.description
-        ? `${currentItem.description} ${line.trim()}`
-        : line.trim();
-    }
-  }
-  if (currentItem) focusItems.push(currentItem);
-  return focusItems;
-}
-
-function isOkrSystemTrigger(trig: any): boolean {
+function isOkrSystemTrigger(trig: TriggerData): boolean {
   if (!trig?.is_system) return false;
   const name = String(trig.name || "");
   return /(^|_)(okr|daily_okr|weekly_okr|biweekly_okr|monthly_okr|okr_collection|okr_report)/i.test(
@@ -331,14 +485,14 @@ function isOkrSystemTrigger(trig: any): boolean {
   );
 }
 
-function focusKeyFromTrigger(trig: any): string {
+function focusKeyFromTrigger(trig: TriggerData): string {
   if (trig?.focus_ref) return String(trig.focus_ref);
   if (isOkrSystemTrigger(trig)) return "system:okr_reports";
   if (trig?.is_system) return `system:${String(trig.name || "trigger")}`;
   return String(trig.name || trig.reason || "trigger_focus");
 }
 
-function synthesizeFocusForTrigger(trig: any): FocusItem {
+function synthesizeFocusForTrigger(trig: TriggerData): FocusItem {
   const key = focusKeyFromTrigger(trig);
   const isSystem = !!trig.is_system || key.startsWith("system:");
   return {
@@ -357,9 +511,9 @@ function synthesizeFocusForTrigger(trig: any): FocusItem {
 }
 
 function parseAgentBayTransferArgs(
-  rawArgs: any,
+  rawArgs: unknown,
 ): NonNullable<LivePreviewState["transfer"]> {
-  const parsed =
+  const parsedValue: unknown =
     typeof rawArgs === "string"
       ? (() => {
           try {
@@ -369,6 +523,7 @@ function parseAgentBayTransferArgs(
           }
         })()
       : rawArgs || {};
+  const parsed = unknownRecord(parsedValue);
   return {
     fromType:
       typeof parsed.from_type === "string" ? parsed.from_type : undefined,
@@ -398,37 +553,6 @@ const formatTokensParts = (n: number): { value: string; unit: string } => {
   if (n >= 1000) return { value: (n / 1000).toFixed(1), unit: "K" };
   return { value: String(n), unit: "" };
 };
-
-/** Convert rich schedule JSON to cron expression */
-function schedToCron(sched: {
-  freq: string;
-  interval: number;
-  time: string;
-  weekdays?: number[];
-}): string {
-  const [h, m] = (sched.time || "09:00").split(":").map(Number);
-  if (sched.freq === "weekly") {
-    const days = (sched.weekdays || [1, 2, 3, 4, 5]).join(",");
-    return sched.interval > 1
-      ? `${m} ${h} * * ${days}`
-      : `${m} ${h} * * ${days}`;
-  }
-  // daily
-  if (sched.interval === 1) return `${m} ${h} * * *`;
-  return `${m} ${h} */${sched.interval} * *`;
-}
-
-const getRelationOptions = (t: any) => [
-  { value: "supervisor", label: t("agent.detail.supervisor") },
-  { value: "subordinate", label: t("agent.detail.subordinate") },
-  { value: "collaborator", label: t("agent.detail.collaborator") },
-  { value: "peer", label: t("agent.detail.peer") },
-  { value: "mentor", label: t("agent.detail.mentor") },
-  { value: "stakeholder", label: t("agent.detail.stakeholder") },
-  { value: "other", label: t("agent.detail.other") },
-];
-
-const getAgentRelationOptions = getRelationOptions;
 
 /** Tiny copy button shown on hover at the bottom of message bubbles */
 function CopyMessageButton({ text }: { text: string }) {
@@ -529,7 +653,9 @@ function DistillButton({
   const qc = useQueryClient();
   const toast = useToast();
   const [busy, setBusy] = React.useState(false);
-  const [draft, setDraft] = React.useState<ExperienceDraft | null>(null);
+  const [draft, setDraft] = React.useState<
+    (ExperienceDraft & { extracted?: boolean }) | null
+  >(null);
   const handle = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!agentId || busy) return;
@@ -617,7 +743,7 @@ function DistillButton({
         <ExperienceDraftEditor
           draft={draft}
           docked
-          autoExtractFailed={(draft as any).extracted === false}
+          autoExtractFailed={draft.extracted === false}
           onClose={() => setDraft(null)}
           onSaved={() => {
             setDraft(null);
@@ -742,7 +868,7 @@ function ExperienceDraftCard({
   args,
   sessionId,
 }: {
-  args: any;
+  args: unknown;
   sessionId?: string | null;
 }) {
   const { id: agentId } = useParams<{ id: string }>();
@@ -751,16 +877,16 @@ function ExperienceDraftCard({
   const [open, setOpen] = React.useState(false);
   // tool args may arrive as an object or a JSON string.
   const a = React.useMemo(() => {
-    if (args && typeof args === "object") return args;
+    if (isUnknownRecord(args)) return args;
     try {
-      return JSON.parse(args || "{}");
+      return unknownRecord(JSON.parse(typeof args === "string" ? args : "{}"));
     } catch {
       return {};
     }
   }, [args]);
-  const toArr = (v: any) =>
+  const toArr = (v: unknown): string[] =>
     Array.isArray(v)
-      ? v
+      ? v.filter((item): item is string => typeof item === "string")
       : typeof v === "string" && v
         ? v
             .split(/[,，]/)
@@ -768,9 +894,9 @@ function ExperienceDraftCard({
             .filter(Boolean)
         : [];
   const prefill: ExperienceDraft = {
-    title: a.title || "",
-    body: a.body || "",
-    applicability: a.applicability || "",
+    title: unknownString(a.title) || "",
+    body: unknownString(a.body) || "",
+    applicability: unknownString(a.applicability) || "",
     tags: toArr(a.tags),
     origin_agent_id: agentId,
     origin_session_id: sessionId || null,
@@ -779,8 +905,12 @@ function ExperienceDraftCard({
   // literally; the drawer renders it properly. `key` marks 适用与失效: required, and the
   // part a reader's eye slides off.
   const parts: { label: string; val: string; key?: boolean }[] = [
-    { label: "正文", val: bodyExcerpt(a.body) },
-    { label: "适用与失效", val: a.applicability, key: true },
+    { label: "正文", val: bodyExcerpt(unknownString(a.body) || "") },
+    {
+      label: "适用与失效",
+      val: unknownString(a.applicability) || "",
+      key: true,
+    },
   ];
   const tags = toArr(a.tags);
   return (
@@ -790,7 +920,9 @@ function ExperienceDraftCard({
           <div className="exp-draft-tagrow">
             <span className="exp-draft-state">草稿</span>
           </div>
-          <div className="exp-draft-title">{a.title || "未命名经验"}</div>
+          <div className="exp-draft-title">
+            {unknownString(a.title) || "未命名经验"}
+          </div>
         </div>
         <div className="exp-draft-pending">待你确认 · 不自动入库</div>
       </div>
@@ -854,6 +986,19 @@ type AccessUserCandidate = {
   username?: string;
   email?: string;
 };
+type PermissionData = {
+  can_manage?: boolean;
+  is_owner?: boolean;
+  creator_id?: string | number;
+  scope_type?: "company" | "user" | "custom";
+  access_level?: "use" | "manage";
+  user_access?: AccessUser[];
+};
+type PermissionPayload = {
+  scope_type: string;
+  access_level: string;
+  user_access: AccessUser[];
+};
 
 function AccessPermissionsPanel({
   agentId,
@@ -862,9 +1007,9 @@ function AccessPermissionsPanel({
   queryClient,
 }: {
   agentId: string;
-  permData: any;
+  permData: PermissionData | undefined;
   canManage: boolean;
-  queryClient: any;
+  queryClient: QueryClient;
 }) {
   const { t, i18n } = useTranslation();
   const isChinese = i18n.language?.startsWith("zh");
@@ -883,35 +1028,28 @@ function AccessPermissionsPanel({
   const [userSearch, setUserSearch] = useState("");
   const [showUserDropdown, setShowUserDropdown] = useState(false);
   const userSearchRef = useRef<HTMLDivElement | null>(null);
-  const userAccess: AccessUser[] = (permData?.user_access || []).map(
-    (u: any) => ({
-      id: u.id,
-      name: u.name,
-      username: u.username,
-      email: u.email,
-      access_level: u.access_level === "manage" ? "manage" : "use",
-      is_required: !!u.is_required,
-      required_reason: u.required_reason || null,
-    }),
-  );
+  const userAccess: AccessUser[] = (permData?.user_access || []).map((u) => ({
+    id: u.id,
+    name: u.name,
+    username: u.username,
+    email: u.email,
+    access_level: u.access_level === "manage" ? "manage" : "use",
+    is_required: !!u.is_required,
+    required_reason: u.required_reason || null,
+  }));
   const toPermissionPayloadScope = (scope: string) =>
     scope === "private" ? "user" : scope;
 
   const { data: candidates } = useQuery({
     queryKey: ["agent-permission-candidates", agentId, userSearch],
     queryFn: () =>
-      fetchAuth<{ users: AccessUserCandidate[]; agents: any[] }>(
+      fetchAuth<{ users: AccessUserCandidate[]; agents: unknown[] }>(
         `/agents/${agentId}/permissions/candidates${userSearch.trim() ? `?search=${encodeURIComponent(userSearch.trim())}` : ""}`,
       ),
     enabled: !!agentId && canManagePermissions,
   });
 
-  useEffect(() => {
-    setLocalScope(currentScope);
-    setLocalAccessLevel(currentAccessLevel);
-  }, [currentScope, currentAccessLevel]);
-
-  const savePermissions = async (payload: any) => {
+  const savePermissions = async (payload: PermissionPayload) => {
     setPermissionError(null);
     await fetchAuth(`/agents/${agentId}/permissions`, {
       method: "PUT",
@@ -950,7 +1088,11 @@ function AccessPermissionsPanel({
     },
   ] as const;
 
-  const accessLevels = [
+  const accessLevels: Array<{
+    val: "use" | "manage";
+    label: React.ReactNode;
+    desc: string;
+  }> = [
     {
       val: "use",
       label: (
@@ -1007,7 +1149,7 @@ function AccessPermissionsPanel({
     }
   };
 
-  const setCompanyAccessLevel = async (level: string) => {
+  const setCompanyAccessLevel = async (level: "use" | "manage") => {
     const previousLevel = localAccessLevel;
     setLocalAccessLevel(level);
     setSavingScope(`level:${level}`);
@@ -1650,10 +1792,113 @@ type AnalysisItem =
       type: "tool";
       toolCallId?: string;
       name: string;
-      args: any;
+      args: unknown;
       status: "running" | "done";
       result?: string;
     };
+
+function groupChatMessages(messages: ChatMsg[]): GroupedChatEntry[] {
+  const classifications: Array<"analysis" | "final"> = new Array(
+    messages.length,
+  ).fill("final");
+  let hasFutureTool = false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "tool_call") {
+      classifications[index] = "analysis";
+      hasFutureTool = true;
+    } else if (message.role === "user") {
+      hasFutureTool = false;
+    } else if (message.role === "assistant" && hasFutureTool) {
+      classifications[index] = "analysis";
+    }
+  }
+
+  const grouped: GroupedChatEntry[] = [];
+  let currentGroup: AnalysisItem[] | null = null;
+  let groupStartKey = 0;
+  const flushGroup = () => {
+    if (!currentGroup?.length) return;
+    grouped.push({
+      type: "analysis_group",
+      items: currentGroup,
+      key: groupStartKey,
+    });
+    currentGroup = null;
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (classifications[index] === "analysis") {
+      if (!currentGroup) {
+        currentGroup = [];
+        groupStartKey = index;
+      }
+      if (message.role === "tool_call") {
+        const msg = message;
+        if (message.toolThinking?.trim()) {
+          const lastItem = currentGroup[currentGroup.length - 1];
+          if (!(
+            lastItem?.type === "thinking" &&
+            lastItem.content === message.toolThinking
+          )) {
+            currentGroup.push({
+              type: "thinking",
+              content: message.toolThinking,
+            });
+          }
+        }
+        currentGroup.push({
+          type: "tool",
+          toolCallId: msg.toolCallId,
+          name: message.toolName || "tool",
+          args: message.toolArgs || {},
+          status: message.toolStatus === "running" ? "running" : "done",
+          result: message.toolResult || undefined,
+        });
+      } else if (message.role === "assistant") {
+        if (message.thinking) {
+          currentGroup.push({ type: "thinking", content: message.thinking });
+        }
+        const content = message.content?.trim();
+        if (content) currentGroup.push({ type: "thinking", content });
+      }
+      continue;
+    }
+
+    if (
+      message.role === "assistant" &&
+      message.thinking &&
+      currentGroup?.some((item) => item.type === "tool")
+    ) {
+      currentGroup.push({ type: "thinking", content: message.thinking });
+      const content = message.content?.trim();
+      flushGroup();
+      if (content) {
+        grouped.push({
+          type: "msg",
+          msg: { ...message, thinking: undefined },
+          i: index,
+        });
+      }
+      continue;
+    }
+
+    flushGroup();
+    const isAssistantEmpty =
+      message.role === "assistant" &&
+      !message.content?.trim() &&
+      !message.thinking?.trim() &&
+      !message.runtimeError &&
+      !message.fileName &&
+      !message.imageUrl;
+    if (!isAssistantEmpty) {
+      grouped.push({ type: "msg", msg: message, i: index });
+    }
+  }
+  flushGroup();
+  return grouped;
+}
 
 type AnalysisToolMeta = {
   title: string;
@@ -1702,7 +1947,7 @@ function basename(path?: string): string {
   return clean.split("/").filter(Boolean).pop() || clean;
 }
 
-function firstString(...values: any[]): string | undefined {
+function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
@@ -1713,10 +1958,7 @@ function getToolMeta(
   item: Extract<AnalysisItem, { type: "tool" }>,
 ): AnalysisToolMeta {
   const name = item.name || "tool";
-  const args =
-    item.args && typeof item.args === "object" && !Array.isArray(item.args)
-      ? item.args
-      : {};
+  const args = unknownRecord(item.args);
   const resultText = typeof item.result === "string" ? item.result : "";
   const path = firstString(
     args.output_path,
@@ -1869,10 +2111,7 @@ function getToolIcon(kind: AnalysisToolMeta["kind"]) {
   }
 }
 
-function describeAnalysis(
-  items: AnalysisItem[],
-  t: (k: string, opts?: any) => string,
-): string {
+function describeAnalysis(items: AnalysisItem[], t: Translate): string {
   const toolItems = items.filter((i) => i.type === "tool") as Extract<
     AnalysisItem,
     { type: "tool" }
@@ -1917,7 +2156,7 @@ function describeAnalysis(
 
 function describeToolResolution(
   reconciliation: ToolReconciliation,
-  t: (key: string, options?: any) => string,
+  t: Translate,
 ): string {
   switch (reconciliation.resolutionStatus) {
     case "checking":
@@ -1967,7 +2206,7 @@ function AnalysisCard({
   reconciliationsByToolCallId,
 }: {
   items: AnalysisItem[];
-  t: (k: string, opts?: any) => string;
+  t: Translate;
   expanded: boolean;
   onToggle: () => void;
   /** True when parent isWaiting/isStreaming AND this is the last active group */
@@ -1981,7 +2220,7 @@ function AnalysisCard({
   // render it as an always-visible card outside the collapsible trace.
   const proposeItems = items.filter(
     (i): i is Extract<AnalysisItem, { type: "tool" }> =>
-      i.type === "tool" && (i as any).name === "propose_experience_draft",
+      i.type === "tool" && i.name === "propose_experience_draft",
   );
   const toolItems = items.filter((i) => i.type === "tool") as Extract<
     AnalysisItem,
@@ -2023,7 +2262,7 @@ function AnalysisCard({
         {proposeItems.map((it, i) => (
           <ExperienceDraftCard
             key={`propose-${i}`}
-            args={(it as any).args}
+            args={it.args}
             sessionId={sessionId}
           />
         ))}
@@ -2033,7 +2272,7 @@ function AnalysisCard({
               const isLast = idx === items.length - 1;
               if (
                 item.type === "tool" &&
-                (item as any).name === "propose_experience_draft"
+                item.name === "propose_experience_draft"
               )
                 return null;
               if (item.type === "thinking") {
@@ -2356,7 +2595,7 @@ function ThoughtDisclosure({
   streaming = false,
 }: {
   content: string;
-  t: (k: string, opts?: any) => string;
+  t: Translate;
   streaming?: boolean;
 }) {
   const [expanded, setExpanded] = React.useState(false);
@@ -2438,1397 +2677,6 @@ function ThoughtDisclosure({
   );
 }
 
-function RelationshipEditor({
-  agentId,
-  readOnly = false,
-}: {
-  agentId: string;
-  readOnly?: boolean;
-}) {
-  const { t, i18n } = useTranslation();
-  const isChinese = i18n.language?.startsWith("zh");
-  const humanSearchRef = useRef<HTMLDivElement>(null);
-  const agentSearchRef = useRef<HTMLDivElement>(null);
-  const getHumanMemberSourceLabel = useCallback(
-    (member: any) => {
-      const providerName = (member?.provider_name || "").trim();
-      const providerType = (member?.provider_type || "").trim().toLowerCase();
-      if (
-        !providerName ||
-        providerType === "platform" ||
-        providerType === "web" ||
-        providerName.toLowerCase() === "web"
-      ) {
-        return isChinese ? "平台用户" : "Platform User";
-      }
-      return providerName;
-    },
-    [isChinese],
-  );
-
-  const renderHumanMemberSourceBadge = useCallback(
-    (member: any) => {
-      const providerName = (member?.provider_name || "").trim();
-      const providerType = (member?.provider_type || "").trim().toLowerCase();
-      const isPlatformUser =
-        !providerName ||
-        providerType === "platform" ||
-        providerType === "web" ||
-        providerName.toLowerCase() === "web";
-      const showPlatformBadge =
-        Boolean(member?.is_platform_user) && !isPlatformUser;
-      const badgeStyle = (platform: boolean): React.CSSProperties => ({
-        display: "inline-flex",
-        alignItems: "center",
-        padding: "1px 6px",
-        borderRadius: "999px",
-        fontSize: "10px",
-        fontWeight: 600,
-        marginRight: "6px",
-        background: platform
-          ? "rgba(99,102,241,0.10)"
-          : "rgba(16,185,129,0.10)",
-        color: platform ? "rgb(79,70,229)" : "rgb(16,185,129)",
-        border: platform
-          ? "1px solid rgba(99,102,241,0.18)"
-          : "1px solid rgba(16,185,129,0.18)",
-      });
-      return (
-        <>
-          <span style={badgeStyle(isPlatformUser)}>
-            {getHumanMemberSourceLabel(member)}
-          </span>
-          {showPlatformBadge && (
-            <span style={badgeStyle(true)}>
-              {isChinese ? "平台用户" : "Platform User"}
-            </span>
-          )}
-        </>
-      );
-    },
-    [getHumanMemberSourceLabel, isChinese],
-  );
-
-  const getRestrictedTitle = useCallback(
-    (reason?: string | null) => {
-      const reasonText = reason ? ` (${reason})` : "";
-      return isChinese
-        ? `当关系目标不存在、停用/过期，或当前访问权限不再允许这个 Agent 与该用户/Agent 互动时，会显示为 restricted。关系记录会保留，但运行时不会使用。${reasonText}`
-        : `Restricted means the target is missing, inactive/expired, or current access permissions no longer allow this agent to interact with that user/agent. The record is kept, but runtime use is blocked.${reasonText}`;
-    },
-    [isChinese],
-  );
-
-  const [restrictedTooltip, setRestrictedTooltip] = useState<{
-    text: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  const showRestrictedTooltip = useCallback(
-    (event: React.SyntheticEvent<HTMLElement>, reason?: string | null) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      const tooltipWidth = Math.min(320, Math.max(220, window.innerWidth - 32));
-      const x = Math.min(
-        Math.max(rect.left + rect.width / 2, 16 + tooltipWidth / 2),
-        window.innerWidth - 16 - tooltipWidth / 2,
-      );
-      setRestrictedTooltip({
-        text: getRestrictedTitle(reason),
-        x,
-        y: rect.top - 8,
-      });
-    },
-    [getRestrictedTitle],
-  );
-  const hideRestrictedTooltip = useCallback(
-    () => setRestrictedTooltip(null),
-    [],
-  );
-
-  const [search, setSearch] = useState("");
-  const [showHumanForm, setShowHumanForm] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [showMemberDropdown, setShowMemberDropdown] = useState(false);
-  const [selectedMembers, setSelectedMembers] = useState<any[]>([]);
-  const [relation, setRelation] = useState("collaborator");
-  const [description, setDescription] = useState("");
-  const [agentSearch, setAgentSearch] = useState("");
-  const [showAgentForm, setShowAgentForm] = useState(false);
-  const [agentSearchResults, setAgentSearchResults] = useState<any[]>([]);
-  const [showAgentDropdown, setShowAgentDropdown] = useState(false);
-  const [selectedAgents, setSelectedAgents] = useState<any[]>([]);
-  const [agentRelation, setAgentRelation] = useState("collaborator");
-  const [agentDescription, setAgentDescription] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editRelation, setEditRelation] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
-  const [editAgentRelation, setEditAgentRelation] = useState("");
-  const [editAgentDescription, setEditAgentDescription] = useState("");
-  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
-
-  const { data: relationships = [], refetch } = useQuery({
-    queryKey: ["relationships", agentId],
-    queryFn: () => fetchAuth<any[]>(`/agents/${agentId}/relationships/`),
-  });
-  const { data: agentRelationships = [], refetch: refetchAgentRels } = useQuery(
-    {
-      queryKey: ["agent-relationships", agentId],
-      queryFn: () =>
-        fetchAuth<any[]>(`/agents/${agentId}/relationships/agents`),
-    },
-  );
-
-  const relatedMemberIds = useMemo(
-    () => new Set(relationships.map((r: any) => r.member_id)),
-    [relationships],
-  );
-  const relatedAgentIds = useMemo(
-    () => new Set(agentRelationships.map((r: any) => r.target_agent_id)),
-    [agentRelationships],
-  );
-  const selectedMemberIds = useMemo(
-    () => new Set(selectedMembers.map((m: any) => m.id)),
-    [selectedMembers],
-  );
-  const selectedAgentIds = useMemo(
-    () => new Set(selectedAgents.map((a: any) => a.id)),
-    [selectedAgents],
-  );
-  const relatedMemberById = useMemo(() => {
-    const map = new Map<string, any>();
-    relationships.forEach((r: any) => {
-      if (r.member_id) map.set(r.member_id, r);
-    });
-    return map;
-  }, [relationships]);
-
-  const visibleMemberResults = useMemo(() => searchResults, [searchResults]);
-  const visibleAgentResults = useMemo(
-    () => agentSearchResults.filter((a: any) => !relatedAgentIds.has(a.id)),
-    [agentSearchResults, relatedAgentIds],
-  );
-
-  const loadOrgMembers = async (keyword = "") => {
-    const query = keyword.trim()
-      ? `?search=${encodeURIComponent(keyword.trim())}`
-      : "";
-    const results = await fetchAuth<any[]>(
-      `/agents/${agentId}/relationships/member-candidates${query}`,
-    );
-    setSearchResults(results);
-  };
-
-  const loadAgentCandidates = async (keyword = "") => {
-    const query = keyword.trim()
-      ? `?search=${encodeURIComponent(keyword.trim())}`
-      : "";
-    const results = await fetchAuth<any[]>(
-      `/agents/${agentId}/relationships/agent-candidates${query}`,
-    );
-    setAgentSearchResults(results);
-  };
-
-  useEffect(() => {
-    if (!search || search.length < 1) {
-      setSearchResults([]);
-      return;
-    }
-    const timer = setTimeout(() => {
-      loadOrgMembers(search);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [search]);
-
-  useEffect(() => {
-    if (!agentSearch || agentSearch.length < 1) {
-      setAgentSearchResults([]);
-      return;
-    }
-    const timer = setTimeout(() => {
-      loadAgentCandidates(agentSearch);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [agentId, agentSearch]);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        showMemberDropdown &&
-        humanSearchRef.current &&
-        !humanSearchRef.current.contains(target)
-      ) {
-        setShowMemberDropdown(false);
-      }
-      if (
-        showAgentDropdown &&
-        agentSearchRef.current &&
-        !agentSearchRef.current.contains(target)
-      ) {
-        setShowAgentDropdown(false);
-      }
-    };
-    if (showMemberDropdown || showAgentDropdown) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showMemberDropdown, showAgentDropdown]);
-
-  const resetHumanDraft = () => {
-    setShowHumanForm(false);
-    setSearch("");
-    setSearchResults([]);
-    setShowMemberDropdown(false);
-    setSelectedMembers([]);
-    setRelation("collaborator");
-    setDescription("");
-  };
-
-  const resetAgentDraft = () => {
-    setShowAgentForm(false);
-    setAgentSearch("");
-    setAgentSearchResults([]);
-    setShowAgentDropdown(false);
-    setSelectedAgents([]);
-    setAgentRelation("collaborator");
-    setAgentDescription("");
-  };
-
-  const toggleMemberSelection = (member: any) => {
-    setSelectedMembers((prev) =>
-      prev.some((item: any) => item.id === member.id)
-        ? prev.filter((item: any) => item.id !== member.id)
-        : [...prev, member],
-    );
-  };
-
-  const toggleAgentSelection = (agent: any) => {
-    setSelectedAgents((prev) =>
-      prev.some((item: any) => item.id === agent.id)
-        ? prev.filter((item: any) => item.id !== agent.id)
-        : [...prev, agent],
-    );
-  };
-
-  const addRelationship = async () => {
-    if (!selectedMembers.length) return;
-    const existing = new Map(
-      relationships.map((r: any) => [
-        r.member_id,
-        {
-          member_id: r.member_id,
-          relation: r.relation,
-          description: r.description,
-        },
-      ]),
-    );
-    selectedMembers.forEach((member: any) => {
-      existing.set(member.id, { member_id: member.id, relation, description });
-    });
-    await fetchAuth(`/agents/${agentId}/relationships/`, {
-      method: "PUT",
-      body: JSON.stringify({ relationships: Array.from(existing.values()) }),
-    });
-    resetHumanDraft();
-    refetch();
-  };
-
-  const removeRelationship = async (relId: string) => {
-    setDeletingIds((prev) => new Set(prev).add(relId));
-    try {
-      await fetchAuth(`/agents/${agentId}/relationships/${relId}`, {
-        method: "DELETE",
-      });
-      refetch();
-    } catch {
-      setDeletingIds((prev) => {
-        const s = new Set(prev);
-        s.delete(relId);
-        return s;
-      });
-      refetch();
-    } finally {
-      setDeletingIds((prev) => {
-        const s = new Set(prev);
-        s.delete(relId);
-        return s;
-      });
-    }
-  };
-
-  const startEditRelationship = (r: any) => {
-    setEditingId(r.id);
-    setEditRelation(r.relation || "collaborator");
-    setEditDescription(r.description || "");
-  };
-
-  const saveEditRelationship = async (targetId: string) => {
-    const updated = relationships.map((r: any) => ({
-      member_id: r.member_id,
-      relation: r.id === targetId ? editRelation : r.relation,
-      description: r.id === targetId ? editDescription : r.description,
-    }));
-    await fetchAuth(`/agents/${agentId}/relationships/`, {
-      method: "PUT",
-      body: JSON.stringify({ relationships: updated }),
-    });
-    setEditingId(null);
-    refetch();
-  };
-
-  const addAgentRelationship = async () => {
-    if (!selectedAgents.length) return;
-    const existing = new Map(
-      agentRelationships.map((r: any) => [
-        r.target_agent_id,
-        {
-          target_agent_id: r.target_agent_id,
-          relation: r.relation,
-          description: r.description,
-        },
-      ]),
-    );
-    selectedAgents.forEach((agent: any) => {
-      existing.set(agent.id, {
-        target_agent_id: agent.id,
-        relation: agentRelation,
-        description: agentDescription,
-      });
-    });
-    await fetchAuth(`/agents/${agentId}/relationships/agents`, {
-      method: "PUT",
-      body: JSON.stringify({ relationships: Array.from(existing.values()) }),
-    });
-    resetAgentDraft();
-    refetchAgentRels();
-  };
-
-  const removeAgentRelationship = async (relId: string) => {
-    setDeletingIds((prev) => new Set(prev).add(relId));
-    try {
-      await fetchAuth(`/agents/${agentId}/relationships/agents/${relId}`, {
-        method: "DELETE",
-      });
-      refetchAgentRels();
-    } catch {
-      setDeletingIds((prev) => {
-        const s = new Set(prev);
-        s.delete(relId);
-        return s;
-      });
-      refetchAgentRels();
-    } finally {
-      setDeletingIds((prev) => {
-        const s = new Set(prev);
-        s.delete(relId);
-        return s;
-      });
-    }
-  };
-
-  const startEditAgentRelationship = (r: any) => {
-    setEditingAgentId(r.id);
-    setEditAgentRelation(r.relation || "collaborator");
-    setEditAgentDescription(r.description || "");
-  };
-
-  const saveEditAgentRelationship = async (targetId: string) => {
-    const updated = agentRelationships.map((r: any) => ({
-      target_agent_id: r.target_agent_id,
-      relation: r.id === targetId ? editAgentRelation : r.relation,
-      description: r.id === targetId ? editAgentDescription : r.description,
-    }));
-    await fetchAuth(`/agents/${agentId}/relationships/agents`, {
-      method: "PUT",
-      body: JSON.stringify({ relationships: updated }),
-    });
-    setEditingAgentId(null);
-    refetchAgentRels();
-  };
-
-  return (
-    <div>
-      {restrictedTooltip && (
-        <div
-          style={{
-            position: "fixed",
-            left: restrictedTooltip.x,
-            top: restrictedTooltip.y,
-            transform: "translate(-50%, -100%)",
-            zIndex: 10000,
-            width: "max-content",
-            maxWidth: "min(320px, calc(100vw - 32px))",
-            padding: "8px 10px",
-            borderRadius: "8px",
-            border: "1px solid var(--border-subtle)",
-            background: "var(--bg-primary)",
-            color: "var(--text-primary)",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.16)",
-            fontSize: "12px",
-            lineHeight: 1.45,
-            whiteSpace: "normal",
-            overflowWrap: "anywhere",
-            wordBreak: "break-word",
-            pointerEvents: "none",
-          }}
-        >
-          {restrictedTooltip.text}
-        </div>
-      )}
-      <div className="card" style={{ marginBottom: "12px" }}>
-        <h4 style={{ marginBottom: "12px" }}>
-          {t("agent.detail.humanRelationships")}
-        </h4>
-        <p
-          style={{
-            fontSize: "12px",
-            color: "var(--text-tertiary)",
-            marginBottom: "12px",
-          }}
-        >
-          {t("agent.detail.humanRelationships")}
-        </p>
-        {relationships.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "6px",
-              marginBottom: "16px",
-            }}
-          >
-            {relationships.map((r: any) => (
-              <div
-                key={r.id}
-                style={{
-                  borderRadius: "8px",
-                  border: "1px solid var(--border-subtle)",
-                  overflow: "hidden",
-                  opacity: deletingIds.has(r.id) ? 0.4 : 1,
-                  transition: "opacity 0.2s ease",
-                  pointerEvents: deletingIds.has(r.id) ? "none" : "auto",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    padding: "10px",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "36px",
-                      height: "36px",
-                      borderRadius: "50%",
-                      background: "rgba(224,238,238,0.15)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "16px",
-                      fontWeight: 600,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {r.member?.name?.[0] || "?"}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: "13px" }}>
-                      {r.member?.name || "?"}{" "}
-                      <span
-                        className="badge"
-                        style={{ fontSize: "10px", marginLeft: "4px" }}
-                      >
-                        {String(
-                          t(`agent.detail.${r.relation}`, r.relation_label),
-                        )}
-                      </span>
-                      {r.access_status && r.access_status !== "active" && (
-                        <span
-                          className="badge"
-                          onMouseEnter={(event) =>
-                            showRestrictedTooltip(event, r.access_status_reason)
-                          }
-                          onMouseLeave={hideRestrictedTooltip}
-                          onFocus={(event) =>
-                            showRestrictedTooltip(event, r.access_status_reason)
-                          }
-                          onBlur={hideRestrictedTooltip}
-                          tabIndex={0}
-                          style={{
-                            fontSize: "10px",
-                            marginLeft: "4px",
-                            color: "var(--warning)",
-                            background: "rgba(245,158,11,0.12)",
-                            cursor: "help",
-                          }}
-                        >
-                          {r.access_status}
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "11px",
-                        color: "var(--text-tertiary)",
-                      }}
-                    >
-                      {renderHumanMemberSourceBadge(r.member)}
-                      {r.member?.department_path || ""} ·{" "}
-                      {r.member?.email || ""}
-                    </div>
-                    {r.description && editingId !== r.id && (
-                      <div
-                        style={{
-                          fontSize: "12px",
-                          color: "var(--text-secondary)",
-                          marginTop: "4px",
-                        }}
-                      >
-                        {r.description}
-                      </div>
-                    )}
-                  </div>
-                  {!readOnly && editingId !== r.id && (
-                    <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ fontSize: "12px" }}
-                        onClick={() => startEditRelationship(r)}
-                      >
-                        {t("common.edit", "Edit")}
-                      </button>
-                      <button
-                        className="btn btn-ghost"
-                        style={{
-                          color: deletingIds.has(r.id)
-                            ? "var(--text-tertiary)"
-                            : "var(--error)",
-                          fontSize: "12px",
-                        }}
-                        disabled={deletingIds.has(r.id)}
-                        onClick={() => removeRelationship(r.id)}
-                      >
-                        {deletingIds.has(r.id)
-                          ? t("common.deleting", "Deleting...")
-                          : t("common.delete")}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {editingId === r.id && (
-                  <div
-                    style={{
-                      padding: "0 10px 10px",
-                      borderTop: "1px solid var(--border-subtle)",
-                      background: "var(--bg-elevated)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "8px",
-                        marginTop: "8px",
-                        marginBottom: "8px",
-                      }}
-                    >
-                      <select
-                        className="input"
-                        value={editRelation}
-                        onChange={(e) => setEditRelation(e.target.value)}
-                        style={{ width: "140px", fontSize: "12px" }}
-                      >
-                        {getRelationOptions(t).map((o: any) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <textarea
-                      className="input"
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      rows={2}
-                      style={{
-                        fontSize: "12px",
-                        resize: "vertical",
-                        marginBottom: "8px",
-                        width: "100%",
-                      }}
-                      placeholder={t(
-                        "agent.detail.descriptionPlaceholder",
-                        "Description...",
-                      )}
-                    />
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      <button
-                        className="btn btn-primary"
-                        style={{ fontSize: "12px" }}
-                        onClick={() => saveEditRelationship(r.id)}
-                      >
-                        {t("common.save", "Save")}
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        style={{ fontSize: "12px" }}
-                        onClick={() => setEditingId(null)}
-                      >
-                        {t("common.cancel")}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        {!readOnly && !showHumanForm && (
-          <button
-            className="btn btn-secondary"
-            type="button"
-            onClick={() => setShowHumanForm(true)}
-          >
-            {t("agent.detail.addRelationship", "Add Relationship")}
-          </button>
-        )}
-        {!readOnly && showHumanForm && (
-          <div
-            style={{
-              border: "1px solid var(--border-subtle)",
-              borderRadius: "8px",
-              padding: "12px",
-              background: "var(--bg-elevated)",
-            }}
-            onMouseDownCapture={(e) => {
-              const target = e.target as Node;
-              if (
-                humanSearchRef.current &&
-                !humanSearchRef.current.contains(target)
-              ) {
-                setShowMemberDropdown(false);
-              }
-            }}
-          >
-            <div
-              ref={humanSearchRef}
-              style={{ position: "relative", marginBottom: "8px" }}
-            >
-              <input
-                className="input"
-                placeholder={t("agent.detail.searchMembers")}
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setShowMemberDropdown(true);
-                }}
-                onFocus={() => {
-                  setShowMemberDropdown(true);
-                  if (!search.trim() && searchResults.length === 0) {
-                    loadOrgMembers();
-                  }
-                }}
-                style={{ fontSize: "13px" }}
-              />
-              {showMemberDropdown && visibleMemberResults.length > 0 && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 0,
-                    right: 0,
-                    background: "var(--bg-primary)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "6px",
-                    marginTop: "4px",
-                    maxHeight: "200px",
-                    overflowY: "auto",
-                    zIndex: 10,
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                  }}
-                >
-                  {visibleMemberResults.map((m: any) => {
-                    const existingRelationship = relatedMemberById.get(m.id);
-                    const alreadyAdded = Boolean(existingRelationship);
-                    const checked = alreadyAdded || selectedMemberIds.has(m.id);
-                    return (
-                      <div
-                        key={m.id}
-                        style={{
-                          padding: "8px 12px",
-                          cursor: alreadyAdded ? "default" : "pointer",
-                          fontSize: "13px",
-                          borderBottom: "1px solid var(--border-subtle)",
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: "8px",
-                          opacity: alreadyAdded ? 0.72 : 1,
-                        }}
-                        onClick={() => {
-                          if (!alreadyAdded) toggleMemberSelection(m);
-                        }}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.background = alreadyAdded
-                            ? "transparent"
-                            : "var(--bg-elevated)")
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.background = "transparent")
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={alreadyAdded}
-                          readOnly
-                          style={{ marginTop: "2px" }}
-                        />
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontWeight: 500 }}>
-                            {m.name}
-                            {alreadyAdded && (
-                              <span
-                                className="badge"
-                                style={{
-                                  fontSize: "10px",
-                                  marginLeft: "6px",
-                                  color: "var(--text-tertiary)",
-                                  background: "var(--bg-elevated)",
-                                }}
-                              >
-                                {isChinese ? "已添加" : "Added"}
-                              </span>
-                            )}
-                            {alreadyAdded &&
-                              existingRelationship?.relation_label && (
-                                <span
-                                  className="badge"
-                                  style={{
-                                    fontSize: "10px",
-                                    marginLeft: "4px",
-                                  }}
-                                >
-                                  {String(
-                                    t(
-                                      `agent.detail.${existingRelationship.relation}`,
-                                      existingRelationship.relation_label,
-                                    ),
-                                  )}
-                                </span>
-                              )}
-                          </div>
-                          <div
-                            style={{
-                              fontSize: "11px",
-                              color: "var(--text-tertiary)",
-                            }}
-                          >
-                            {renderHumanMemberSourceBadge(m)}
-                            {m.department_path} · {m.email}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            {showMemberDropdown &&
-              search &&
-              visibleMemberResults.length === 0 && (
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: "var(--text-tertiary)",
-                    marginBottom: "8px",
-                  }}
-                >
-                  {t("agent.detail.noSearchResults", "No available results")}
-                </div>
-              )}
-            {selectedMembers.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                  marginBottom: "10px",
-                }}
-              >
-                {selectedMembers.map((member: any) => (
-                  <div
-                    key={member.id}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: "10px",
-                      padding: "8px 10px",
-                      background: "var(--bg-primary)",
-                      fontSize: "12px",
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: "24px",
-                        height: "24px",
-                        borderRadius: "50%",
-                        background: "var(--bg-tertiary)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 700,
-                        fontSize: "11px",
-                        flexShrink: 0,
-                      }}
-                    >
-                      {member.name?.[0] || "?"}
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600 }}>{member.name}</div>
-                      <div
-                        style={{
-                          color: "var(--text-tertiary)",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {member.department_path || member.email || ""}
-                      </div>
-                    </div>
-                    <button
-                      className="btn btn-ghost"
-                      type="button"
-                      style={{
-                        fontSize: "12px",
-                        padding: 0,
-                        minWidth: "auto",
-                        marginLeft: "2px",
-                      }}
-                      onClick={() => toggleMemberSelection(member)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
-              <select
-                className="input"
-                value={relation}
-                onChange={(e) => setRelation(e.target.value)}
-                style={{ width: "160px", fontSize: "12px" }}
-              >
-                {getRelationOptions(t).map((o: any) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <textarea
-              className="input"
-              placeholder=""
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              style={{
-                fontSize: "12px",
-                resize: "vertical",
-                marginBottom: "8px",
-              }}
-            />
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                className="btn btn-primary"
-                style={{ fontSize: "12px" }}
-                onClick={addRelationship}
-                disabled={selectedMembers.length === 0}
-              >
-                {t("common.confirm")}{" "}
-                {selectedMembers.length > 0
-                  ? `(${selectedMembers.length})`
-                  : ""}
-              </button>
-              <button
-                className="btn btn-secondary"
-                style={{ fontSize: "12px" }}
-                onClick={resetHumanDraft}
-              >
-                {t("common.cancel")}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="card" style={{ marginBottom: "12px" }}>
-        <h4 style={{ marginBottom: "12px" }}>
-          {t("agent.detail.agentRelationships")}
-        </h4>
-        <p
-          style={{
-            fontSize: "12px",
-            color: "var(--text-tertiary)",
-            marginBottom: "12px",
-          }}
-        >
-          {t("agent.detail.agentRelationships")}
-        </p>
-        {agentRelationships.length > 0 && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "6px",
-              marginBottom: "16px",
-            }}
-          >
-            {agentRelationships.map((r: any) => (
-              <div
-                key={r.id}
-                style={{
-                  borderRadius: "8px",
-                  border: `1px solid ${r.access_status && r.access_status !== "active" ? "rgba(245,158,11,0.35)" : "rgba(16,185,129,0.3)"}`,
-                  background:
-                    r.access_status && r.access_status !== "active"
-                      ? "rgba(245,158,11,0.06)"
-                      : "rgba(16,185,129,0.05)",
-                  overflow: "hidden",
-                  opacity: deletingIds.has(r.id) ? 0.4 : 1,
-                  transition: "opacity 0.2s ease",
-                  pointerEvents: deletingIds.has(r.id) ? "none" : "auto",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    padding: "10px",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "36px",
-                      height: "36px",
-                      borderRadius: "50%",
-                      background: "rgba(16,185,129,0.15)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "16px",
-                      flexShrink: 0,
-                    }}
-                  >
-                    A
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: "13px" }}>
-                      {r.target_agent?.name || "?"}{" "}
-                      <span
-                        className="badge"
-                        style={{
-                          fontSize: "10px",
-                          marginLeft: "4px",
-                          background: "rgba(16,185,129,0.15)",
-                          color: "rgb(16,185,129)",
-                        }}
-                      >
-                        {String(
-                          t(`agent.detail.${r.relation}`, r.relation_label),
-                        )}
-                      </span>
-                      {r.access_status && r.access_status !== "active" && (
-                        <span
-                          className="badge"
-                          onMouseEnter={(event) =>
-                            showRestrictedTooltip(event, r.access_status_reason)
-                          }
-                          onMouseLeave={hideRestrictedTooltip}
-                          onFocus={(event) =>
-                            showRestrictedTooltip(event, r.access_status_reason)
-                          }
-                          onBlur={hideRestrictedTooltip}
-                          tabIndex={0}
-                          style={{
-                            fontSize: "10px",
-                            marginLeft: "4px",
-                            color: "var(--warning)",
-                            background: "rgba(245,158,11,0.12)",
-                            cursor: "help",
-                          }}
-                        >
-                          {r.access_status}
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "11px",
-                        color: "var(--text-tertiary)",
-                      }}
-                    >
-                      {r.target_agent?.role_description || "Agent"}
-                      {r.access_status_reason
-                        ? ` · ${r.access_status_reason}`
-                        : ""}
-                    </div>
-                    {r.description && editingAgentId !== r.id && (
-                      <div
-                        style={{
-                          fontSize: "12px",
-                          color: "var(--text-secondary)",
-                          marginTop: "4px",
-                        }}
-                      >
-                        {r.description}
-                      </div>
-                    )}
-                  </div>
-                  {!readOnly && editingAgentId !== r.id && (
-                    <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ fontSize: "12px" }}
-                        onClick={() => startEditAgentRelationship(r)}
-                      >
-                        {t("common.edit", "Edit")}
-                      </button>
-                      <button
-                        className="btn btn-ghost"
-                        style={{
-                          color: deletingIds.has(r.id)
-                            ? "var(--text-tertiary)"
-                            : "var(--error)",
-                          fontSize: "12px",
-                        }}
-                        disabled={deletingIds.has(r.id)}
-                        onClick={() => removeAgentRelationship(r.id)}
-                      >
-                        {deletingIds.has(r.id)
-                          ? t("common.deleting", "Deleting...")
-                          : t("common.delete")}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {editingAgentId === r.id && (
-                  <div
-                    style={{
-                      padding: "0 10px 10px",
-                      borderTop: "1px solid rgba(16,185,129,0.2)",
-                      background: "var(--bg-elevated)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "8px",
-                        marginTop: "8px",
-                        marginBottom: "8px",
-                      }}
-                    >
-                      <select
-                        className="input"
-                        value={editAgentRelation}
-                        onChange={(e) => setEditAgentRelation(e.target.value)}
-                        style={{ width: "140px", fontSize: "12px" }}
-                      >
-                        {getAgentRelationOptions(t).map((o: any) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <textarea
-                      className="input"
-                      value={editAgentDescription}
-                      onChange={(e) => setEditAgentDescription(e.target.value)}
-                      rows={2}
-                      style={{
-                        fontSize: "12px",
-                        resize: "vertical",
-                        marginBottom: "8px",
-                        width: "100%",
-                      }}
-                      placeholder={t(
-                        "agent.detail.descriptionPlaceholder",
-                        "Description...",
-                      )}
-                    />
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      <button
-                        className="btn btn-primary"
-                        style={{ fontSize: "12px" }}
-                        onClick={() => saveEditAgentRelationship(r.id)}
-                      >
-                        {t("common.save", "Save")}
-                      </button>
-                      <button
-                        className="btn btn-secondary"
-                        style={{ fontSize: "12px" }}
-                        onClick={() => setEditingAgentId(null)}
-                      >
-                        {t("common.cancel")}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        {!readOnly && !showAgentForm && (
-          <button
-            className="btn btn-secondary"
-            type="button"
-            onClick={() => setShowAgentForm(true)}
-          >
-            {t("agent.detail.addRelationship", "Add Relationship")}
-          </button>
-        )}
-        {!readOnly && showAgentForm && (
-          <div
-            style={{
-              border: "1px solid rgba(16,185,129,0.3)",
-              borderRadius: "8px",
-              padding: "12px",
-              background: "var(--bg-elevated)",
-            }}
-            onMouseDownCapture={(e) => {
-              const target = e.target as Node;
-              if (
-                agentSearchRef.current &&
-                !agentSearchRef.current.contains(target)
-              ) {
-                setShowAgentDropdown(false);
-              }
-            }}
-          >
-            <div
-              ref={agentSearchRef}
-              style={{ position: "relative", marginBottom: "8px" }}
-            >
-              <input
-                className="input"
-                placeholder={t(
-                  "agent.detail.searchAgents",
-                  "搜索可见数字员工...",
-                )}
-                value={agentSearch}
-                onChange={(e) => {
-                  setAgentSearch(e.target.value);
-                  setShowAgentDropdown(true);
-                }}
-                onFocus={() => {
-                  setShowAgentDropdown(true);
-                  if (!agentSearch.trim() && agentSearchResults.length === 0) {
-                    loadAgentCandidates();
-                  }
-                }}
-                style={{ fontSize: "13px" }}
-              />
-              {showAgentDropdown && visibleAgentResults.length > 0 && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 0,
-                    right: 0,
-                    background: "var(--bg-primary)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "6px",
-                    marginTop: "4px",
-                    maxHeight: "200px",
-                    overflowY: "auto",
-                    zIndex: 10,
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                  }}
-                >
-                  {visibleAgentResults.map((agent: any) => {
-                    const checked = selectedAgentIds.has(agent.id);
-                    return (
-                      <div
-                        key={agent.id}
-                        style={{
-                          padding: "8px 12px",
-                          cursor: "pointer",
-                          fontSize: "13px",
-                          borderBottom: "1px solid var(--border-subtle)",
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: "8px",
-                        }}
-                        onClick={() => toggleAgentSelection(agent)}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.background =
-                            "var(--bg-elevated)")
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.background = "transparent")
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          readOnly
-                          style={{ marginTop: "2px" }}
-                        />
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontWeight: 500 }}>{agent.name}</div>
-                          <div
-                            style={{
-                              fontSize: "11px",
-                              color: "var(--text-tertiary)",
-                            }}
-                          >
-                            {agent.role_description || "Agent"}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            {showAgentDropdown &&
-              agentSearch &&
-              visibleAgentResults.length === 0 && (
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: "var(--text-tertiary)",
-                    marginBottom: "8px",
-                  }}
-                >
-                  {t("agent.detail.noSearchResults", "No available results")}
-                </div>
-              )}
-            {selectedAgents.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                  marginBottom: "10px",
-                }}
-              >
-                {selectedAgents.map((agent: any) => (
-                  <div
-                    key={agent.id}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      border: "1px solid rgba(16,185,129,0.24)",
-                      borderRadius: "10px",
-                      padding: "8px 10px",
-                      background: "var(--bg-primary)",
-                      fontSize: "12px",
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: "24px",
-                        height: "24px",
-                        borderRadius: "50%",
-                        background: "rgba(16,185,129,0.12)",
-                        color: "rgb(16,185,129)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 700,
-                        fontSize: "11px",
-                        flexShrink: 0,
-                      }}
-                    >
-                      {agent.name?.[0] || "A"}
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600 }}>{agent.name}</div>
-                      <div
-                        style={{
-                          color: "var(--text-tertiary)",
-                          fontSize: "11px",
-                        }}
-                      >
-                        {agent.role_description || "Agent"}
-                      </div>
-                    </div>
-                    <button
-                      className="btn btn-ghost"
-                      type="button"
-                      style={{
-                        fontSize: "12px",
-                        padding: 0,
-                        minWidth: "auto",
-                        marginLeft: "2px",
-                      }}
-                      onClick={() => toggleAgentSelection(agent)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
-              <select
-                className="input"
-                value={agentRelation}
-                onChange={(e) => setAgentRelation(e.target.value)}
-                style={{ width: "160px", flexShrink: 0, fontSize: "12px" }}
-              >
-                {getAgentRelationOptions(t).map((o: any) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <textarea
-              className="input"
-              placeholder=""
-              value={agentDescription}
-              onChange={(e) => setAgentDescription(e.target.value)}
-              rows={2}
-              style={{
-                fontSize: "12px",
-                resize: "vertical",
-                marginBottom: "8px",
-              }}
-            />
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                className="btn btn-primary"
-                style={{ fontSize: "12px" }}
-                onClick={addAgentRelationship}
-                disabled={selectedAgents.length === 0}
-              >
-                {t("common.confirm")}{" "}
-                {selectedAgents.length > 0 ? `(${selectedAgents.length})` : ""}
-              </button>
-              <button
-                className="btn btn-secondary"
-                style={{ fontSize: "12px" }}
-                onClick={resetAgentDraft}
-              >
-                {t("common.cancel")}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function AgentDetailPage() {
   const { t, i18n } = useTranslation();
   const tsLocale = i18n.language?.startsWith("zh") ? "zh-CN" : "en-US";
@@ -3838,14 +2686,20 @@ export default function AgentDetailPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const { activeTab, isChatRoute, isSettingsRoute, setActiveTab } =
-    useAgentDetailRoute({ agentId: id });
+  const { activeTab, isSettingsRoute, setActiveTab } = useAgentDetailRoute({
+    agentId: id,
+  });
 
-  const { data: agent, isLoading } = useQuery({
+  const { data: agent, isLoading } = useQuery<AgentDetailData>({
     queryKey: ["agent", id],
     queryFn: () => agentApi.get(id!),
     enabled: !!id,
   });
+  const [statusNow, setStatusNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setStatusNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   // Tenant default model — used to render the "默认" tag and as a visual
   // fallback when an agent has no explicit primary model.
@@ -3862,12 +2716,7 @@ export default function AgentDetailPage() {
   // access keep the previous behavior: picking here also updates the saved
   // agent default.
   const [overrideModelId, setOverrideModelId] = useState<string | null>(null);
-  useEffect(() => {
-    if (agent?.primary_model_id && agent.primary_model_id !== overrideModelId) {
-      setOverrideModelId(agent.primary_model_id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent?.primary_model_id]);
+  const selectedModelId = overrideModelId ?? agent?.primary_model_id ?? null;
 
   const handleModelChange = useCallback((newModelId: string | null) => {
     setOverrideModelId(newModelId);
@@ -3883,7 +2732,9 @@ export default function AgentDetailPage() {
   const awareDataActive = activeTab === "aware" || awarePanelVisible;
 
   // ── Aware tab data: triggers ──
-  const { data: awareTriggers = [], refetch: refetchTriggers } = useQuery({
+  const { data: awareTriggers = [], refetch: refetchTriggers } = useQuery<
+    TriggerData[]
+  >({
     queryKey: ["triggers", id],
     queryFn: () => triggerApi.list(id!),
     enabled: !!id && awareDataActive,
@@ -3898,15 +2749,8 @@ export default function AgentDetailPage() {
     refetchInterval: awareDataActive ? 5000 : false,
   });
 
-  // ── Aware tab data: task_history.md ──
-  const { data: taskHistoryFile } = useQuery({
-    queryKey: ["file", id, "task_history.md"],
-    queryFn: () => fileApi.read(id!, "task_history.md").catch(() => null),
-    enabled: !!id && awareDataActive,
-  });
-
   // ── Aware tab data: reflection sessions (trigger monologues) ──
-  const { data: reflectionSessions = [] } = useQuery({
+  const { data: reflectionSessions = [] } = useQuery<ChatSession[]>({
     queryKey: ["reflection-sessions", id],
     queryFn: async () => {
       const tkn = localStorage.getItem("token");
@@ -3914,8 +2758,14 @@ export default function AgentDetailPage() {
         headers: { Authorization: `Bearer ${tkn}` },
       });
       if (!res.ok) return [];
-      const all = await res.json();
-      return all.filter((s: any) => s.source_channel === "trigger");
+      const all: unknown = await res.json();
+      if (!Array.isArray(all)) return [];
+      return all
+        .map(chatSessionFromUnknown)
+        .filter(
+          (session): session is ChatSession =>
+            session !== null && session.source_channel === "trigger",
+        );
     },
     enabled: !!id && awareDataActive,
     refetchInterval: awareDataActive ? 10000 : false,
@@ -3929,11 +2779,10 @@ export default function AgentDetailPage() {
     null,
   );
   const [reflectionMessages, setReflectionMessages] = useState<
-    Record<string, any[]>
+    Record<string, SessionMessage[]>
   >({});
   const [showAllFocus, setShowAllFocus] = useState(false);
   const [showCompletedFocus, setShowCompletedFocus] = useState(false);
-  const [showAllReflections, setShowAllReflections] = useState(false);
   // Sidebar Focus group expand states
   const [showAllSideActive, setShowAllSideActive] = useState(false);
   const [showAllSideSystem, setShowAllSideSystem] = useState(false);
@@ -3969,17 +2818,22 @@ export default function AgentDetailPage() {
         },
       );
       if (res.ok) {
-        const data = await res.json();
-        setReflectionMessages((prev) => ({ ...prev, [sessionId]: data }));
+        const data: unknown = await res.json();
+        const messages = Array.isArray(data)
+          ? data
+              .map(sessionMessageFromUnknown)
+              .filter((message): message is SessionMessage => message !== null)
+          : [];
+        setReflectionMessages((prev) => ({ ...prev, [sessionId]: messages }));
       }
     } catch {
       // Reflection details are informational; keep the list usable if loading fails.
     }
   };
 
-  const [workspacePath, setWorkspacePath] = useState("workspace");
+  const [workspacePath] = useState("workspace");
 
-  const { data: activityLogs = [] } = useQuery({
+  const { data: activityLogs = [] } = useQuery<ActivityLog[]>({
     queryKey: ["activity", id],
     queryFn: () => activityApi.list(id!, 100),
     enabled: !!id && (activeTab === "activityLog" || activeTab === "status"),
@@ -3988,13 +2842,19 @@ export default function AgentDetailPage() {
 
   // Chat history
   // ── Session state (replaces old conversations query) ──────────────────
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [allSessions, setAllSessions] = useState<any[]>([]);
-  const [activeSession, setActiveSession] = useState<any | null>(null);
-  const [chatScope, setChatScope] = useState<"mine" | "all">("mine");
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [allSessions, setAllSessions] = useState<ChatSession[]>([]);
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  const [requestedChatScope, setChatScope] = useState<"mine" | "all">("mine");
+  const [isNearBottom, setIsNearBottom] = useMutableValue(true);
+  const [isFirstLoad, setIsFirstLoad] = useMutableValue(true);
+  const [pendingLiveInitialScroll, setPendingLiveInitialScroll] =
+    useMutableValue(false);
+  const [userPinnedAwayFromBottom, setUserPinnedAwayFromBottom] =
+    useMutableValue(false);
   const [scopeDropdownOpen, setScopeDropdownOpen] = useState(false);
   const scopeDropdownRef = useRef<HTMLDivElement>(null);
-  const [historyMsgs, setHistoryMsgs] = useState<any[]>([]);
+  const [historyMsgs, setHistoryMsgs] = useState<ChatMsg[]>([]);
   const [historyOldestTimestamp, setHistoryOldestTimestamp] = useState<
     string | null
   >(null);
@@ -4015,14 +2875,15 @@ export default function AgentDetailPage() {
   const currentUser = useAuthStore((s) => s.user);
   const isAgentOwner =
     currentUser?.id != null &&
-    (agent as any)?.creator_id != null &&
-    String((agent as any).creator_id) === String(currentUser.id);
+    agent?.creator_id != null &&
+    String(agent.creator_id) === String(currentUser.id);
   /** Chat sidebar: who may list all sessions & read others' threads (matches backend scope=all). */
   const canViewAllAgentChatSessions =
     currentUser?.role === "platform_admin" ||
     currentUser?.role === "org_admin" ||
     currentUser?.role === "agent_admin" ||
     isAgentOwner;
+  const chatScope = canViewAllAgentChatSessions ? requestedChatScope : "mine";
   type SessionRuntimeKey = string;
   const wsMapRef = useRef<Record<SessionRuntimeKey, WebSocket>>({});
   const reconnectTimerRef = useRef<
@@ -4080,13 +2941,18 @@ export default function AgentDetailPage() {
         { headers: { Authorization: `Bearer ${tkn}` } },
       );
       if (!response.ok) return;
-      const messages = await response.json();
+      const payload: unknown = await response.json();
+      const messages = Array.isArray(payload)
+        ? payload
+            .map(sessionMessageFromUnknown)
+            .filter((message): message is SessionMessage => message !== null)
+        : [];
       if (
         currentAgentIdRef.current !== agentId ||
         activeSessionIdRef.current !== sessionId
       )
         return;
-      const parsed = messages.map((message: any) =>
+      const parsed = messages.map((message) =>
         parseChatMsg({
           role: message.role,
           content: message.content || "",
@@ -4101,11 +2967,16 @@ export default function AgentDetailPage() {
           ...(message.thinking && { thinking: message.thinking }),
           ...(message.created_at && { timestamp: message.created_at }),
           ...(message.id && { id: message.id }),
-          ...(message.runtime_error && {
-            runtimeError: normalizeRuntimeError({
-              error: message.runtime_error,
-            }),
+          ...(message.sender_name && { sender_name: message.sender_name }),
+          ...(message.participant_id && {
+            participant_id: message.participant_id,
           }),
+          ...(message.runtime_error !== undefined &&
+            message.runtime_error !== null && {
+              runtimeError: normalizeRuntimeError({
+                error: message.runtime_error,
+              }),
+            }),
         }),
       );
       const runtimeKey = buildSessionRuntimeKey(agentId, sessionId);
@@ -4126,7 +2997,7 @@ export default function AgentDetailPage() {
       // (e.g. a burst of tool_call rows), so older messages would never load.
       setChatOldestTimestamp(
         messages.length > 0
-          ? (messages[0].cursor ?? messages[0].created_at)
+          ? (messages[0].cursor ?? messages[0].created_at ?? null)
           : null,
       );
       setChatHistoryHasMore(messages.length >= HISTORY_PAGE_SIZE);
@@ -4252,22 +3123,21 @@ export default function AgentDetailPage() {
   };
 
   /** Normalize IDs — API/JSON may use number vs string; loose equality was breaking "own session" detection. */
-  const sessionUserIdStr = (s: any) =>
+  const sessionUserIdStr = (s: ChatSession | null | undefined) =>
     s?.user_id == null ? "" : String(s.user_id);
-  const viewerUserIdStr = () =>
-    currentUser?.id == null ? "" : String(currentUser.id);
+  const viewerUserIdStr = currentUser?.id == null ? "" : String(currentUser.id);
   /** Ensure session shape from POST/list so P2P "mine" is never mistaken for read-only or agent thread. */
-  const normalizeChatSession = (sess: any) => {
-    if (!sess || typeof sess !== "object") return sess;
-    const vu = viewerUserIdStr();
+  const normalizeChatSession = (value: unknown): ChatSession | null => {
+    const sess = chatSessionFromUnknown(value);
+    if (!sess) return null;
+    const vu = viewerUserIdStr;
     const rawUid =
       sess.user_id != null && String(sess.user_id).trim() !== ""
         ? String(sess.user_id)
         : vu;
     return {
       ...sess,
-      id: String(sess.id),
-      agent_id: sess.agent_id != null ? String(sess.agent_id) : sess.agent_id,
+      agent_id: sess.agent_id != null ? String(sess.agent_id) : undefined,
       user_id: rawUid,
       unread_count: Number(sess.unread_count || 0),
       is_primary: Boolean(sess.is_primary),
@@ -4288,22 +3158,22 @@ export default function AgentDetailPage() {
     if (!sessionId) return;
     const sid = String(sessionId);
     setSessions((prev) =>
-      prev.map((item: any) =>
+      prev.map((item) =>
         String(item.id) === sid ? { ...item, unread_count: 0 } : item,
       ),
     );
     setAllSessions((prev) =>
-      prev.map((item: any) =>
+      prev.map((item) =>
         String(item.id) === sid ? { ...item, unread_count: 0 } : item,
       ),
     );
-    setActiveSession((prev: any) =>
+    setActiveSession((prev) =>
       prev && String(prev.id) === sid ? { ...prev, unread_count: 0 } : prev,
     );
   };
 
   const isWritableSession = (
-    sess: any,
+    sess: ChatSession | null | undefined,
     scopeOverride: "mine" | "all" = chatScope,
   ) => {
     if (!sess) return false;
@@ -4313,26 +3183,24 @@ export default function AgentDetailPage() {
     if (sess.is_group) return false;
     if (canViewAllAgentChatSessions && scopeOverride === "all") return false;
     const su = sessionUserIdStr(sess);
-    const vu = viewerUserIdStr();
+    const vu = viewerUserIdStr;
     if (su && vu && su !== vu) return false;
     return true;
   };
+  const selectedSessionWritable = activeSession
+    ? isWritableSession(activeSession)
+    : false;
 
   const isViewingOtherUsersSessions =
     canViewAllAgentChatSessions && chatScope === "all";
 
   /** Sessions in scope=all that belong on the admin-facing "Other sessions" surface. */
   const otherUsersSessions = useMemo(() => {
-    const vu = viewerUserIdStr();
-    return allSessions.filter((s: any) => belongsInOtherSessions(s, vu));
-  }, [allSessions, currentUser?.id]);
+    const vu = viewerUserIdStr;
+    return allSessions.filter((session) => belongsInOtherSessions(session, vu));
+  }, [allSessions, viewerUserIdStr]);
 
   const othersListForPicker = otherUsersSessions;
-
-  useEffect(() => {
-    if (!canViewAllAgentChatSessions && chatScope === "all")
-      setChatScope("mine");
-  }, [canViewAllAgentChatSessions, chatScope]);
 
   useEffect(() => {
     if (!scopeDropdownOpen) return;
@@ -4363,28 +3231,26 @@ export default function AgentDetailPage() {
 
   const onAdminTabMine = () => {
     setChatScope("mine");
-    if (activeSession && sessionUserIdStr(activeSession) !== viewerUserIdStr())
+    if (activeSession && sessionUserIdStr(activeSession) !== viewerUserIdStr)
       clearChatSelection();
   };
 
   const onAdminTabOthers = () => {
     setChatScope("all");
     fetchAllSessions();
-    if (activeSession && sessionUserIdStr(activeSession) === viewerUserIdStr())
+    if (activeSession && sessionUserIdStr(activeSession) === viewerUserIdStr)
       clearChatSelection();
   };
   const syncActiveSocketState = (
-    sess: any | null = activeSession,
+    sess: ChatSession | null = activeSession,
     agentId: string | undefined = id,
   ) => {
     if (!sess || !agentId) {
-      wsRef.current = null;
       setWsConnected(false);
       return;
     }
     const key = buildSessionRuntimeKey(agentId, sess.id);
     const ws = wsMapRef.current[key];
-    wsRef.current = ws ?? null;
     setWsConnected(!!ws && ws.readyState === WebSocket.OPEN);
   };
 
@@ -4401,9 +3267,12 @@ export default function AgentDetailPage() {
         headers: { Authorization: `Bearer ${tkn}` },
       });
       if (res.ok) {
-        const data = (await res.json()).map((row: any) =>
-          normalizeChatSession(row),
-        );
+        const payload: unknown = await res.json();
+        const data = Array.isArray(payload)
+          ? payload
+              .map(normalizeChatSession)
+              .filter((session): session is ChatSession => session !== null)
+          : [];
         if (currentAgentIdRef.current === agentId) setSessions(data);
         if (!silent && currentAgentIdRef.current === agentId)
           setSessionsLoading(false);
@@ -4428,12 +3297,17 @@ export default function AgentDetailPage() {
       if (!currentAgentIdRef.current || currentAgentIdRef.current !== id)
         return;
       if (res.ok) {
-        const all = (await res.json())
-          .filter(
-            (s: any) =>
-              String(s.source_channel || "direct").toLowerCase() !== "trigger",
-          )
-          .map((row: any) => normalizeChatSession(row));
+        const payload: unknown = await res.json();
+        const all = Array.isArray(payload)
+          ? payload
+              .map(normalizeChatSession)
+              .filter(
+                (session): session is ChatSession =>
+                  session !== null &&
+                  String(session.source_channel || "direct").toLowerCase() !==
+                    "trigger",
+              )
+          : [];
         setAllSessions(all);
       } else {
         setAllSessions([]);
@@ -4451,10 +3325,11 @@ export default function AgentDetailPage() {
   };
 
   const selectSession = async (
-    rawSess: any,
+    rawSess: unknown,
     scopeOverride: "mine" | "all" = chatScope,
   ) => {
     const sess = normalizeChatSession(rawSess);
+    if (!sess) return;
     const targetAgentId = id;
     if (!targetAgentId) return;
     const runtimeKey = buildSessionRuntimeKey(targetAgentId, String(sess.id));
@@ -4465,10 +3340,10 @@ export default function AgentDetailPage() {
     const cachedActiveRun = sessionActiveRunRef.current[runtimeKey] || null;
     const writable = isWritableSession(sess, scopeOverride);
     activeSessionIdRef.current = sess.id;
-    isFirstLoad.current = true;
-    isNearBottom.current = true;
-    userPinnedAwayFromBottomRef.current = false;
-    pendingLiveInitialScrollRef.current = writable;
+    setIsFirstLoad(true);
+    setIsNearBottom(true);
+    setUserPinnedAwayFromBottom(false);
+    setPendingLiveInitialScroll(writable);
     pendingHistoryInitialScrollRef.current = !writable;
     setChatMessages(sessionToolMessagesRef.current[runtimeKey] || []);
     setChatOldestTimestamp(null);
@@ -4486,7 +3361,6 @@ export default function AgentDetailPage() {
     setActiveSession(sess);
     setAgentExpired(false);
     syncActiveSocketState(sess, targetAgentId);
-    if (writable) scheduleComposerFocus();
     if (writable) void fetchSessionRuntimeState(targetAgentId, String(sess.id));
 
     // Abort any pending message load and increment sequence
@@ -4504,12 +3378,17 @@ export default function AgentDetailPage() {
         },
       );
       if (!res.ok) return;
-      const msgs = await res.json();
+      const payload: unknown = await res.json();
+      const msgs = Array.isArray(payload)
+        ? payload
+            .map(sessionMessageFromUnknown)
+            .filter((message): message is SessionMessage => message !== null)
+        : [];
       if (controller.signal.aborted || loadSeq !== sessionLoadSeqRef.current)
         return;
       if (currentAgentIdRef.current !== targetAgentId) return;
       if (activeSessionIdRef.current !== sess.id) return;
-      const preParsed = msgs.map((m: any) =>
+      const preParsed = msgs.map((m) =>
         parseChatMsg({
           role: m.role,
           content: m.content || "",
@@ -4524,16 +3403,19 @@ export default function AgentDetailPage() {
           ...(m.thinking && { thinking: m.thinking }),
           ...(m.created_at && { timestamp: m.created_at }),
           ...(m.id && { id: m.id }),
-          ...(m.runtime_error && {
-            runtimeError: normalizeRuntimeError({ error: m.runtime_error }),
-          }),
+          ...(m.sender_name && { sender_name: m.sender_name }),
+          ...(m.participant_id && { participant_id: m.participant_id }),
+          ...(m.runtime_error !== undefined &&
+            m.runtime_error !== null && {
+              runtimeError: normalizeRuntimeError({ error: m.runtime_error }),
+            }),
         }),
       );
 
       // Set the oldest message cursor for pagination. Use the backend's compound
       // `<created_at>|<id>` cursor so a batch of equal-timestamp messages can be paged past.
       const oldestTimestamp =
-        msgs.length > 0 ? (msgs[0].cursor ?? msgs[0].created_at) : null;
+        msgs.length > 0 ? (msgs[0].cursor ?? msgs[0].created_at ?? null) : null;
 
       if (writable) {
         setChatMessages(
@@ -4574,6 +3456,7 @@ export default function AgentDetailPage() {
       });
       if (res.ok) {
         const newSess = normalizeChatSession(await res.json());
+        if (!newSess) throw new Error("Invalid session response");
         setChatScope("mine");
         setSessions((prev) => [newSess, ...prev]);
         setIsStreaming(false);
@@ -4645,7 +3528,7 @@ export default function AgentDetailPage() {
   const [expirySaving, setExpirySaving] = useState(false);
 
   const openExpiryModal = () => {
-    const cur = (agent as any)?.expires_at;
+    const cur = agent?.expires_at;
     // Convert ISO to datetime-local format (YYYY-MM-DDTHH:MM)
     setExpiryValue(cur ? new Date(cur).toISOString().slice(0, 16) : "");
     setExpiryQuickHours(null);
@@ -4653,9 +3536,7 @@ export default function AgentDetailPage() {
   };
 
   const addHours = (h: number) => {
-    const base = (agent as any)?.expires_at
-      ? new Date((agent as any).expires_at)
-      : new Date();
+    const base = agent?.expires_at ? new Date(agent.expires_at) : new Date();
     const next = new Date(base.getTime() + h * 3600_000);
     setExpiryValue(next.toISOString().slice(0, 16));
     setExpiryQuickHours(h);
@@ -4689,26 +3570,6 @@ export default function AgentDetailPage() {
     }
     setExpirySaving(false);
   };
-  interface ChatMsg {
-    id?: string;
-    role: "user" | "assistant" | "tool_call";
-    content: string;
-    fileName?: string;
-    toolName?: string;
-    toolCallId?: string;
-    toolArgs?: any;
-    toolStatus?: "running" | "done";
-    toolResult?: string;
-    toolThinking?: string;
-    thinking?: string;
-    imageUrl?: string;
-    timestamp?: string;
-    runtimeError?: ReturnType<typeof normalizeRuntimeError>;
-    _streaming?: boolean;
-    _streamRunId?: string;
-    _streamAttemptId?: string;
-    _streamSequence?: number;
-  }
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
   const upsertToolCallMessage = (toolMsg: ChatMsg) => {
     setChatMessages((previous) => mergeSessionToolMessage(previous, toolMsg));
@@ -4717,14 +3578,16 @@ export default function AgentDetailPage() {
   const [chatInfoMsg, setChatInfoMsg] = useState<string | null>(null);
   const chatInfoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Stable expanded-state map for tool groups — keyed by groupStartIndex.
-  // Stored in a ref so it survives parent re-renders without causing extra renders.
-  const toolGroupExpandedRef = useRef<Map<number, boolean>>(new Map());
-  const [toolGroupExpandedVersion, setToolGroupExpandedVersion] = useState(0);
+  const [toolGroupExpanded, setToolGroupExpanded] = useState<
+    Map<number, boolean>
+  >(() => new Map());
   const toggleToolGroup = (key: number) => {
-    const m = toolGroupExpandedRef.current;
-    const nextExpanded = !m.get(key);
-    m.set(key, nextExpanded);
-    setToolGroupExpandedVersion((v) => v + 1); // trigger re-render
+    const nextExpanded = !toolGroupExpanded.get(key);
+    setToolGroupExpanded((current) => {
+      const next = new Map(current);
+      next.set(key, nextExpanded);
+      return next;
+    });
     if (nextExpanded) {
       scheduleLiveScrollToBottom();
     }
@@ -4798,11 +3661,9 @@ export default function AgentDetailPage() {
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileRef[]>([]);
   const dismissedWorkspaceRefPath = useRef<string | null>(null);
   const pendingChatSendRef = useRef<PendingChatMessage | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const chatHistorySentinelRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const chatInputAreaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -4890,44 +3751,52 @@ export default function AgentDetailPage() {
         primary_model_id: agent.primary_model_id || "",
         fallback_model_id: agent.fallback_model_id || "",
         context_window_size: agent.context_window_size ?? 100,
-        max_tool_rounds: (agent as any).max_tool_rounds ?? 50,
+        max_tool_rounds: agent.max_tool_rounds ?? 50,
         max_tokens_per_day: agent.max_tokens_per_day || "",
         max_tokens_per_month: agent.max_tokens_per_month || "",
-        max_triggers: (agent as any).max_triggers ?? 20,
-        min_poll_interval_min: (agent as any).min_poll_interval_min ?? 5,
-        webhook_rate_limit: (agent as any).webhook_rate_limit ?? 5,
+        max_triggers: agent.max_triggers ?? 20,
+        min_poll_interval_min: agent.min_poll_interval_min ?? 5,
+        webhook_rate_limit: agent.webhook_rate_limit ?? 5,
       });
       settingsInitRef.current = true;
     }
   }, [agent]);
 
   // Welcome message editor state (must be at top level -- not inside IIFE)
-  const [wmDraft, setWmDraft] = useState("");
+  const [wmDraftOverride, setWmDraft] = useState<string | null>(null);
+  const wmDraft = wmDraftOverride ?? agent?.welcome_message ?? "";
+  const updateWmDraft = useCallback<
+    React.Dispatch<React.SetStateAction<string>>
+  >(
+    (next) => {
+      setWmDraft((current) => {
+        const currentValue = current ?? agent?.welcome_message ?? "";
+        return typeof next === "function" ? next(currentValue) : next;
+      });
+    },
+    [agent?.welcome_message],
+  );
   const [wmSaved, setWmSaved] = useState(false);
-  useEffect(() => {
-    setWmDraft((agent as any)?.welcome_message || "");
-  }, [(agent as any)?.welcome_message]);
 
   const hasSettingsChanges =
     settingsForm.primary_model_id !== (agent?.primary_model_id || "") ||
     settingsForm.fallback_model_id !== (agent?.fallback_model_id || "") ||
     settingsForm.context_window_size !== (agent?.context_window_size ?? 100) ||
-    settingsForm.max_tool_rounds !== ((agent as any)?.max_tool_rounds ?? 50) ||
+    settingsForm.max_tool_rounds !== (agent?.max_tool_rounds ?? 50) ||
     String(settingsForm.max_tokens_per_day) !==
       String(agent?.max_tokens_per_day || "") ||
     String(settingsForm.max_tokens_per_month) !==
       String(agent?.max_tokens_per_month || "") ||
-    settingsForm.max_triggers !== ((agent as any)?.max_triggers ?? 20) ||
+    settingsForm.max_triggers !== (agent?.max_triggers ?? 20) ||
     settingsForm.min_poll_interval_min !==
-      ((agent as any)?.min_poll_interval_min ?? 5) ||
-    settingsForm.webhook_rate_limit !==
-      ((agent as any)?.webhook_rate_limit ?? 5);
+      (agent?.min_poll_interval_min ?? 5) ||
+    settingsForm.webhook_rate_limit !== (agent?.webhook_rate_limit ?? 5);
 
   const handleSaveSettings = async () => {
     setSettingsSaving(true);
     setSettingsError("");
     try {
-      const result: any = await agentApi.update(id!, {
+      const updatePayload: AgentDetailUpdatePayload = {
         primary_model_id: settingsForm.primary_model_id || null,
         fallback_model_id: settingsForm.fallback_model_id || null,
         context_window_size: settingsForm.context_window_size,
@@ -4941,7 +3810,11 @@ export default function AgentDetailPage() {
         max_triggers: settingsForm.max_triggers,
         min_poll_interval_min: settingsForm.min_poll_interval_min,
         webhook_rate_limit: settingsForm.webhook_rate_limit,
-      } as any);
+      };
+      const result = await fetchAuth<AgentUpdateResult>(`/agents/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(updatePayload),
+      });
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
       settingsInitRef.current = false;
       const clamped = result?._clamped_fields;
@@ -4958,7 +3831,7 @@ export default function AgentDetailPage() {
               webhook_rate_limit: "Webhook Rate Limit",
               heartbeat_interval_minutes: "Heartbeat Interval",
             };
-        const msgs = clamped.map((c: any) => {
+        const msgs = clamped.map((c) => {
           const name = fieldNames[c.field] || c.field;
           return isCh
             ? `${name}: ${c.requested} -> ${c.applied} (公司策略限制)`
@@ -4982,7 +3855,13 @@ export default function AgentDetailPage() {
 
   const handleSaveWelcomeMessage = async () => {
     try {
-      await agentApi.update(id!, { welcome_message: wmDraft } as any);
+      const updatePayload: AgentDetailUpdatePayload = {
+        welcome_message: wmDraft,
+      };
+      await fetchAuth<AgentUpdateResult>(`/agents/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(updatePayload),
+      });
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
       setWmSaved(true);
       setTimeout(() => setWmSaved(false), 2000);
@@ -4999,7 +3878,7 @@ export default function AgentDetailPage() {
       settingsInitRef.current = false;
       setSettingsSaved(false);
       setSettingsError("");
-      setWmDraft("");
+      setWmDraft(null);
       setWmSaved(false);
       // Invalidate all queries for the old agent to force fresh data
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
@@ -5007,64 +3886,66 @@ export default function AgentDetailPage() {
         window.history.replaceState(null, "", `#${activeTab}`);
       }
     }
-  }, [id]);
+  }, [activeTab, id, location.pathname, queryClient]);
 
   // Load chat history + connect websocket when chat tab is active
-  const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
-  const parseChatMsg = (msg: ChatMsg): ChatMsg => {
-    if (msg.role !== "user") return msg;
-    let parsed = { ...msg };
-    // Standard web chat format: [file:name.pdf]\ncontent
-    const newFmt = msg.content.match(/^\[file:([^\]]+)\]\n?/);
-    if (newFmt) {
-      parsed = {
-        ...msg,
-        fileName: newFmt[1],
-        content: msg.content.slice(newFmt[0].length).trim(),
-      };
-    }
-    // Feishu/Slack channel format: [文件已上传: workspace/uploads/name]
-    const chanFmt =
-      !newFmt &&
-      msg.content.match(
-        /^\[\u6587\u4ef6\u5df2\u4e0a\u4f20: (?:workspace\/uploads\/)?([^\]\n]+)\]/,
-      );
-    if (chanFmt) {
-      const raw = chanFmt[1];
-      const fileName = raw.split("/").pop() || raw;
-      parsed = {
-        ...msg,
-        fileName,
-        content: msg.content.slice(chanFmt[0].length).trim(),
-      };
-    }
-    // Old format: [File: name.pdf]\nFile location:...\nQuestion: user_msg
-    const oldFmt =
-      !newFmt && !chanFmt && msg.content.match(/^\[File: ([^\]]+)\]/);
-    if (oldFmt) {
-      const fileName = oldFmt[1];
-      const qMatch = msg.content.match(/\nQuestion: ([\s\S]+)$/);
-      parsed = { ...msg, fileName, content: qMatch ? qMatch[1].trim() : "" };
-    }
-    // A multi-image message stores all names in the legacy file_name field.
-    // Never turn that comma-joined label into one invalid download path;
-    // ChatMessageItem renders each persisted image_data marker instead.
-    const inlineImageMarkerCount = (
-      parsed.content.match(/\[image_data:data:image\//g) || []
-    ).length;
-    if (
-      parsed.fileName &&
-      !parsed.imageUrl &&
-      inlineImageMarkerCount <= 1 &&
-      id
-    ) {
-      const ext = parsed.fileName.split(".").pop()?.toLowerCase() || "";
-      if (IMAGE_EXTS.includes(ext)) {
-        parsed.imageUrl = `/api/agents/${id}/files/download?path=workspace/uploads/${encodeURIComponent(parsed.fileName)}&token=${token}`;
+  const parseChatMsg = useCallback(
+    (msg: ChatMsg): ChatMsg => {
+      if (msg.role !== "user") return msg;
+      let parsed = { ...msg };
+      // Standard web chat format: [file:name.pdf]\ncontent
+      const newFmt = msg.content.match(/^\[file:([^\]]+)\]\n?/);
+      if (newFmt) {
+        parsed = {
+          ...msg,
+          fileName: newFmt[1],
+          content: msg.content.slice(newFmt[0].length).trim(),
+        };
       }
-    }
-    return parsed;
-  };
+      // Feishu/Slack channel format: [文件已上传: workspace/uploads/name]
+      const chanFmt =
+        !newFmt &&
+        msg.content.match(
+          /^\[\u6587\u4ef6\u5df2\u4e0a\u4f20: (?:workspace\/uploads\/)?([^\]\n]+)\]/,
+        );
+      if (chanFmt) {
+        const raw = chanFmt[1];
+        const fileName = raw.split("/").pop() || raw;
+        parsed = {
+          ...msg,
+          fileName,
+          content: msg.content.slice(chanFmt[0].length).trim(),
+        };
+      }
+      // Old format: [File: name.pdf]\nFile location:...\nQuestion: user_msg
+      const oldFmt =
+        !newFmt && !chanFmt && msg.content.match(/^\[File: ([^\]]+)\]/);
+      if (oldFmt) {
+        const fileName = oldFmt[1];
+        const qMatch = msg.content.match(/\nQuestion: ([\s\S]+)$/);
+        parsed = { ...msg, fileName, content: qMatch ? qMatch[1].trim() : "" };
+      }
+      // A multi-image message stores all names in the legacy file_name field.
+      // Never turn that comma-joined label into one invalid download path;
+      // ChatMessageItem renders each persisted image_data marker instead.
+      const inlineImageMarkerCount = (
+        parsed.content.match(/\[image_data:data:image\//g) || []
+      ).length;
+      if (
+        parsed.fileName &&
+        !parsed.imageUrl &&
+        inlineImageMarkerCount <= 1 &&
+        id
+      ) {
+        const ext = parsed.fileName.split(".").pop()?.toLowerCase() || "";
+        if (IMAGE_EXTS.includes(ext)) {
+          parsed.imageUrl = `/api/agents/${id}/files/download?path=workspace/uploads/${encodeURIComponent(parsed.fileName)}&token=${token}`;
+        }
+      }
+      return parsed;
+    },
+    [id, token],
+  );
 
   useEffect(() => {
     currentAgentIdRef.current = id;
@@ -5075,53 +3956,37 @@ export default function AgentDetailPage() {
   useEffect(() => {
     sessionMsgAbortRef.current?.abort();
     activeSessionIdRef.current = null;
-    setActiveSession(null);
-    setChatMessages([]);
-    setChatOldestTimestamp(null);
-    setChatHistoryHasMore(true);
-    setChatHistoryLoadingMore(false);
-    setHistoryMsgs([]);
-    setIsStreaming(false);
-    setIsWaiting(false);
-    setActiveRun(null);
-    setMessagesLoadedRuntimeKey(null);
-    setRuntimeStateLoadedRuntimeKey(null);
-    setWsConnected(false);
-    wsRef.current = null;
-    setWorkspaceLockedPath(null);
-    setWorkspaceActivePath(null);
-    setWorkspaceActivities([]);
-    setWorkspaceLiveDraft(null);
-    setLiveState({});
-    setSidePanelTab("workspace");
-    setChatScope("mine");
-    setSessions([]);
-    setAllSessions([]);
-    setAgentExpired(false);
     settingsInitRef.current = false;
+    queueMicrotask(() => {
+      setActiveSession(null);
+      setChatMessages([]);
+      setChatOldestTimestamp(null);
+      setChatHistoryHasMore(true);
+      setChatHistoryLoadingMore(false);
+      setHistoryMsgs([]);
+      setIsStreaming(false);
+      setIsWaiting(false);
+      setActiveRun(null);
+      setMessagesLoadedRuntimeKey(null);
+      setRuntimeStateLoadedRuntimeKey(null);
+      setWsConnected(false);
+      setWorkspaceLockedPath(null);
+      setWorkspaceActivePath(null);
+      setWorkspaceActivities([]);
+      setWorkspaceLiveDraft(null);
+      setLiveState({});
+      setSidePanelTab("workspace");
+      setChatScope("mine");
+      setSessions([]);
+      setAllSessions([]);
+      setAgentExpired(false);
+    });
   }, [id]);
 
   // Switching login account or token must not leave another user's sessions/messages in memory.
   useEffect(() => {
-    setSessions([]);
-    setAllSessions([]);
-    setChatScope("mine");
     sessionMsgAbortRef.current?.abort();
     activeSessionIdRef.current = null;
-    setActiveSession(null);
-    setChatMessages([]);
-    setChatOldestTimestamp(null);
-    setChatHistoryHasMore(true);
-    setChatHistoryLoadingMore(false);
-    setHistoryMsgs([]);
-    setWsConnected(false);
-    setIsStreaming(false);
-    setIsWaiting(false);
-    setActiveRun(null);
-    setMessagesLoadedRuntimeKey(null);
-    setRuntimeStateLoadedRuntimeKey(null);
-    setSessionsLoading(false);
-    setAllSessionsLoading(false);
     Object.keys(reconnectDisabledRef.current).forEach((k) => {
       reconnectDisabledRef.current[k] = true;
     });
@@ -5133,20 +3998,43 @@ export default function AgentDetailPage() {
     sessionActiveRunRef.current = {};
     sessionToolMessagesRef.current = {};
     interruptedStreamMessagesRef.current = {};
-    wsRef.current = null;
+    queueMicrotask(() => {
+      setSessions([]);
+      setAllSessions([]);
+      setChatScope("mine");
+      setActiveSession(null);
+      setChatMessages([]);
+      setChatOldestTimestamp(null);
+      setChatHistoryHasMore(true);
+      setChatHistoryLoadingMore(false);
+      setHistoryMsgs([]);
+      setWsConnected(false);
+      setIsStreaming(false);
+      setIsWaiting(false);
+      setActiveRun(null);
+      setMessagesLoadedRuntimeKey(null);
+      setRuntimeStateLoadedRuntimeKey(null);
+      setSessionsLoading(false);
+      setAllSessionsLoading(false);
+    });
   }, [currentUser?.id, token]);
+
+  const loadInitialSessions = useEffectEvent(async (agentId: string) => {
+    const data = await fetchMySessions(false, agentId);
+    if (currentAgentIdRef.current !== agentId) return;
+    setSessionsLoading(false);
+    if (data.length > 0) await selectSession(data[0], "mine");
+  });
 
   useEffect(() => {
     if (!id || !token || activeTab !== "chat") return;
-    fetchMySessions(false, id).then((data: any) => {
-      if (currentAgentIdRef.current !== id) return;
-      setSessionsLoading(false);
-      if (data && data.length > 0) selectSession(data[0], "mine");
+    queueMicrotask(() => {
+      void loadInitialSessions(id);
     });
   }, [id, token, activeTab, currentUser?.id]);
 
   const ensureSessionSocket = (
-    sess: any,
+    sess: ChatSession,
     agentId: string,
     authToken: string,
   ) => {
@@ -5189,7 +4077,6 @@ export default function AgentDetailPage() {
         currentAgentIdRef.current === agentId &&
         activeSessionIdRef.current === sessionId
       ) {
-        wsRef.current = ws;
         setWsConnected(true);
       }
       void fetchSessionRuntimeState(agentId, sessionId).then((active) => {
@@ -5217,7 +4104,6 @@ export default function AgentDetailPage() {
         currentAgentIdRef.current === agentId &&
         activeSessionIdRef.current === sessionId;
       if (isActiveRuntime) {
-        wsRef.current = null;
         setWsConnected(false);
         setIsWaiting(false);
         setIsStreaming(false);
@@ -5389,10 +4275,10 @@ export default function AgentDetailPage() {
       if (d.type === "thinking") {
         setChatMessages((prev) => {
           const last = prev[prev.length - 1];
-          if (last && last.role === "assistant" && (last as any)._streaming) {
+          if (last && last.role === "assistant" && last._streaming) {
             return [
               ...prev.slice(0, -1),
-              { ...last, thinking: (last.thinking || "") + d.content } as any,
+              { ...last, thinking: (last.thinking || "") + d.content },
             ];
           }
           return [
@@ -5402,7 +4288,7 @@ export default function AgentDetailPage() {
               content: "",
               thinking: d.content,
               _streaming: true,
-            } as any,
+            },
           ];
         });
       } else if (d.type === "workspace_draft") {
@@ -5429,7 +4315,7 @@ export default function AgentDetailPage() {
             setLivePanelVisible(true);
             collapseSidebarsForLivePanel();
           }
-          let toolArgs: any;
+          let toolArgs: unknown;
           try {
             toolArgs = JSON.parse(d.arguments || "{}");
           } catch {
@@ -5644,7 +4530,7 @@ export default function AgentDetailPage() {
         setChatMessages((prev) => {
           const last = prev[prev.length - 1];
           const thinking =
-            last && last.role === "assistant" && (last as any)._streaming
+            last && last.role === "assistant" && last._streaming
               ? last.thinking
               : undefined;
           const runtimeError =
@@ -5936,40 +4822,45 @@ export default function AgentDetailPage() {
     }
   };
 
+  const syncSelectedSessionSocket = useEffectEvent(
+    (session: ChatSession | null, agentId: string, authToken: string) => {
+      if (!session) {
+        syncActiveSocketState(null, agentId);
+        return;
+      }
+      activeSessionIdRef.current = String(session.id);
+      if (!isWritableSession(session)) {
+        syncActiveSocketState(session, agentId);
+        return;
+      }
+      ensureSessionSocket(session, agentId, authToken);
+      syncActiveSocketState(session, agentId);
+    },
+  );
+
   useEffect(() => {
     if (!id || !token || activeTab !== "chat") return;
-    if (!activeSession) {
-      syncActiveSocketState(null, id);
-      return;
-    }
-    activeSessionIdRef.current = String(activeSession.id);
-    if (!isWritableSession(activeSession)) {
-      syncActiveSocketState(activeSession, id);
-      return;
-    }
-    ensureSessionSocket(activeSession, id, token);
-    syncActiveSocketState(activeSession, id);
-  }, [
-    id,
-    token,
-    activeTab,
-    activeSession?.id,
-    chatScope,
-    canViewAllAgentChatSessions,
-  ]);
+    syncSelectedSessionSocket(activeSession, id, token);
+  }, [id, token, activeTab, activeSession, chatScope]);
+
+  const pollSelectedSessionRuntime = useEffectEvent(
+    (agentId: string, sessionId: string) => {
+      void fetchSessionRuntimeState(agentId, sessionId);
+    },
+  );
 
   useEffect(() => {
     if (
       !id ||
       !activeSession?.id ||
       activeTab !== "chat" ||
-      !isWritableSession(activeSession) ||
+      !selectedSessionWritable ||
       !selectedSessionActiveRun
     )
       return;
     const sessionId = String(activeSession.id);
     const timer = window.setInterval(() => {
-      void fetchSessionRuntimeState(id, sessionId);
+      pollSelectedSessionRuntime(id, sessionId);
     }, 1500);
     return () => window.clearInterval(timer);
   }, [
@@ -5977,7 +4868,8 @@ export default function AgentDetailPage() {
     activeTab,
     activeSession?.id,
     selectedSessionActiveRun?.runId,
-    selectedSessionActiveRun?.status,
+    selectedSessionActiveRun,
+    selectedSessionWritable,
   ]);
 
   const handleWorkspacePathDeleted = useCallback((path: string) => {
@@ -6007,54 +4899,55 @@ export default function AgentDetailPage() {
       livePanelVisible && sidePanelTab === "workspace" && !!workspaceActivePath;
     if (!shouldAutoReference) {
       dismissedWorkspaceRefPath.current = null;
-      setAttachedFiles((prev) =>
-        prev.filter((file) => file.source !== "workspace_auto"),
-      );
+      queueMicrotask(() => {
+        setAttachedFiles((prev) =>
+          prev.filter((file) => file.source !== "workspace_auto"),
+        );
+      });
       return;
     }
     const path = workspaceActivePath!;
     if (dismissedWorkspaceRefPath.current === path) return;
-    setAttachedFiles((prev) => {
-      const withoutAuto = prev.filter(
-        (file) => file.source !== "workspace_auto",
-      );
-      return [
-        ...withoutAuto,
-        {
-          name: workspaceFileName(path),
-          text: "",
-          path,
-          source: "workspace_auto",
-        },
-      ];
+    queueMicrotask(() => {
+      setAttachedFiles((prev) => {
+        const withoutAuto = prev.filter(
+          (file) => file.source !== "workspace_auto",
+        );
+        return [
+          ...withoutAuto,
+          {
+            name: workspaceFileName(path),
+            text: "",
+            path,
+            source: "workspace_auto",
+          },
+        ];
+      });
     });
   }, [livePanelVisible, sidePanelTab, workspaceActivePath]);
 
   useEffect(() => {
+    const reconnectDisabled = reconnectDisabledRef.current;
+    const reconnectTimers = reconnectTimerRef.current;
+    const sockets = wsMapRef.current;
     return () => {
       sessionMsgAbortRef.current?.abort();
-      Object.keys(reconnectDisabledRef.current).forEach((key) => {
-        reconnectDisabledRef.current[key] = true;
+      Object.keys(reconnectDisabled).forEach((key) => {
+        reconnectDisabled[key] = true;
       });
-      Object.keys(reconnectTimerRef.current).forEach((key) =>
-        clearReconnectTimer(key),
-      );
-      Object.values(wsMapRef.current).forEach((ws) => {
+      Object.values(reconnectTimers).forEach((timer) => {
+        if (timer) clearTimeout(timer);
+      });
+      Object.values(sockets).forEach((ws) => {
         if (ws.readyState !== WebSocket.CLOSED) ws.close();
       });
-      wsMapRef.current = {};
       sessionToolMessagesRef.current = {};
-      wsRef.current = null;
     };
   }, []);
 
   // Smart scroll: only auto-scroll if user is at the bottom
-  const isNearBottom = useRef(true);
-  const isFirstLoad = useRef(true);
-  const pendingLiveInitialScrollRef = useRef(false);
   const pendingHistoryInitialScrollRef = useRef(false);
   const liveAutoFollowUntilRef = useRef(0);
-  const userPinnedAwayFromBottomRef = useRef(false);
   const liveScrollJobRef = useRef(0);
   const liveScrollTimersRef = useRef<number[]>([]);
   const chatTouchStartYRef = useRef<number | null>(null);
@@ -6099,20 +4992,20 @@ export default function AgentDetailPage() {
   }, []);
   const pinChatAwayFromBottom = useCallback(() => {
     cancelLiveAutoFollow();
-    userPinnedAwayFromBottomRef.current = true;
-    isNearBottom.current = false;
+    setUserPinnedAwayFromBottom(true);
+    setIsNearBottom(false);
     setShowScrollBtn(true);
-  }, [cancelLiveAutoFollow]);
+  }, [cancelLiveAutoFollow, setIsNearBottom, setUserPinnedAwayFromBottom]);
   const scheduleLiveScrollToBottom = useCallback(() => {
     if (chatPrependAnchor.isPrependingRef.current) return;
-    if (userPinnedAwayFromBottomRef.current) return;
+    if (userPinnedAwayFromBottom()) return;
     cancelLiveAutoFollow();
     const jobId = liveScrollJobRef.current;
     liveAutoFollowUntilRef.current = Date.now() + 1500;
     let attempts = 0;
     const scroll = () => {
       if (jobId !== liveScrollJobRef.current) return;
-      if (userPinnedAwayFromBottomRef.current) return;
+      if (userPinnedAwayFromBottom()) return;
       const el = chatContainerRef.current;
       if (el) el.scrollTop = el.scrollHeight;
       setShowScrollBtn(false);
@@ -6123,7 +5016,11 @@ export default function AgentDetailPage() {
       window.setTimeout(scroll, 80),
       window.setTimeout(scroll, 220),
     ];
-  }, [cancelLiveAutoFollow, chatPrependAnchor.isPrependingRef]);
+  }, [
+    cancelLiveAutoFollow,
+    chatPrependAnchor.isPrependingRef,
+    userPinnedAwayFromBottom,
+  ]);
   useEffect(() => {
     return () => cancelLiveAutoFollow();
   }, [cancelLiveAutoFollow]);
@@ -6179,26 +5076,32 @@ export default function AgentDetailPage() {
         setHistoryHasMore(false);
         return;
       }
-      const preParsed = page.rows.map((m: any) =>
-        parseChatMsg({
-          role: m.role,
-          content: m.content || "",
-          ...(m.toolName && {
-            toolName: m.toolName,
-            toolCallId: m.toolCallId,
-            toolArgs: m.toolArgs,
-            toolStatus: m.toolStatus,
-            toolResult: m.toolResult,
-            toolThinking: m.toolThinking,
+      const preParsed = page.rows
+        .map(sessionMessageFromUnknown)
+        .filter((message): message is SessionMessage => message !== null)
+        .map((m) =>
+          parseChatMsg({
+            role: m.role,
+            content: m.content || "",
+            ...(m.toolName && {
+              toolName: m.toolName,
+              toolCallId: m.toolCallId,
+              toolArgs: m.toolArgs,
+              toolStatus: m.toolStatus,
+              toolResult: m.toolResult,
+              toolThinking: m.toolThinking,
+            }),
+            ...(m.thinking && { thinking: m.thinking }),
+            ...(m.created_at && { timestamp: m.created_at }),
+            ...(m.id && { id: m.id }),
+            ...(m.sender_name && { sender_name: m.sender_name }),
+            ...(m.participant_id && { participant_id: m.participant_id }),
+            ...(m.runtime_error !== undefined &&
+              m.runtime_error !== null && {
+                runtimeError: normalizeRuntimeError({ error: m.runtime_error }),
+              }),
           }),
-          ...(m.thinking && { thinking: m.thinking }),
-          ...(m.created_at && { timestamp: m.created_at }),
-          ...(m.id && { id: m.id }),
-          ...(m.runtime_error && {
-            runtimeError: normalizeRuntimeError({ error: m.runtime_error }),
-          }),
-        }),
-      );
+        );
       historyPrependAnchor.captureAnchor();
       setHistoryMsgs((prev) => [...preParsed, ...prev]);
       setHistoryOldestTimestamp(page.oldestCursor);
@@ -6215,7 +5118,8 @@ export default function AgentDetailPage() {
     id,
     historyOldestTimestamp,
     historyMsgs,
-    historyPrependAnchor.captureAnchor,
+    historyPrependAnchor,
+    parseChatMsg,
   ]);
 
   const loadMoreChatHistoryMessages = useCallback(async () => {
@@ -6257,26 +5161,32 @@ export default function AgentDetailPage() {
         setChatHistoryHasMore(false);
         return;
       }
-      const preParsed = page.rows.map((m: any) =>
-        parseChatMsg({
-          role: m.role,
-          content: m.content || "",
-          ...(m.toolName && {
-            toolName: m.toolName,
-            toolCallId: m.toolCallId,
-            toolArgs: m.toolArgs,
-            toolStatus: m.toolStatus,
-            toolResult: m.toolResult,
-            toolThinking: m.toolThinking,
+      const preParsed = page.rows
+        .map(sessionMessageFromUnknown)
+        .filter((message): message is SessionMessage => message !== null)
+        .map((m) =>
+          parseChatMsg({
+            role: m.role,
+            content: m.content || "",
+            ...(m.toolName && {
+              toolName: m.toolName,
+              toolCallId: m.toolCallId,
+              toolArgs: m.toolArgs,
+              toolStatus: m.toolStatus,
+              toolResult: m.toolResult,
+              toolThinking: m.toolThinking,
+            }),
+            ...(m.thinking && { thinking: m.thinking }),
+            ...(m.created_at && { timestamp: m.created_at }),
+            ...(m.id && { id: m.id }),
+            ...(m.sender_name && { sender_name: m.sender_name }),
+            ...(m.participant_id && { participant_id: m.participant_id }),
+            ...(m.runtime_error !== undefined &&
+              m.runtime_error !== null && {
+                runtimeError: normalizeRuntimeError({ error: m.runtime_error }),
+              }),
           }),
-          ...(m.thinking && { thinking: m.thinking }),
-          ...(m.created_at && { timestamp: m.created_at }),
-          ...(m.id && { id: m.id }),
-          ...(m.runtime_error && {
-            runtimeError: normalizeRuntimeError({ error: m.runtime_error }),
-          }),
-        }),
-      );
+        );
       cancelLiveAutoFollow();
       chatPrependAnchor.captureAnchor();
       setChatMessages((prev) => [...preParsed, ...prev]);
@@ -6295,7 +5205,8 @@ export default function AgentDetailPage() {
     chatOldestTimestamp,
     chatMessages,
     cancelLiveAutoFollow,
-    chatPrependAnchor.captureAnchor,
+    chatPrependAnchor,
+    parseChatMsg,
   ]);
 
   const historyLoadGesture = useOlderHistoryGesture({
@@ -6320,14 +5231,15 @@ export default function AgentDetailPage() {
     scheduleHistoryScrollToBottom();
   };
   useEffect(() => {
-    if (
-      activeTab === "chat" &&
-      activeSession &&
-      isWritableSession(activeSession)
-    ) {
+    if (activeTab === "chat" && activeSession && selectedSessionWritable) {
       scheduleComposerFocus();
     }
-  }, [activeTab, activeSession?.id, scheduleComposerFocus]);
+  }, [
+    activeTab,
+    activeSession,
+    scheduleComposerFocus,
+    selectedSessionWritable,
+  ]);
   // Auto-show button when history messages overflow the container
   useEffect(() => {
     const el = historyContainerRef.current;
@@ -6344,6 +5256,7 @@ export default function AgentDetailPage() {
     }, 100);
     return () => clearTimeout(timer);
   }, [historyMsgs, activeSession?.id, scheduleHistoryScrollToBottom]);
+  const selectedSessionId = activeSession?.id;
   // Memoized component for each chat message to avoid re-renders while typing
   const ChatMessageItem = React.useMemo(
     () =>
@@ -6359,10 +5272,10 @@ export default function AgentDetailPage() {
           hideAvatar = false,
           hideDistill = false,
         }: {
-          msg: any;
+          msg: ChatMsg;
           i: number;
           isLeft: boolean;
-          t: any;
+          t: Translate;
           senderLabel?: string;
           avatarText?: string;
           forceSenderLabel?: boolean;
@@ -6459,7 +5372,7 @@ export default function AgentDetailPage() {
                     {msg.content && isLeft && !hideDistill && (
                       <DistillButton
                         text={msg.content}
-                        sessionId={activeSessionIdRef.current}
+                        sessionId={selectedSessionId}
                       />
                     )}
                   </div>
@@ -6481,7 +5394,7 @@ export default function AgentDetailPage() {
               <div className="chat-msg-col">
                 <div className={isLeft ? "" : "chat-msg-user-line"}>
                   <div
-                    className={`chat-msg-bubble${isLeft ? "" : " chat-msg-bubble--user"}${(msg as any)._streaming && !msg.content && !msg.thinking ? " chat-msg-bubble--thinking" : ""}`}
+                    className={`chat-msg-bubble${isLeft ? "" : " chat-msg-bubble--user"}${msg._streaming && !msg.content && !msg.thinking ? " chat-msg-bubble--thinking" : ""}`}
                   >
                     {showSenderLabel && (
                       <div className="chat-msg-sender">
@@ -6551,9 +5464,7 @@ export default function AgentDetailPage() {
                       </div>
                     )}
                     {msg.role === "assistant" ? (
-                      (msg as any)._streaming &&
-                      !msg.content &&
-                      !msg.thinking ? (
+                      msg._streaming && !msg.content && !msg.thinking ? (
                         <div className="thinking-indicator">
                           <div className="thinking-dots">
                             <span />
@@ -6599,16 +5510,16 @@ export default function AgentDetailPage() {
           );
         },
       ),
-    [t],
+    [selectedSessionId, tsLocale],
   );
 
   const handleChatScroll = () => {
     const el = chatContainerRef.current;
     if (!el) return;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isNearBottom.current = distFromBottom < 160;
-    userPinnedAwayFromBottomRef.current = distFromBottom > 260;
-    if (userPinnedAwayFromBottomRef.current) {
+    setIsNearBottom(distFromBottom < 160);
+    setUserPinnedAwayFromBottom(distFromBottom > 260);
+    if (distFromBottom > 260) {
       cancelLiveAutoFollow();
     }
     setShowScrollBtn(distFromBottom > 200);
@@ -6641,21 +5552,17 @@ export default function AgentDetailPage() {
     }
   };
   const scrollToBottom = () => {
-    userPinnedAwayFromBottomRef.current = false;
+    setUserPinnedAwayFromBottom(false);
     scheduleLiveScrollToBottom();
   };
   useEffect(() => {
-    if (
-      activeTab !== "chat" ||
-      !activeSession ||
-      !isWritableSession(activeSession)
-    )
+    if (activeTab !== "chat" || !activeSession || !selectedSessionWritable)
       return;
     const el = chatContainerRef.current;
     if (!el) return;
     const shouldFollow = () =>
-      !userPinnedAwayFromBottomRef.current &&
-      (isNearBottom.current || Date.now() < liveAutoFollowUntilRef.current);
+      !userPinnedAwayFromBottom() &&
+      (isNearBottom() || Date.now() < liveAutoFollowUntilRef.current);
     const maybeFollow = () => {
       if (shouldFollow()) scheduleLiveScrollToBottom();
     };
@@ -6678,26 +5585,42 @@ export default function AgentDetailPage() {
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
     };
-  }, [activeTab, activeSession?.id, scheduleLiveScrollToBottom]);
+  }, [
+    activeTab,
+    activeSession,
+    isNearBottom,
+    scheduleLiveScrollToBottom,
+    selectedSessionWritable,
+    userPinnedAwayFromBottom,
+  ]);
   useEffect(() => {
     if (!chatEndRef.current) return;
-    if (pendingLiveInitialScrollRef.current && chatMessages.length > 0) {
-      pendingLiveInitialScrollRef.current = false;
-      isFirstLoad.current = false;
-      isNearBottom.current = true;
+    if (pendingLiveInitialScroll() && chatMessages.length > 0) {
+      setPendingLiveInitialScroll(false);
+      setIsFirstLoad(false);
+      setIsNearBottom(true);
       scheduleLiveScrollToBottom();
       return;
     }
-    if (isFirstLoad.current && chatMessages.length > 0) {
+    if (isFirstLoad() && chatMessages.length > 0) {
       // First load: instant jump to bottom, no animation
       scheduleLiveScrollToBottom();
-      isFirstLoad.current = false;
+      setIsFirstLoad(false);
       return;
     }
-    if (isNearBottom.current) {
+    if (isNearBottom()) {
       scheduleLiveScrollToBottom();
     }
-  }, [chatMessages, scheduleLiveScrollToBottom]);
+  }, [
+    chatMessages,
+    isFirstLoad,
+    isNearBottom,
+    pendingLiveInitialScroll,
+    scheduleLiveScrollToBottom,
+    setIsFirstLoad,
+    setIsNearBottom,
+    setPendingLiveInitialScroll,
+  ]);
 
   useEffect(() => {
     const gapAboveComposer = 14;
@@ -6811,8 +5734,8 @@ export default function AgentDetailPage() {
     };
 
     setChatInput("");
-    userPinnedAwayFromBottomRef.current = false;
-    isNearBottom.current = true;
+    setUserPinnedAwayFromBottom(false);
+    setIsNearBottom(true);
     // Reset textarea height after clearing content
     if (chatInputRef.current) {
       chatInputRef.current.style.height = "auto";
@@ -6849,9 +5772,8 @@ export default function AgentDetailPage() {
       return;
     }
 
-    const baseTime = Date.now();
     const newDrafts = allowedFiles.map((file, i) => ({
-      id: `up-${baseTime}-${i}-${file.name}`,
+      id: `up-${file.lastModified}-${file.size}-${i}-${file.name}`,
       name: file.name,
       percent: 0,
       previewUrl: file.type.startsWith("image/")
@@ -6876,7 +5798,7 @@ export default function AgentDetailPage() {
       );
       chatUploadAbortRef.current.set(draft.id, abort);
       try {
-        const data = await promise;
+        const data: UploadResponse = await promise;
         if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
         setChatUploadDrafts((prev) => prev.filter((d) => d.id !== draft.id));
         chatUploadAbortRef.current.delete(draft.id);
@@ -6919,8 +5841,13 @@ export default function AgentDetailPage() {
         const blob = items[i].getAsFile();
         if (blob) {
           const ext = blob.type.split("/")[1] || "png";
-          const fileName = `paste-${Date.now()}-${i}.${ext}`;
-          filesToUpload.push(new File([blob], fileName, { type: blob.type }));
+          const fileName = `paste-${blob.size}-${i}.${ext}`;
+          filesToUpload.push(
+            new File([blob], fileName, {
+              type: blob.type,
+              lastModified: blob.size + i,
+            }),
+          );
         }
       }
     }
@@ -6933,9 +5860,8 @@ export default function AgentDetailPage() {
       return;
     }
 
-    const baseTime = Date.now();
     const newDrafts = allowedFiles.map((file, i) => ({
-      id: `paste-${baseTime}-${i}-${file.name}`,
+      id: `paste-${file.lastModified}-${file.size}-${i}-${file.name}`,
       name: file.name,
       percent: 0,
       previewUrl: file.type.startsWith("image/")
@@ -6960,7 +5886,7 @@ export default function AgentDetailPage() {
       );
       chatUploadAbortRef.current.set(draft.id, abort);
       try {
-        const data = await promise;
+        const data: UploadResponse = await promise;
         if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
         setChatUploadDrafts((prev) => prev.filter((d) => d.id !== draft.id));
         chatUploadAbortRef.current.delete(draft.id);
@@ -7034,7 +5960,7 @@ export default function AgentDetailPage() {
             },
             id ? { agent_id: id } : undefined,
           );
-          const data = await promise;
+          const data: UploadResponse = await promise;
           setAttachedFiles((prev) => [
             ...prev,
             {
@@ -7056,14 +5982,7 @@ export default function AgentDetailPage() {
         }
       }
     },
-    [
-      id,
-      wsConnected,
-      chatUploadDrafts.length,
-      attachedFiles.length,
-      isWritableSession,
-      t,
-    ],
+    [id, wsConnected, chatUploadDrafts.length, attachedFiles.length, t, toast],
   );
 
   const { isDragging: isChatDragging, dropZoneProps: chatDropProps } =
@@ -7092,7 +6011,9 @@ export default function AgentDetailPage() {
   // Agent-level import from ClawHub / URL
   const [showAgentClawhub, setShowAgentClawhub] = useState(false);
   const [agentClawhubQuery, setAgentClawhubQuery] = useState("");
-  const [agentClawhubResults, setAgentClawhubResults] = useState<any[]>([]);
+  const [agentClawhubResults, setAgentClawhubResults] = useState<
+    ClawhubSkill[]
+  >([]);
   const [agentClawhubSearching, setAgentClawhubSearching] = useState(false);
   const [agentClawhubInstalling, setAgentClawhubInstalling] = useState<
     string | null
@@ -7101,90 +6022,6 @@ export default function AgentDetailPage() {
   const [agentUrlInput, setAgentUrlInput] = useState("");
   const [agentUrlImporting, setAgentUrlImporting] = useState(false);
 
-  const { data: schedules = [] } = useQuery({
-    queryKey: ["schedules", id],
-    queryFn: () => scheduleApi.list(id!),
-    enabled: !!id && (activeTab as string) === "tasks",
-  });
-
-  // Schedule form state
-  const [showScheduleForm, setShowScheduleForm] = useState(false);
-  const schedDefaults = {
-    freq: "daily",
-    interval: 1,
-    time: "09:00",
-    weekdays: [1, 2, 3, 4, 5],
-  };
-  const [schedForm, setSchedForm] = useState({
-    name: "",
-    instruction: "",
-    schedule: JSON.stringify(schedDefaults),
-    due_date: "",
-  });
-
-  const createScheduleMut = useMutation({
-    mutationFn: () => {
-      let sched: any;
-      try {
-        sched = JSON.parse(schedForm.schedule);
-      } catch {
-        sched = schedDefaults;
-      }
-      return scheduleApi.create(id!, {
-        name: schedForm.name,
-        instruction: schedForm.instruction,
-        cron_expr: schedToCron(sched),
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["schedules", id] });
-      setShowScheduleForm(false);
-      setSchedForm({
-        name: "",
-        instruction: "",
-        schedule: JSON.stringify(schedDefaults),
-        due_date: "",
-      });
-    },
-    onError: (err: any) => {
-      const msg = err?.detail || err?.message || String(err);
-      toast.error(t("common.error.planCreateFailed", "创建计划任务失败"), {
-        details: String(msg),
-      });
-    },
-  });
-
-  const toggleScheduleMut = useMutation({
-    mutationFn: ({ sid, enabled }: { sid: string; enabled: boolean }) =>
-      scheduleApi.update(id!, sid, { is_enabled: enabled }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["schedules", id] }),
-  });
-
-  const deleteScheduleMut = useMutation({
-    mutationFn: (sid: string) => scheduleApi.delete(id!, sid),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["schedules", id] }),
-  });
-
-  const triggerScheduleMut = useMutation({
-    mutationFn: async (sid: string) => {
-      const res = await scheduleApi.trigger(id!, sid);
-      return res;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["schedules", id] });
-      showToast("Schedule triggered — executing in background", "success");
-    },
-    onError: (err: any) => {
-      const msg =
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Failed to trigger schedule";
-      showToast(msg, "error");
-    },
-  });
-
   const { data: metrics } = useQuery({
     queryKey: ["metrics", id],
     queryFn: () => agentApi.metrics(id!).catch(() => null),
@@ -7192,7 +6029,9 @@ export default function AgentDetailPage() {
     retry: false,
   });
 
-  const { data: llmModels = [], isLoading: llmModelsLoading } = useQuery({
+  const { data: llmModels = [], isLoading: llmModelsLoading } = useQuery<
+    LlmModel[]
+  >({
     queryKey: ["llm-models"],
     queryFn: () => enterpriseApi.llmModels(),
     enabled:
@@ -7209,14 +6048,14 @@ export default function AgentDetailPage() {
   }, [activeTab, location.key, queryClient]);
 
   const enabledLlmModels = useMemo(
-    () => (llmModels as any[]).filter((m: any) => m.enabled),
+    () => llmModels.filter((model) => model.enabled),
     [llmModels],
   );
   const effectiveChatModelId =
-    [overrideModelId, agent?.primary_model_id, myTenant?.default_model_id].find(
+    [selectedModelId, myTenant?.default_model_id].find(
       (candidate): candidate is string =>
         Boolean(candidate) &&
-        enabledLlmModels.some((model: any) => model.id === candidate),
+        enabledLlmModels.some((model) => model.id === candidate),
     ) ||
     enabledLlmModels[0]?.id ||
     null;
@@ -7224,12 +6063,12 @@ export default function AgentDetailPage() {
   const supportsVision =
     !!effectiveChatModelId &&
     llmModels.some(
-      (m: any) => m.id === effectiveChatModelId && m.supports_vision,
+      (model) => model.id === effectiveChatModelId && model.supports_vision,
     );
   const enabledModelCount = enabledLlmModels.length;
   const effectiveModelReady =
     !!effectiveChatModelId &&
-    enabledLlmModels.some((m: any) => m.id === effectiveChatModelId);
+    enabledLlmModels.some((model) => model.id === effectiveChatModelId);
 
   // Onboarding kickoff: wait until a usable model is available before
   // sending the invisible trigger. Otherwise the empty session would be
@@ -7270,6 +6109,7 @@ export default function AgentDetailPage() {
     currentUser?.id,
     activeSession?.id,
     agent?.onboarded_for_me,
+    agent,
     llmModelsLoading,
     effectiveModelReady,
     effectiveChatModelId,
@@ -7281,44 +6121,9 @@ export default function AgentDetailPage() {
 
   const { data: permData } = useQuery({
     queryKey: ["agent-permissions", id],
-    queryFn: () => fetchAuth<any>(`/agents/${id}/permissions`),
+    queryFn: () => fetchAuth<PermissionData>(`/agents/${id}/permissions`),
     enabled: !!id && activeTab === "settings",
   });
-
-  const CopyBtn = ({ url }: { url: string }) => (
-    <button
-      title="Copy"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        marginLeft: "6px",
-        padding: "1px 4px",
-        cursor: "pointer",
-        borderRadius: "3px",
-        border: "1px solid var(--border-color)",
-        background: "var(--bg-primary)",
-        color: "var(--text-secondary)",
-        verticalAlign: "middle",
-        lineHeight: 1,
-      }}
-      onClick={() => copyToClipboard(url).then(() => {})}
-    >
-      <svg
-        width="12"
-        height="12"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <rect x="4" y="4" width="9" height="11" rx="1.5" />
-        <path d="M3 11H2a1 1 0 01-1-1V2a1 1 0 011-1h8a1 1 0 011 1v1" />
-      </svg>
-    </button>
-  );
 
   // ─── File viewer ─────────────────────────────────────
   const [promptModal, setPromptModal] = useState<{
@@ -7335,8 +6140,6 @@ export default function AgentDetailPage() {
     message: string;
     type: "success" | "error";
   } | null>(null);
-  const [editingRole, setEditingRole] = useState(false);
-  const [roleInput, setRoleInput] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [infoCardOpen, setInfoCardOpen] = useState(false);
@@ -7359,40 +6162,8 @@ export default function AgentDetailPage() {
     setTimeout(() => setUploadToast(null), 3000);
   };
 
-  // ─── Task creation & detail ───────────────────────────────────
-  const [showTaskForm, setShowTaskForm] = useState(false);
+  // ─── Task detail ──────────────────────────────────────────────
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [taskForm, setTaskForm] = useState({
-    title: "",
-    description: "",
-    priority: "medium",
-    type: "todo" as "todo" | "supervision",
-    supervision_target_name: "",
-    remind_schedule: "",
-    due_date: "",
-  });
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-
-  const createTask = useMutation({
-    mutationFn: (data: any) => {
-      const cleaned = { ...data };
-      if (!cleaned.due_date) delete cleaned.due_date;
-      return taskApi.create(id!, cleaned);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks", id] });
-      setShowTaskForm(false);
-      setTaskForm({
-        title: "",
-        description: "",
-        priority: "medium",
-        type: "todo",
-        supervision_target_name: "",
-        remind_schedule: "",
-        due_date: "",
-      });
-    },
-  });
 
   if (isLoading || !agent) {
     return (
@@ -7408,18 +6179,17 @@ export default function AgentDetailPage() {
     if (agent.status === "creating") return "creating";
     if (agent.status === "stopped") return "stopped";
     if (
-      (agent as any).agent_type === "openclaw" &&
+      agent.agent_type === "openclaw" &&
       agent.status === "running" &&
-      (agent as any).openclaw_last_seen
+      agent.openclaw_last_seen
     ) {
-      const elapsed =
-        Date.now() - new Date((agent as any).openclaw_last_seen).getTime();
+      const elapsed = statusNow - new Date(agent.openclaw_last_seen).getTime();
       if (elapsed > 60 * 60 * 1000) return "disconnected";
     }
     return agent.status === "running" ? "running" : "idle";
   };
   const statusKey = computeStatusKey();
-  const canManage = (agent as any).access_level === "manage";
+  const canManage = agent.access_level === "manage";
   const formatAgentDate = (d?: string | null) => {
     if (!d) return "—";
     try {
@@ -7433,16 +6203,16 @@ export default function AgentDetailPage() {
     }
   };
   const primaryModel = llmModels.find(
-    (m: any) => m.id === agent.primary_model_id,
+    (model) => model.id === agent.primary_model_id,
   );
   const showNoModelState =
     !llmModelsLoading &&
-    (agent as any).agent_type !== "openclaw" &&
+    agent.agent_type !== "openclaw" &&
     (enabledModelCount === 0 || !effectiveModelReady);
   const canConfigureModels =
     currentUser?.role === "platform_admin" ||
     currentUser?.role === "org_admin" ||
-    !!(currentUser as any)?.is_platform_admin;
+    !!currentUser?.is_platform_admin;
   const renderNoModelGuide = (variant: "empty" | "floating" = "empty") => (
     <div
       className={`chat-no-model-state${variant === "floating" ? " chat-no-model-state--floating" : ""}`}
@@ -7481,19 +6251,11 @@ export default function AgentDetailPage() {
   const modelProvider = primaryModel ? primaryModel.provider : "—";
   const todayParts = formatTokensParts(agent.tokens_used_today || 0);
   const monthParts = formatTokensParts(agent.tokens_used_month || 0);
-  const totalParts = formatTokensParts((agent as any).tokens_used_total || 0);
+  const totalParts = formatTokensParts(agent.tokens_used_total || 0);
   const cacheReadToday =
-    (agent as any).cache_read_tokens_today ||
-    metrics?.tokens?.cache_read_today ||
-    0;
+    agent.cache_read_tokens_today || metrics?.tokens?.cache_read_today || 0;
   const cacheReadMonth =
-    (agent as any).cache_read_tokens_month ||
-    metrics?.tokens?.cache_read_month ||
-    0;
-  const cacheReadTotal =
-    (agent as any).cache_read_tokens_total ||
-    metrics?.tokens?.cache_read_total ||
-    0;
+    agent.cache_read_tokens_month || metrics?.tokens?.cache_read_month || 0;
   const cacheHitRateToday =
     (agent.tokens_used_today || 0) > 0
       ? Math.round((cacheReadToday / (agent.tokens_used_today || 1)) * 100)
@@ -7502,16 +6264,10 @@ export default function AgentDetailPage() {
     (agent.tokens_used_month || 0) > 0
       ? Math.round((cacheReadMonth / (agent.tokens_used_month || 1)) * 100)
       : 0;
-  const cacheHitRateTotal =
-    ((agent as any).tokens_used_total || 0) > 0
-      ? Math.round(
-          (cacheReadTotal / ((agent as any).tokens_used_total || 1)) * 100,
-        )
-      : 0;
-  const expiryLabel = (agent as any).is_expired
+  const expiryLabel = agent.is_expired
     ? t("agent.settings.expiry.expired")
-    : (agent as any).expires_at
-      ? new Date((agent as any).expires_at).toLocaleDateString(tsLocale, {
+    : agent.expires_at
+      ? new Date(agent.expires_at).toLocaleDateString(tsLocale, {
           year: "numeric",
           month: "short",
           day: "numeric",
@@ -7564,26 +6320,22 @@ export default function AgentDetailPage() {
                   <div className="agent-info-meta-row">
                     <span>{t("agent.fields.createdBy", "Created by")}</span>
                     <span>
-                      {(agent as any).creator_username
-                        ? `@${(agent as any).creator_username}`
+                      {agent.creator_username
+                        ? `@${agent.creator_username}`
                         : "—"}
                     </span>
                   </div>
                   <div className="agent-info-meta-row">
                     <span>{t("agent.profile.timezone")}</span>
                     <span>
-                      {(agent as any).effective_timezone ||
-                        agent.timezone ||
-                        "UTC"}
+                      {agent.effective_timezone || agent.timezone || "UTC"}
                     </span>
                   </div>
                   <div className="agent-info-meta-row">
                     <span>{t("agent.settings.expiry.title")}</span>
                     <span
                       className={
-                        (agent as any).is_expired
-                          ? "agent-info-expiry--expired"
-                          : ""
+                        agent.is_expired ? "agent-info-expiry--expired" : ""
                       }
                     >
                       {expiryLabel}
@@ -7737,7 +6489,7 @@ export default function AgentDetailPage() {
   const renderAwarePreview = () => {
     const focusItems = focusRecords.map(focusItemFromApi);
     const isZh = i18n.language?.startsWith("zh");
-    const formatTrigger = (trig: any) => {
+    const formatTrigger = (trig: TriggerData) => {
       if (trig.type === "cron" && trig.config?.expr)
         return `Cron ${trig.config.expr}`;
       if (trig.type === "interval" && trig.config?.minutes)
@@ -7751,14 +6503,14 @@ export default function AgentDetailPage() {
         });
       return trig.name || trig.type;
     };
-    const triggerTitle = (trig: any) =>
+    const triggerTitle = (trig: TriggerData) =>
       String(trig.reason || trig.name || trig.type || "").trim();
-    const triggerMeta = (trig: any) => {
+    const triggerMeta = (trig: TriggerData) => {
       const schedule = formatTrigger(trig);
       if (!trig.reason || schedule === trig.reason) return schedule;
       return schedule;
     };
-    const triggerTooltip = (trig: any) => {
+    const triggerTooltip = (trig: TriggerData) => {
       const title = triggerTitle(trig);
       const meta = triggerMeta(trig);
       const parts = [title, meta];
@@ -7766,9 +6518,9 @@ export default function AgentDetailPage() {
       if (trig.name && trig.name !== title) parts.push(String(trig.name));
       return Array.from(new Set(parts.filter(Boolean))).join("\n");
     };
-    const triggersByFocus: Record<string, any[]> = {};
+    const triggersByFocus: Record<string, TriggerData[]> = {};
     const focusNames = new Set(focusItems.map((item) => item.name));
-    for (const trig of awareTriggers as any[]) {
+    for (const trig of awareTriggers) {
       if (trig.focus_ref && focusNames.has(trig.focus_ref)) {
         if (!triggersByFocus[trig.focus_ref])
           triggersByFocus[trig.focus_ref] = [];
@@ -7885,7 +6637,7 @@ export default function AgentDetailPage() {
                     {t("agent.aware.noTriggers")}
                   </div>
                 ) : (
-                  itemTriggers.map((trig: any) => (
+                  itemTriggers.map((trig) => (
                     <div
                       key={trig.id}
                       className={`aware-side-trigger ${trig.is_enabled ? "" : "done"}`}
@@ -7968,7 +6720,7 @@ export default function AgentDetailPage() {
         </div>
       );
     };
-    const parseTriggerTime = (trig: any): Date | null => {
+    const parseTriggerTime = (trig: TriggerData): Date | null => {
       if (trig.type === "once" && trig.config?.at) {
         const date = new Date(trig.config.at);
         return Number.isNaN(date.getTime()) ? null : date;
@@ -8041,7 +6793,7 @@ export default function AgentDetailPage() {
         return next;
       });
     };
-    const timedTriggers = (awareTriggers as any[]).filter((trig) =>
+    const timedTriggers = awareTriggers.filter((trig) =>
       ["once", "cron", "interval"].includes(trig.type),
     );
     const recurringTriggers = timedTriggers.filter(
@@ -8133,7 +6885,7 @@ export default function AgentDetailPage() {
                 {items.length === 0 ? (
                   <div className="aware-calendar-empty">-</div>
                 ) : (
-                  items.slice(0, 3).map((trig: any) => (
+                  items.slice(0, 3).map((trig) => (
                     <div
                       key={trig.id}
                       className="aware-calendar-event"
@@ -8169,7 +6921,7 @@ export default function AgentDetailPage() {
             <div className="aware-side-subtitle">
               {isZh ? "重复计划" : "Recurring"}
             </div>
-            {recurringTriggers.slice(0, 6).map((trig: any) => (
+            {recurringTriggers.slice(0, 6).map((trig) => (
               <div
                 key={trig.id}
                 className="aware-calendar-event recurring"
@@ -8196,7 +6948,7 @@ export default function AgentDetailPage() {
         )}
       </div>
     );
-    const reflectionPreview = (msg: any) => {
+    const reflectionPreview = (msg: SessionMessage | undefined) => {
       if (!msg) return "";
       if (msg.role === "tool_call") {
         const name =
@@ -8340,12 +7092,12 @@ export default function AgentDetailPage() {
           <div className="aware-side-section-title">
             {t("agent.aware.reflections")}
           </div>
-          {(reflectionSessions as any[]).length === 0 ? (
+          {reflectionSessions.length === 0 ? (
             <div className="aware-side-empty">
               {isZh ? "暂无自主思考记录" : "No reflections yet"}
             </div>
           ) : (
-            (reflectionSessions as any[]).slice(0, 10).map((session: any) => {
+            reflectionSessions.slice(0, 10).map((session) => {
               const isExpanded = expandedReflection === session.id;
               const msgs = reflectionMessages[session.id] || [];
               return (
@@ -8392,7 +7144,7 @@ export default function AgentDetailPage() {
                           {isZh ? "正在加载..." : "Loading..."}
                         </div>
                       ) : (
-                        msgs.map((msg: any, index: number) => {
+                        msgs.map((msg, index) => {
                           const isTool =
                             msg.role === "tool_call" ||
                             msg.role === "tool_result";
@@ -8433,15 +7185,13 @@ export default function AgentDetailPage() {
                               className={`aware-side-reflection-message role-${msg.role}`}
                             >
                               <summary
-                                style={
-                                  {
-                                    display: "flex",
-                                    gap: "8px",
-                                    alignItems: "center",
-                                    cursor: "pointer",
-                                    listStyle: "none",
-                                  } as any
-                                }
+                                style={{
+                                  display: "flex",
+                                  gap: "8px",
+                                  alignItems: "center",
+                                  cursor: "pointer",
+                                  listStyle: "none",
+                                }}
                               >
                                 <span className="aware-side-reflection-role">
                                   {msg.role}
@@ -8555,7 +7305,7 @@ export default function AgentDetailPage() {
                         if (nameInput.trim() && nameInput !== agent.name) {
                           await agentApi.update(id!, {
                             name: nameInput.trim(),
-                          } as any);
+                          });
                           queryClient.invalidateQueries({
                             queryKey: ["agent", id],
                           });
@@ -8650,7 +7400,7 @@ export default function AgentDetailPage() {
                   <IconFolder size={16} stroke={1.7} />
                   <span>{t("agent.tabs.workspace")}</span>
                 </button>
-                {(agent as any)?.agent_type !== "openclaw" && (
+                {agent?.agent_type !== "openclaw" && (
                   <button
                     className={`btn btn-ghost agent-top-action ${livePanelVisible && sidePanelTab === "aware" ? "active" : ""}`}
                     onClick={() => togglePreviewPanel("aware")}
@@ -8667,7 +7417,7 @@ export default function AgentDetailPage() {
                   <span>{t("agent.tabs.settings")}</span>
                 </button>
               </>
-              {(agent as any)?.agent_type !== "openclaw" && (
+              {agent?.agent_type !== "openclaw" && (
                 <>
                   {canManage && agent.status === "stopped" && (
                     <button
@@ -8707,11 +7457,11 @@ export default function AgentDetailPage() {
             {AGENT_DETAIL_TABS.filter((tab) => {
               if (["aware", "workspace", "chat"].includes(tab)) return false;
               // 'use' access keeps the existing tab bar unchanged; settings remains available via its own entry.
-              if ((agent as any)?.access_level === "use") {
+              if (agent?.access_level === "use") {
                 if (tab === "settings" || tab === "approvals") return false;
               }
               // OpenClaw agents: only show status, chat, activityLog, settings
-              if ((agent as any)?.agent_type === "openclaw") {
+              if (agent?.agent_type === "openclaw") {
                 return [
                   "status",
                   "relationships",
@@ -8757,7 +7507,7 @@ export default function AgentDetailPage() {
             };
             // Get model label
             const primaryModel = llmModels.find(
-              (m: any) => m.id === agent.primary_model_id,
+              (model) => model.id === agent.primary_model_id,
             );
             const modelLabel = primaryModel
               ? primaryModel.label || primaryModel.model
@@ -8875,7 +7625,7 @@ export default function AgentDetailPage() {
                     </div>
                   </div>
                   {/* Native agent metrics */}
-                  {(agent as any)?.agent_type !== "openclaw" && (
+                  {agent?.agent_type !== "openclaw" && (
                     <>
                       <div className="card">
                         <div
@@ -8888,9 +7638,7 @@ export default function AgentDetailPage() {
                           {t("agent.status.llmCallsToday")}
                         </div>
                         <div style={{ fontSize: "22px", fontWeight: 600 }}>
-                          {(
-                            (agent as any).llm_calls_today || 0
-                          ).toLocaleString()}
+                          {(agent.llm_calls_today || 0).toLocaleString()}
                         </div>
                         <div
                           style={{
@@ -8901,7 +7649,7 @@ export default function AgentDetailPage() {
                         >
                           {t("agent.status.max")}:{" "}
                           {(
-                            (agent as any).max_llm_calls_per_day || 1000
+                            agent.max_llm_calls_per_day || 1000
                           ).toLocaleString()}
                         </div>
                       </div>
@@ -8916,7 +7664,7 @@ export default function AgentDetailPage() {
                           {t("agent.status.totalToken")}
                         </div>
                         <div style={{ fontSize: "22px", fontWeight: 600 }}>
-                          {formatTokens((agent as any).tokens_used_total || 0)}
+                          {formatTokens(agent.tokens_used_total || 0)}
                         </div>
                       </div>
                       {metrics && (
@@ -9009,7 +7757,7 @@ export default function AgentDetailPage() {
                     </>
                   )}
                   {/* OpenClaw-specific metrics */}
-                  {(agent as any)?.agent_type === "openclaw" && (
+                  {agent?.agent_type === "openclaw" && (
                     <div className="card">
                       <div
                         style={{
@@ -9021,10 +7769,8 @@ export default function AgentDetailPage() {
                         {t("agent.openclaw.lastSeen")}
                       </div>
                       <div style={{ fontSize: "16px", fontWeight: 500 }}>
-                        {(agent as any).openclaw_last_seen
-                          ? new Date(
-                              (agent as any).openclaw_last_seen,
-                            ).toLocaleString()
+                        {agent.openclaw_last_seen
+                          ? new Date(agent.openclaw_last_seen).toLocaleString()
                           : t("agent.openclaw.notConnected")}
                       </div>
                     </div>
@@ -9080,7 +7826,7 @@ export default function AgentDetailPage() {
                             overflow: "hidden",
                             display: "-webkit-box",
                             WebkitLineClamp: 2,
-                            WebkitBoxOrient: "vertical" as any,
+                            WebkitBoxOrient: "vertical",
                           }}
                         >
                           {agent.role_description || "—"}
@@ -9102,7 +7848,7 @@ export default function AgentDetailPage() {
                             : "—"}
                         </span>
                       </div>
-                      {(agent as any).creator_username && (
+                      {agent.creator_username && (
                         <div
                           style={{
                             display: "flex",
@@ -9114,7 +7860,7 @@ export default function AgentDetailPage() {
                             {t("agent.fields.createdBy", "Created by")}
                           </span>
                           <span style={{ color: "var(--text-secondary)" }}>
-                            @{(agent as any).creator_username}
+                            @{agent.creator_username}
                           </span>
                         </div>
                       )}
@@ -9145,14 +7891,12 @@ export default function AgentDetailPage() {
                           {t("agent.profile.timezone")}
                         </span>
                         <span>
-                          {(agent as any).effective_timezone ||
-                            agent.timezone ||
-                            "UTC"}
+                          {agent.effective_timezone || agent.timezone || "UTC"}
                         </span>
                       </div>
                     </div>
                   </div>
-                  {(agent as any)?.agent_type !== "openclaw" ? (
+                  {agent?.agent_type !== "openclaw" ? (
                     <div className="card">
                       <h3
                         style={{
@@ -9213,9 +7957,7 @@ export default function AgentDetailPage() {
                           <span style={{ color: "var(--text-tertiary)" }}>
                             {t("agent.modelConfig.contextRounds")}
                           </span>
-                          <span>
-                            {(agent as any).context_window_size || 100}
-                          </span>
+                          <span>{agent.context_window_size || 100}</span>
                         </div>
                       </div>
                     </div>
@@ -9281,9 +8023,9 @@ export default function AgentDetailPage() {
                             {t("agent.openclaw.lastSeen")}
                           </span>
                           <span>
-                            {(agent as any).openclaw_last_seen
+                            {agent.openclaw_last_seen
                               ? new Date(
-                                  (agent as any).openclaw_last_seen,
+                                  agent.openclaw_last_seen,
                                 ).toLocaleString()
                               : t("agent.openclaw.never")}
                           </span>
@@ -9336,7 +8078,7 @@ export default function AgentDetailPage() {
                         gap: "8px",
                       }}
                     >
-                      {activityLogs.slice(0, 5).map((log: any, i: number) => (
+                      {activityLogs.slice(0, 5).map((log, i) => (
                         <div
                           key={i}
                           style={{
@@ -9356,10 +8098,12 @@ export default function AgentDetailPage() {
                               flexShrink: 0,
                             }}
                           >
-                            {new Date(log.created_at).toLocaleTimeString(
-                              tsLocale,
-                              { hour: "2-digit", minute: "2-digit" },
-                            )}
+                            {log.created_at
+                              ? new Date(log.created_at).toLocaleTimeString(
+                                  tsLocale,
+                                  { hour: "2-digit", minute: "2-digit" },
+                                )
+                              : "—"}
                           </span>
                           <span
                             style={{
@@ -9406,7 +8150,7 @@ export default function AgentDetailPage() {
             const isZh = i18n.language?.startsWith("zh");
 
             // Helper: convert trigger config to natural language
-            const triggerToHuman = (trig: any): string => {
+            const triggerToHuman = (trig: TriggerData): string => {
               const isZh = i18n.language?.startsWith("zh");
               if (trig.type === "cron" && trig.config?.expr) {
                 const expr = trig.config.expr;
@@ -9503,7 +8247,7 @@ export default function AgentDetailPage() {
               return trig.type;
             };
 
-            const triggerReasonText = (trig: any): string | null => {
+            const triggerReasonText = (trig: TriggerData): string | null => {
               if (!i18n.language?.startsWith("zh")) return trig.reason || null;
               if (trig.name === "daily_okr_report") {
                 return "系统触发器：如果启用了日报，收集成员进展、更新滞后的 KR，并生成日报。";
@@ -9521,7 +8265,7 @@ export default function AgentDetailPage() {
             };
 
             // Group triggers by focus_ref
-            const triggersByFocus: Record<string, any[]> = {};
+            const triggersByFocus: Record<string, TriggerData[]> = {};
             const focusNames = new Set(focusItems.map((item) => item.name));
             for (const trig of awareTriggers) {
               if (trig.focus_ref && focusNames.has(trig.focus_ref)) {
@@ -9538,14 +8282,14 @@ export default function AgentDetailPage() {
             const displayFocusItems = focusItems;
 
             // Group activity logs by trigger name -> focus_ref
-            const triggerLogsByFocus: Record<string, any[]> = {};
+            const triggerLogsByFocus: Record<string, ActivityLog[]> = {};
             const triggerNameToFocus: Record<string, string> = {};
             for (const trig of awareTriggers) {
               triggerNameToFocus[trig.name] =
                 trig.focus_ref || focusKeyFromTrigger(trig);
             }
             const triggerRelatedLogs = activityLogs.filter(
-              (log: any) =>
+              (log) =>
                 log.action_type === "trigger_fired" ||
                 log.action_type === "trigger_created" ||
                 log.action_type === "trigger_updated" ||
@@ -9560,7 +8304,7 @@ export default function AgentDetailPage() {
               )) {
                 if (
                   log.summary?.includes(trigName) ||
-                  log.detail?.tool === trigName
+                  (isUnknownRecord(log.detail) && log.detail.tool === trigName)
                 ) {
                   if (!triggerLogsByFocus[focusName])
                     triggerLogsByFocus[focusName] = [];
@@ -9632,12 +8376,6 @@ export default function AgentDetailPage() {
                       cursor: "pointer",
                       transition: "background 0.15s",
                     }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = "var(--bg-secondary)")
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = "transparent")
-                    }
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div
@@ -9729,7 +8467,7 @@ export default function AgentDetailPage() {
                       {/* Nested Triggers */}
                       {itemTriggers.length > 0 && (
                         <div style={{ marginTop: "12px" }}>
-                          {itemTriggers.map((trig: any) => (
+                          {itemTriggers.map((trig) => (
                             <div
                               key={trig.id}
                               style={{
@@ -9863,7 +8601,7 @@ export default function AgentDetailPage() {
                               gap: "4px",
                             }}
                           >
-                            {itemLogs.slice(0, 10).map((log: any) => (
+                            {itemLogs.slice(0, 10).map((log) => (
                               <div
                                 key={log.id}
                                 style={{
@@ -9905,15 +8643,17 @@ export default function AgentDetailPage() {
                                       color: "var(--text-tertiary)",
                                     }}
                                   >
-                                    {new Date(log.created_at).toLocaleString(
-                                      tsLocale,
-                                      {
-                                        month: "short",
-                                        day: "numeric",
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      },
-                                    )}
+                                    {log.created_at
+                                      ? new Date(log.created_at).toLocaleString(
+                                          tsLocale,
+                                          {
+                                            month: "short",
+                                            day: "numeric",
+                                            hour: "2-digit",
+                                            minute: "2-digit",
+                                          },
+                                        )
+                                      : "—"}
                                   </span>
                                 </div>
                                 <div
@@ -10018,7 +8758,9 @@ export default function AgentDetailPage() {
                       <button
                         onClick={(e) => {
                           setShowAllFocus(false);
-                          e.currentTarget.closest(".card")?.scrollIntoView({
+                          const target = e.target;
+                          if (!(target instanceof Element)) return;
+                          target.closest(".card")?.scrollIntoView({
                             behavior: "smooth",
                             block: "start",
                           });
@@ -10162,7 +8904,7 @@ export default function AgentDetailPage() {
                             gap: "4px",
                           }}
                         >
-                          {visibleSessions.map((session: any) => {
+                          {visibleSessions.map((session) => {
                             const isExpanded =
                               expandedReflection === session.id;
                             const msgs = reflectionMessages[session.id] || [];
@@ -10193,14 +8935,6 @@ export default function AgentDetailPage() {
                                     cursor: "pointer",
                                     transition: "background 0.15s",
                                   }}
-                                  onMouseEnter={(e) =>
-                                    (e.currentTarget.style.background =
-                                      "var(--bg-secondary)")
-                                  }
-                                  onMouseLeave={(e) =>
-                                    (e.currentTarget.style.background =
-                                      "transparent")
-                                  }
                                 >
                                   <div
                                     style={{
@@ -10285,7 +9019,7 @@ export default function AgentDetailPage() {
                                           marginTop: "8px",
                                         }}
                                       >
-                                        {msgs.map((msg: any, mi: number) => {
+                                        {msgs.map((msg, mi) => {
                                           if (msg.role === "tool_call") {
                                             const tName =
                                               msg.toolName ||
@@ -10319,9 +9053,7 @@ export default function AgentDetailPage() {
                                                 <ExperienceDraftCard
                                                   key={mi}
                                                   args={tArgs}
-                                                  sessionId={
-                                                    activeSessionIdRef.current
-                                                  }
+                                                  sessionId={session.id}
                                                 />
                                               );
                                             }
@@ -10354,18 +9086,16 @@ export default function AgentDetailPage() {
                                                 }}
                                               >
                                                 <summary
-                                                  style={
-                                                    {
-                                                      padding: "5px 10px",
-                                                      fontSize: "11px",
-                                                      cursor: "pointer",
-                                                      display: "flex",
-                                                      alignItems: "center",
-                                                      gap: "8px",
-                                                      listStyle: "none",
-                                                      WebkitAppearance: "none",
-                                                    } as any
-                                                  }
+                                                  style={{
+                                                    padding: "5px 10px",
+                                                    fontSize: "11px",
+                                                    cursor: "pointer",
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: "8px",
+                                                    listStyle: "none",
+                                                    WebkitAppearance: "none",
+                                                  }}
                                                 >
                                                   <span
                                                     style={{
@@ -10507,18 +9237,16 @@ export default function AgentDetailPage() {
                                                 }}
                                               >
                                                 <summary
-                                                  style={
-                                                    {
-                                                      padding: "5px 10px",
-                                                      fontSize: "11px",
-                                                      cursor: "pointer",
-                                                      display: "flex",
-                                                      alignItems: "center",
-                                                      gap: "8px",
-                                                      listStyle: "none",
-                                                      WebkitAppearance: "none",
-                                                    } as any
-                                                  }
+                                                  style={{
+                                                    padding: "5px 10px",
+                                                    fontSize: "11px",
+                                                    cursor: "pointer",
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: "8px",
+                                                    listStyle: "none",
+                                                    WebkitAppearance: "none",
+                                                  }}
                                                 >
                                                   <span
                                                     style={{
@@ -10710,10 +9438,7 @@ export default function AgentDetailPage() {
 
         {/* ── Mind Tab (Soul + Memory + Heartbeat) ── */}
         {activeTab === "mind" && id && (
-          <MindTab
-            agentId={id}
-            canEdit={(agent as any)?.access_level !== "use"}
-          />
+          <MindTab agentId={id} canEdit={agent?.access_level !== "use"} />
         )}
 
         {/* ── Tools Tab ── */}
@@ -10755,7 +9480,7 @@ export default function AgentDetailPage() {
         {activeTab === "relationships" && (
           <AgentDirectory
             agentId={id!}
-            accessMode={(agent as any)?.access_mode}
+            accessMode={agent?.access_mode}
             canManage={canManage}
           />
         )}
@@ -11000,7 +9725,7 @@ export default function AgentDetailPage() {
                           {t("agent.chat.clickToStart")}
                         </div>
                       ) : (
-                        sessions.map((s: any) => {
+                        sessions.map((s) => {
                           const isActive =
                             activeSession?.id === s.id &&
                             (chatScope === "mine" ||
@@ -11253,7 +9978,7 @@ export default function AgentDetailPage() {
                           {t("agent.chat.noSessionsYet")}
                         </div>
                       ) : (
-                        othersListForPicker.map((s: any) => {
+                        othersListForPicker.map((s) => {
                           const isActive =
                             activeSession?.id === s.id && chatScope === "all";
                           const channelLabel: Record<string, string> = {
@@ -11555,19 +10280,20 @@ export default function AgentDetailPage() {
                           activeSession.participant_type === "agent";
                         const isHumanReadonly =
                           !isA2A && !activeSession.is_group;
-                        const thisAgentName = (agent as any)?.name;
+                        const thisAgentName = agent?.name;
                         // Find this agent's participant_id from loaded messages
                         const thisAgentPid =
                           isA2A && thisAgentName
                             ? historyMsgs.find(
-                                (m: any) => m.sender_name === thisAgentName,
+                                (message) =>
+                                  message.sender_name === thisAgentName,
                               )?.participant_id
                             : null;
                         // Mark assistant messages whose turn already renders a propose_experience_draft
                         // card (a turn = rows between user messages). Their 沉淀 button is redundant.
                         const proposeTurnIdx = new Set<number>();
                         {
-                          const toolNameOf = (mm: any) =>
+                          const toolNameOf = (mm: ChatMsg) =>
                             mm.toolName ||
                             (() => {
                               try {
@@ -11606,7 +10332,7 @@ export default function AgentDetailPage() {
                             }
                           }
                         }
-                        return historyMsgs.map((m: any, i: number) => {
+                        return historyMsgs.map((m, i) => {
                           // Determine if this message is from "this agent" (left) or peer (right)
                           // Actually, "this agent" should be on the RIGHT (like 'me'), and peer on the LEFT
                           const isLeft =
@@ -11637,7 +10363,7 @@ export default function AgentDetailPage() {
                                 <ExperienceDraftCard
                                   key={i}
                                   args={tArgs}
-                                  sessionId={activeSessionIdRef.current}
+                                  sessionId={selectedSessionId}
                                 />
                               );
                             }
@@ -11767,14 +10493,14 @@ export default function AgentDetailPage() {
                                 senderLabel={
                                   isHumanReadonly
                                     ? isLeft
-                                      ? (agent as any)?.name || "Agent"
+                                      ? agent?.name || "Agent"
                                       : activeSession.username || "User"
                                     : undefined
                                 }
                                 avatarText={
                                   isHumanReadonly
                                     ? isLeft
-                                      ? ((agent as any)?.name || "Agent")[0]
+                                      ? (agent?.name || "Agent")[0]
                                       : (activeSession.username || "User")[0]
                                     : undefined
                                 }
@@ -11899,7 +10625,7 @@ export default function AgentDetailPage() {
                       )}
                       {(() => {
                         const visibleChatMessages = showNoModelState
-                          ? chatMessages.filter((msg: any) => {
+                          ? chatMessages.filter((msg) => {
                               const content = String(
                                 msg?.content || msg?.message || "",
                               );
@@ -11910,167 +10636,7 @@ export default function AgentDetailPage() {
                               );
                             })
                           : chatMessages;
-                        // ── Grouping Algorithm (lookahead-based) ──
-                        //
-                        // Goal: merge all "analysis" steps (thinking + tool calls +
-                        // mid-flow assistant text) into a single AnalysisCard, and
-                        // only emit a real assistant bubble for the *final* answer.
-                        //
-                        // Problem with naive flushing:
-                        //   Claude and minimax sometimes emit an assistant message with
-                        //   real content (e.g. "Let me search…") BETWEEN reasoning and
-                        //   tool calls. The old approach flushed the group on any
-                        //   assistant content, producing multiple fragmented cards.
-                        //
-                        // Solution — two-pass lookahead:
-                        //   Pass 1: pre-classify every message as either
-                        //     "analysis"  — part of the internal reasoning/tool loop
-                        //     "final"     — the actual answer to show the user
-                        //   Classification rule: an assistant message (even with content)
-                        //   is "analysis" if there is *at least one more tool_call
-                        //   somewhere after it in the same sequence*.
-                        //   Pass 2: build GroupedEntry[] based on classifications.
-
-                        // Pass 1: mark each index as 'analysis' or 'final'
-                        const msgClass: ("analysis" | "final")[] = new Array(
-                          visibleChatMessages.length,
-                        ).fill("final");
-
-                        // Walk backwards: once we see a tool_call, all preceding
-                        // assistant messages (until the previous user turn or start)
-                        // are reclassified as 'analysis'.
-                        let hasFutureTool = false;
-                        for (
-                          let i = visibleChatMessages.length - 1;
-                          i >= 0;
-                          i--
-                        ) {
-                          const msg = visibleChatMessages[i];
-                          if (msg.role === "tool_call") {
-                            msgClass[i] = "analysis";
-                            hasFutureTool = true;
-                          } else if (msg.role === "user") {
-                            // User turn resets the lookahead boundary
-                            hasFutureTool = false;
-                          } else if (msg.role === "assistant") {
-                            if (hasFutureTool) {
-                              // This assistant message (thinking-only or with content)
-                              // precedes more tool calls → it's part of the analysis
-                              msgClass[i] = "analysis";
-                            }
-                            // else: it's a final answer, keep 'final'
-                          }
-                        }
-
-                        // Pass 2: build grouped entries
-                        type GroupedEntry =
-                          | {
-                              type: "analysis_group";
-                              items: AnalysisItem[];
-                              key: number;
-                            }
-                          | { type: "msg"; msg: any; i: number };
-                        const grouped: GroupedEntry[] = [];
-                        let currentGroup: AnalysisItem[] | null = null;
-                        let groupStartKey = 0;
-                        const flushGroup = () => {
-                          if (currentGroup && currentGroup.length > 0) {
-                            grouped.push({
-                              type: "analysis_group",
-                              items: currentGroup,
-                              key: groupStartKey,
-                            });
-                            currentGroup = null;
-                          }
-                        };
-                        for (let i = 0; i < visibleChatMessages.length; i++) {
-                          const msg = visibleChatMessages[i];
-                          if (msgClass[i] === "analysis") {
-                            // Open a new group if needed
-                            if (!currentGroup) {
-                              currentGroup = [];
-                              groupStartKey = i;
-                            }
-                            if (msg.role === "tool_call") {
-                              if (msg.toolThinking?.trim()) {
-                                const lastItem =
-                                  currentGroup[currentGroup.length - 1];
-                                if (!(
-                                  lastItem?.type === "thinking" &&
-                                  lastItem.content === msg.toolThinking
-                                )) {
-                                  currentGroup.push({
-                                    type: "thinking",
-                                    content: msg.toolThinking,
-                                  });
-                                }
-                              }
-                              currentGroup.push({
-                                type: "tool",
-                                toolCallId: msg.toolCallId,
-                                name: msg.toolName || "tool",
-                                args: msg.toolArgs || {},
-                                status:
-                                  msg.toolStatus === "running"
-                                    ? "running"
-                                    : "done",
-                                result: msg.toolResult || undefined,
-                              });
-                            } else if (msg.role === "assistant") {
-                              // Could be thinking-only OR has content (mid-flow text)
-                              const thinkingText = msg.thinking || "";
-                              const contentText = msg.content?.trim() || "";
-                              // Add thinking block first (if present)
-                              if (thinkingText) {
-                                currentGroup.push({
-                                  type: "thinking",
-                                  content: thinkingText,
-                                });
-                              }
-                              // Add mid-flow content as a thinking block too
-                              // (displayed with slightly different style to distinguish)
-                              if (contentText) {
-                                currentGroup.push({
-                                  type: "thinking",
-                                  content: contentText,
-                                });
-                              }
-                            }
-                          } else {
-                            // 'final': flush any open group first, then emit as chat bubble
-                            if (
-                              msg.role === "assistant" &&
-                              msg.thinking &&
-                              currentGroup?.some((item) => item.type === "tool")
-                            ) {
-                              currentGroup.push({
-                                type: "thinking",
-                                content: msg.thinking,
-                              });
-                              const contentText = msg.content?.trim() || "";
-                              flushGroup();
-                              if (contentText)
-                                grouped.push({
-                                  type: "msg",
-                                  msg: { ...msg, thinking: undefined },
-                                  i,
-                                });
-                              continue;
-                            }
-                            flushGroup();
-                            const isAssistantEmpty =
-                              msg.role === "assistant" &&
-                              !msg.content?.trim() &&
-                              !msg.thinking?.trim() &&
-                              !msg.runtimeError &&
-                              !msg.fileName &&
-                              !msg.imageUrl;
-                            if (!isAssistantEmpty) {
-                              grouped.push({ type: "msg", msg, i });
-                            }
-                          }
-                        }
-                        flushGroup(); // flush any trailing group
+                        const grouped = groupChatMessages(visibleChatMessages);
 
                         return grouped.map((entry, entryIdx) => {
                           const previousEntry = grouped[entryIdx - 1];
@@ -12083,7 +10649,7 @@ export default function AgentDetailPage() {
                           const prevGroupHasPropose =
                             previousEntry?.type === "analysis_group" &&
                             previousEntry.items.some(
-                              (it: any) =>
+                              (it) =>
                                 it.type === "tool" &&
                                 it.name === "propose_experience_draft",
                             );
@@ -12109,22 +10675,20 @@ export default function AgentDetailPage() {
                                 className="chat-msg-row chat-msg-row--analysis"
                               >
                                 <div className="chat-msg-avatar">
-                                  {((agent as any)?.name || "Agent")[0]}
+                                  {(agent?.name || "Agent")[0]}
                                 </div>
                                 <AnalysisCard
                                   items={entry.items}
                                   t={t}
                                   expanded={
-                                    toolGroupExpandedRef.current.has(entry.key)
-                                      ? !!toolGroupExpandedRef.current.get(
-                                          entry.key,
-                                        )
+                                    toolGroupExpanded.has(entry.key)
+                                      ? !!toolGroupExpanded.get(entry.key)
                                       : false
                                   }
                                   onToggle={() => toggleToolGroup(entry.key)}
                                   isGroupRunning={groupIsRunning}
                                   chatActive={isWaiting || isStreaming}
-                                  sessionId={activeSessionIdRef.current}
+                                  sessionId={selectedSessionId}
                                   reconciliationsByToolCallId={
                                     selectedReconciliationsByToolCallId
                                   }
@@ -12141,9 +10705,7 @@ export default function AgentDetailPage() {
                                 <ThoughtDisclosure
                                   content={msg.thinking}
                                   t={t}
-                                  streaming={
-                                    !!((msg as any)._streaming && !contentText)
-                                  }
+                                  streaming={!!(msg._streaming && !contentText)}
                                 />
                                 {contentText && (
                                   <ChatMessageItem
@@ -12151,12 +10713,8 @@ export default function AgentDetailPage() {
                                     i={i}
                                     isLeft
                                     t={t}
-                                    senderLabel={
-                                      (agent as any)?.name || "Agent"
-                                    }
-                                    avatarText={
-                                      ((agent as any)?.name || "Agent")[0]
-                                    }
+                                    senderLabel={agent?.name || "Agent"}
+                                    avatarText={(agent?.name || "Agent")[0]}
                                     hideAvatar={hideAssistantAvatar}
                                     hideDistill={prevGroupHasPropose}
                                   />
@@ -12173,12 +10731,12 @@ export default function AgentDetailPage() {
                               t={t}
                               senderLabel={
                                 msg.role === "assistant"
-                                  ? (agent as any)?.name || "Agent"
+                                  ? agent?.name || "Agent"
                                   : currentUser?.display_name || undefined
                               }
                               avatarText={
                                 msg.role === "assistant"
-                                  ? ((agent as any)?.name || "Agent")[0]
+                                  ? (agent?.name || "Agent")[0]
                                   : currentUser?.display_name?.[0] || undefined
                               }
                               hideAvatar={hideAssistantAvatar}
@@ -12308,7 +10866,7 @@ export default function AgentDetailPage() {
                       </div>
                     ) : !wsConnected &&
                       !!currentUser &&
-                      sessionUserIdStr(activeSession) === viewerUserIdStr() ? (
+                      sessionUserIdStr(activeSession) === viewerUserIdStr ? (
                       <div
                         style={{
                           padding: "3px 16px",
@@ -12582,7 +11140,7 @@ export default function AgentDetailPage() {
                                 : !wsConnected &&
                                     !!currentUser &&
                                     sessionUserIdStr(activeSession) ===
-                                      viewerUserIdStr()
+                                      viewerUserIdStr
                                   ? "Connecting..."
                                   : t("chat.placeholder")
                             }
@@ -12614,7 +11172,7 @@ export default function AgentDetailPage() {
                             <IconPaperclip size={16} stroke={1.75} />
                           </button>
                           <ModelSwitcher
-                            value={overrideModelId}
+                            value={selectedModelId}
                             onChange={handleModelChange}
                             tenantDefaultId={myTenant?.default_model_id || null}
                             disabled={showNoModelState || !wsConnected}
@@ -12732,24 +11290,24 @@ export default function AgentDetailPage() {
 
             let filteredLogs = activityLogs;
             if (logFilter === "user") {
-              filteredLogs = activityLogs.filter((l: any) =>
-                userActionTypes.includes(l.action_type),
+              filteredLogs = activityLogs.filter((log) =>
+                userActionTypes.includes(log.action_type),
               );
             } else if (logFilter === "backend") {
               filteredLogs = activityLogs.filter(
-                (l: any) => !userActionTypes.includes(l.action_type),
+                (log) => !userActionTypes.includes(log.action_type),
               );
             } else if (logFilter === "heartbeat") {
-              filteredLogs = activityLogs.filter((l: any) =>
-                heartbeatTypes.includes(l.action_type),
+              filteredLogs = activityLogs.filter((log) =>
+                heartbeatTypes.includes(log.action_type),
               );
             } else if (logFilter === "schedule") {
-              filteredLogs = activityLogs.filter((l: any) =>
-                scheduleTypes.includes(l.action_type),
+              filteredLogs = activityLogs.filter((log) =>
+                scheduleTypes.includes(log.action_type),
               );
             } else if (logFilter === "messages") {
-              filteredLogs = activityLogs.filter((l: any) =>
-                messageTypes.includes(l.action_type),
+              filteredLogs = activityLogs.filter((log) =>
+                messageTypes.includes(log.action_type),
               );
             }
 
@@ -12811,7 +11369,7 @@ export default function AgentDetailPage() {
                       {t("agent.activityLog.userActions", "User Actions")}
                     </>,
                   )}
-                  {(agent as any)?.agent_type !== "openclaw" && (
+                  {agent?.agent_type !== "openclaw" && (
                     <>
                       {filterBtn(
                         "backend",
@@ -12873,7 +11431,7 @@ export default function AgentDetailPage() {
                       gap: "4px",
                     }}
                   >
-                    {filteredLogs.map((log: any) => {
+                    {filteredLogs.map((log) => {
                       const icons: Record<string, React.ReactNode> = {
                         chat_reply: (
                           <IconMessageCircle size={16} stroke={1.8} />
@@ -12984,25 +11542,23 @@ export default function AgentDetailPage() {
                                 overflowY: "auto",
                               }}
                             >
-                              {Object.entries(log.detail).map(
-                                ([k, v]: [string, any]) => (
-                                  <div key={k} style={{ marginBottom: "6px" }}>
-                                    <span
-                                      style={{
-                                        color: "var(--accent-primary)",
-                                        fontWeight: 600,
-                                      }}
-                                    >
-                                      {k}:
-                                    </span>{" "}
-                                    <span>
-                                      {typeof v === "object"
-                                        ? JSON.stringify(v, null, 2)
-                                        : String(v)}
-                                    </span>
-                                  </div>
-                                ),
-                              )}
+                              {Object.entries(log.detail).map(([k, v]) => (
+                                <div key={k} style={{ marginBottom: "6px" }}>
+                                  <span
+                                    style={{
+                                      color: "var(--accent-primary)",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {k}:
+                                  </span>{" "}
+                                  <span>
+                                    {typeof v === "object"
+                                      ? JSON.stringify(v, null, 2)
+                                      : String(v)}
+                                  </span>
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
@@ -13047,11 +11603,12 @@ export default function AgentDetailPage() {
             hasChanges={hasSettingsChanges}
             onSaveSettings={handleSaveSettings}
             wmDraft={wmDraft}
-            setWmDraft={setWmDraft}
+            setWmDraft={updateWmDraft}
             wmSaved={wmSaved}
             onSaveWelcomeMessage={handleSaveWelcomeMessage}
             accessPermissionsPanel={
               <AccessPermissionsPanel
+                key={`${permData?.scope_type || "company"}:${permData?.access_level || "use"}:${(permData?.user_access || []).map((user) => `${user.id}:${user.access_level}`).join(",")}`}
                 agentId={id}
                 permData={permData}
                 canManage={canManage}
@@ -13159,17 +11716,15 @@ export default function AgentDetailPage() {
               <div>
                 <h3>{t("agent.settings.expiry.title")}</h3>
                 <div className="agent-expiry-current">
-                  {(agent as any).is_expired ? (
+                  {agent.is_expired ? (
                     <span className="agent-expiry-status agent-expiry-status--expired">
                       {t("agent.settings.expiry.expired")}
                     </span>
-                  ) : (agent as any).expires_at ? (
+                  ) : agent.expires_at ? (
                     <>
                       {t("agent.settings.expiry.currentExpiry")}{" "}
                       <strong>
-                        {new Date((agent as any).expires_at).toLocaleString(
-                          tsLocale,
-                        )}
+                        {new Date(agent.expires_at).toLocaleString(tsLocale)}
                       </strong>
                     </>
                   ) : (

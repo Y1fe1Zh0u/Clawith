@@ -68,14 +68,15 @@ test("chat model choices allow every enabled model and refresh across tabs", () 
 });
 
 test("chat ignores stale preferred ids before falling back to an enabled model", () => {
-  assert.match(agentDetail, /filter\(\(m: any\) => m\.enabled\)/);
+  assert.match(agentDetail, /filter\(\(model\) => model\.enabled\)/);
   assert.match(
     agentDetail,
-    /\[\s*overrideModelId,\s*agent\?\.primary_model_id,\s*myTenant\?\.default_model_id,?\s*\]\.find\(/,
+    /\[selectedModelId, myTenant\?\.default_model_id\]\.find\(/,
   );
   assert.match(
     agentDetail,
-    /enabledLlmModels\.some\(\(model: any\) => model\.id === candidate\)/,
+    /enabledLlmModels\.some\(\(model\) => model\.id === candidate\)/,
   );
+  assert.doesNotMatch(agentDetail, /:\s*any\b|\bas\s+any\b|<any[>,]/);
   assert.match(agentDetail, /\|\|\s*enabledLlmModels\[0\]\?\.id/);
 });
