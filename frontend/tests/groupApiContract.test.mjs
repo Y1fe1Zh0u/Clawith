@@ -39,5 +39,5 @@ test("group workspace exposes binary upload progress and authenticated download 
   assert.match(source, /uploadWorkspaceFile:[\s\S]*uploadFileWithProgress/);
   assert.match(source, /workspace\/upload/);
   assert.match(source, /downloadWorkspaceUrl:[\s\S]*workspace\/download/);
-  assert.match(source, /localStorage\.getItem\('token'\)/);
+  assert.match(source, /localStorage\.getItem\(["']token["']\)/);
 });

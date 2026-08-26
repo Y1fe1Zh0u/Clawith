@@ -8,6 +8,6 @@ const source = readFileSync(
 );
 
 test("company settings do not render the protocol-level system tools group", () => {
-  assert.match(source, /if \(category === 'system'\) return null/);
+  assert.match(source, /if \(category === ["']system["']\) return null/);
   assert.doesNotMatch(source, /visibleGlobalTools/);
 });

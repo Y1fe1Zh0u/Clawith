@@ -18,7 +18,7 @@ const groupRealtime = readFileSync(
 test("group sessions are marked read only after the latest message is visibly reached", () => {
   assert.doesNotMatch(groupsPage, /const lastMessageId[\s\S]{0,800}setTimeout/);
   assert.match(messageStream, /onLatestMessageSeen/);
-  assert.match(messageStream, /document\.visibilityState !== 'visible'/);
+  assert.match(messageStream, /document\.visibilityState !== ["']visible["']/);
   assert.match(messageStream, /document\.hasFocus\(\)/);
   assert.match(groupsPage, /markLatestMessageSeen/);
   assert.doesNotMatch(
@@ -42,7 +42,7 @@ test("a trailing authoritative refresh reconciles burst realtime updates", () =>
   assert.match(groupsPage, /groupActivityRefreshTimerRef/);
   assert.match(
     groupsPage,
-    /invalidateQueries\(\{[\s\S]*?queryKey: \['group-sessions', activityGroupId\]/,
+    /invalidateQueries\(\{[\s\S]*?queryKey: \[["']group-sessions["'], activityGroupId\]/,
   );
 });
 
@@ -50,7 +50,7 @@ test("an older read response cannot clear a newer unseen realtime message", () =
   assert.match(groupsPage, /latestRealtimeMessageBySessionRef/);
   assert.match(
     groupsPage,
-    /const latestRealtimeMessageId = latestRealtimeMessageBySessionRef\.current[\s\S]*?\.get\(targetSessionId\)\?\.id/,
+    /const latestRealtimeMessageId =\s*latestRealtimeMessageBySessionRef\.current[\s\S]*?\.get\(targetSessionId\)\?\.id/,
   );
   assert.match(
     groupsPage,

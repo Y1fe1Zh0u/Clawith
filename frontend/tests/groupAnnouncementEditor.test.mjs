@@ -13,10 +13,10 @@ function draftAfterCachedMount(source, cachedContent) {
   );
   const effectEnd = source.indexOf("const commit = async");
   const effects = source.slice(effectStart, effectEnd);
-  const hydrateIndex = effects.indexOf(
-    "if (data && !dirty) setDraft(data.content);",
+  const hydrateIndex = effects.search(
+    /if \(data && !dirty\) setDraft\(data\.content\);/,
   );
-  const resetIndex = effects.indexOf("setDraft('');");
+  const resetIndex = effects.search(/setDraft\(["']["']\);/);
 
   assert.notEqual(hydrateIndex, -1, "cached-data hydration effect is missing");
   assert.notEqual(resetIndex, -1, "query-key reset effect is missing");

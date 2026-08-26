@@ -205,11 +205,11 @@ test("agent detail chunk handler uses attempt-aware reducer while done stays can
   assert.match(agentDetailSource, /reduceSessionStreamChunk/);
   assert.match(
     agentDetailSource,
-    /else if \(d\.type === 'chunk'\)[\s\S]*reduceSessionStreamChunk/,
+    /else if \(d\.type === ["']chunk["']\)[\s\S]*reduceSessionStreamChunk/,
   );
   assert.match(
     agentDetailSource,
-    /else if \(d\.type === 'done'\)[\s\S]*prev\.slice\(0, -1\), terminalMessage/,
+    /else if \(d\.type === ["']done["']\)[\s\S]*prev\.slice\(0, -1\),\s*terminalMessage/,
   );
 });
 
@@ -549,7 +549,7 @@ test("analysis cards count only Tool rows from their own user turn", () => {
   assert.doesNotMatch(agentDetailSource, /activeSession\?\.tool_call_count/);
   assert.match(
     agentDetailSource,
-    /toolCallsTotal', \{ count: toolItems\.length \}/,
+    /toolCallsTotal["'], \{ count: toolItems\.length \}/,
   );
 });
 

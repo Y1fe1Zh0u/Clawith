@@ -691,10 +691,7 @@ export default function SkillsTab(props: Props) {
                         if (!canManage) return;
                         setImportingSkillId(skill.id);
                         try {
-                          await fileApi.importSkill(
-                            agentId,
-                            skill.id,
-                          );
+                          await fileApi.importSkill(agentId, skill.id);
                           toast.success(
                             t("common.file.skillImported", {
                               name: skill.name,

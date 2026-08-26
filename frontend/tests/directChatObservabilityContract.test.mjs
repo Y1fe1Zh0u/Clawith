@@ -21,7 +21,7 @@ const runtimeErrorSource = readFileSync(
 );
 
 test("direct chat reattaches an active run from its last durable event cursor", () => {
-  assert.match(source, /type: 'attach_run'/);
+  assert.match(source, /type: ["']attach_run["']/);
   assert.match(source, /runtimeEventCursorRef/);
   assert.match(source, /event_cursor/);
   assert.match(source, /run_id: active\.runId/);
@@ -34,7 +34,7 @@ test("replayed tool packets keep one row by stable tool call id", () => {
   );
   assert.match(
     sessionRuntimeStateSource,
-    /existing\.toolStatus === 'done' && incoming\.toolStatus === 'running'/,
+    /existing\.toolStatus === ["']done["'] &&\s*incoming\.toolStatus === ["']running["']/,
   );
   assert.match(source, /toolCallId: message\.toolCallId/);
   assert.match(source, /toolCallId: m\.toolCallId/);
@@ -43,21 +43,24 @@ test("replayed tool packets keep one row by stable tool call id", () => {
 test("settled tool totals belong to the current user turn", () => {
   assert.doesNotMatch(source, /totalToolCount\?: number/);
   assert.doesNotMatch(source, /activeSession\?\.tool_call_count/);
-  assert.match(source, /toolCallsTotal', \{ count: toolItems\.length \}/);
+  assert.match(source, /toolCallsTotal["'], \{ count: toolItems\.length \}/);
 });
 
 test("an authoritative active run keeps a thinking indicator visible after reload", () => {
   assert.match(
     source,
-    /\['queued', 'running'\]\.includes\(selectedSessionActiveRun\.status\)/,
+    /\[["']queued["'], ["']running["']\]\.includes\(selectedSessionActiveRun\.status\)/,
   );
   assert.match(source, /showDirectRunThinking/);
   assert.match(source, /\{showDirectRunThinking && \(/);
-  assert.match(source, /lastChatMessage\.toolStatus === 'running'/);
+  assert.match(source, /lastChatMessage\.toolStatus === ["']running["']/);
 });
 
 test("direct chat runtime controls and delayed sends stay scoped to the selected session", () => {
-  assert.match(source, /activeRunForSession\(activeRun, activeSession\?\.id\)/);
+  assert.match(
+    source,
+    /activeRunForSession\(\s*activeRun,\s*activeSession\?\.id,?\s*\)/,
+  );
   assert.match(
     source,
     /currentAgentIdRef\.current === runtimeAgentId[\s\S]*activeSessionIdRef\.current === runtimeSessionId/,
@@ -83,7 +86,10 @@ test("background Tool packets are cached per session and restored only when sele
     source,
     /mergeSessionToolMessages\(\s*preParsed,\s*sessionToolMessagesRef\.current\[runtimeKey\] \|\| \[\],?\s*\)/,
   );
-  assert.match(source, /activeRunForSession\(activeRun, activeSession\?\.id\)/);
+  assert.match(
+    source,
+    /activeRunForSession\(\s*activeRun,\s*activeSession\?\.id,?\s*\)/,
+  );
 });
 
 test("direct chat renders canonical runtime diagnostics and keeps legacy fallbacks", () => {
@@ -102,8 +108,8 @@ test("direct chat renders canonical runtime diagnostics and keeps legacy fallbac
 });
 
 test("runtime error classification uses stable codes instead of English message fragments", () => {
-  assert.match(runtimeErrorSource, /error\.code === 'model_unavailable'/);
-  assert.match(runtimeErrorSource, /error\.code === 'agent_expired'/);
+  assert.match(runtimeErrorSource, /error\.code === ["']model_unavailable["']/);
+  assert.match(runtimeErrorSource, /error\.code === ["']agent_expired["']/);
   assert.doesNotMatch(runtimeErrorSource, /\.includes\(/);
 });
 

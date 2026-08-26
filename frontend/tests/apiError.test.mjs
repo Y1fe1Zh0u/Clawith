@@ -183,11 +183,11 @@ test("normal requests and both upload transports use the shared parser", () => {
     /const apiError = await parseHttpErrorResponse\(res\)/,
   );
   assert.match(apiSource, /throw await parseHttpErrorResponse\(res\)/);
-  assert.match(apiSource, /reject\(parseHttpError\(\{/);
-  assert.match(apiSource, /getResponseHeader\('X-Trace-Id'\)/);
+  assert.match(apiSource, /reject\(\s*parseHttpError\(\{/);
+  assert.match(apiSource, /getResponseHeader\(["']X-Trace-Id["']\)/);
   assert.match(
     enterpriseFetcher,
-    /export \{ fetchJson \} from '\.\.\/\.\.\/\.\.\/services\/api';/,
+    /export \{ fetchJson \} from ["']\.\.\/\.\.\/\.\.\/services\/api["'];/,
   );
   for (const pageSource of [
     enterpriseSettings,

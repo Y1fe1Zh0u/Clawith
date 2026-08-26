@@ -30,14 +30,18 @@ const groupStyles = readFileSync(
   new URL("../src/pages/groups/groups.css", import.meta.url),
   "utf8",
 );
+const compactMessageStream = messageStream.replace(/\s+/g, " ");
 
 test("new group sessions may use the backend default title while group names stay required", () => {
   assert.match(promptModal, /allowEmpty\?: boolean/);
   assert.match(promptModal, /allowEmpty \|\| Boolean\(value\.trim\(\)\)/);
-  assert.match(groupsPage, /title=\{t\('groups\.newSession'[\s\S]*?allowEmpty/);
+  assert.match(
+    groupsPage,
+    /title=\{t\(["']groups\.newSession["'][\s\S]*?allowEmpty/,
+  );
   assert.doesNotMatch(
     groupsPage,
-    /title=\{t\('groups\.create'[\s\S]*?allowEmpty[\s\S]*?onConfirm=\{\(value\) => void createGroup/,
+    /title=\{t\(["']groups\.create["'][\s\S]*?allowEmpty[\s\S]*?onConfirm=\{\(value\) => void createGroup/,
   );
 });
 
@@ -45,19 +49,19 @@ test("name prompts do not submit while an IME is still composing text", () => {
   assert.match(promptModal, /e\.nativeEvent\.isComposing/);
   assert.match(
     promptModal,
-    /if \(e\.nativeEvent\.isComposing\) return;[\s\S]*?if \(e\.key === 'Enter'\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?confirm\(\);/,
+    /if \(e\.nativeEvent\.isComposing\) return;[\s\S]*?if \(e\.key === ["']Enter["']\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?confirm\(\);/,
   );
 });
 
 test("an inaccessible group route is not used as a message or member fetch scope", () => {
   assert.match(groupsPage, /isFetchedAfterMount: groupsFetchedAfterMount/);
   assert.match(groupsPage, /isRefetchError: groupsRefetchError/);
-  assert.match(groupsPage, /refetchOnMount: 'always'/);
+  assert.match(groupsPage, /refetchOnMount: ["']always["']/);
   assert.match(
     groupsPage,
     /const groupsReady = groupsFetchedAfterMount && !groupsRefetchError/,
   );
-  assert.match(groupsPage, /const activeGroup = groupsReady \?/);
+  assert.match(groupsPage, /const activeGroup =\s*groupsReady\s*\?/);
   assert.match(groupsPage, /queries: \(groupsReady \? groups : \[\]\)\.map/);
   assert.match(groupsPage, /enabled: Boolean\(activeGroup\)/);
   assert.match(groupsPage, /if \(!activeGroup \|\| !activeSession\)/);
@@ -68,7 +72,7 @@ test("an inaccessible group route is not used as a message or member fetch scope
     /const groupsReady = isFetchedAfterMount && !isRefetchError/,
   );
   assert.match(groupUnread, /queries: \(groupsReady \? groups : \[\]\)\.map/);
-  assert.match(groupsPage, /navigate\('\/groups', \{ replace: true \}\)/);
+  assert.match(groupsPage, /navigate\(["']\/groups["'], \{ replace: true \}\)/);
 });
 
 test("session metadata refresh does not clear and reload the visible message stream", () => {
@@ -87,15 +91,15 @@ test("session metadata refresh does not clear and reload the visible message str
 test("toast context methods keep stable identities across toast renders", () => {
   assert.match(toastProvider, /useMemo/);
   assert.match(toastProvider, /const value: ToastContextValue = useMemo\(/);
-  assert.match(toastProvider, /\}\), \[show\]\);/);
+  assert.match(toastProvider, /\}\),\s*\[show\],?\s*\);/);
 });
 
 test("group composer and stream use session-wide active runs", () => {
   assert.match(groupsPage, /groupApi\.activeRuns/);
-  assert.match(groupsPage, /\['group-active-runs', groupId, sessionId\]/);
+  assert.match(groupsPage, /\[["']group-active-runs["'], groupId, sessionId\]/);
   assert.match(groupsPage, /groupApi\.cancelRun/);
   assert.match(groupsPage, /canCancel=\{activeRunIds\.length > 0\}/);
-  assert.match(groupsPage, /run\.system_role === 'group_planning'/);
+  assert.match(groupsPage, /run\.system_role === ["']group_planning["']/);
   assert.match(groupsPage, /member\.participant_ref_id/);
   assert.match(groupsPage, /name: member\.display_name/);
   assert.match(groupsPage, /isPlanning=\{isPlanning\}/);
@@ -149,7 +153,7 @@ test("planning and running agents keep the single transient typing indicator", (
     2,
   );
   assert.equal(
-    (messageStream.match(/<span \/><span \/><span \/>/g) ?? []).length,
+    (compactMessageStream.match(/<span \/> <span \/> <span \/>/g) ?? []).length,
     2,
   );
 });

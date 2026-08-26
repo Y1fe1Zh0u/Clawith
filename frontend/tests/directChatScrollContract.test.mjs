@@ -16,7 +16,7 @@ const historyScroll = readFileSync(
 );
 
 test("direct chat keeps document scrolling separate from history pagination", () => {
-  assert.doesNotMatch(agentDetail, /height:\s*'calc\(100vh - 100px\)'/);
+  assert.doesNotMatch(agentDetail, /height:\s*["']calc\(100vh - 100px\)["']/);
   assert.equal(
     agentDetail.match(/className="agent-chat-message-scroll"/g)?.length,
     2,
@@ -43,7 +43,7 @@ test("direct chat keeps document scrolling separate from history pagination", ()
   assert.equal(
     (
       agentDetail.match(
-        /completeToolTurn: (?:historyMsgs|chatMessages)\[0\]\?\.role === 'tool_call'/g,
+        /completeToolTurn: (?:historyMsgs|chatMessages)\[0\]\?\.role === ["']tool_call["']/g,
       ) ?? []
     ).length,
     2,
@@ -55,12 +55,18 @@ test("direct chat keeps document scrolling separate from history pagination", ()
   );
   assert.match(historyScroll, /event\.deltaY >= 0/);
   assert.match(historyScroll, /currentY - startY <= 6/);
-  assert.match(historyScroll, /\['ArrowUp', 'PageUp', 'Home'\]/);
+  assert.match(
+    historyScroll,
+    /\[["']ArrowUp["'], ["']PageUp["'], ["']Home["']\]/,
+  );
   assert.match(historyScroll, /requestInFlightRef/);
   assert.match(historyScroll, /wheelGestureLatchedRef/);
   assert.match(historyScroll, /touchPageRequestedRef/);
   assert.match(historyScroll, /event\.repeat/);
-  assert.match(historyScroll, /anchor\.element\.scrollTop = anchor\.scrollTop/);
+  assert.match(
+    historyScroll,
+    /anchor\.element\.scrollTop =\s*anchor\.scrollTop/,
+  );
   assert.match(
     agentDetail,
     /if \(chatPrependAnchor\.isPrependingRef\.current\) return;/,

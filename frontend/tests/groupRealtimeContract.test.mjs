@@ -14,7 +14,7 @@ test("group realtime uses websocket push and forward cursor catch-up", () => {
 });
 
 test("group realtime accepts the canonical message.created payload", () => {
-  assert.match(source, /payload\.type !== 'message\.created'/);
+  assert.match(source, /payload\.type !== ["']message\.created["']/);
   assert.match(source, /payload\.message/);
   assert.match(source, /payload\.session_id/);
 });

@@ -161,9 +161,11 @@ export default function TakeControlPanel({
         }
       } catch (error) {
         if (mountedRef.current) {
-          setStatusText(t("takeControl.lockFailed", {
-            message: normalizeUnknownError(error).message,
-          }));
+          setStatusText(
+            t("takeControl.lockFailed", {
+              message: normalizeUnknownError(error).message,
+            }),
+          );
         }
       }
     })();
@@ -320,9 +322,11 @@ export default function TakeControlPanel({
             throw new Error(res.detail || "Drag failed");
           flashStatus(t("takeControl.dragComplete"));
         } catch (error) {
-          flashStatus(t("takeControl.dragFailed", {
-            message: normalizeUnknownError(error).message,
-          }));
+          flashStatus(
+            t("takeControl.dragFailed", {
+              message: normalizeUnknownError(error).message,
+            }),
+          );
         }
       } else {
         // --- CLICK (no significant movement) ---
@@ -339,9 +343,11 @@ export default function TakeControlPanel({
             throw new Error(res.detail || "Click failed");
           flashStatus(t("takeControl.clickedAt", { x: coords.x, y: coords.y }));
         } catch (error) {
-          flashStatus(t("takeControl.clickFailed", {
-            message: normalizeUnknownError(error).message,
-          }));
+          flashStatus(
+            t("takeControl.clickFailed", {
+              message: normalizeUnknownError(error).message,
+            }),
+          );
         }
       }
     },
@@ -371,9 +377,11 @@ export default function TakeControlPanel({
       flashStatus(t("takeControl.textSent"));
       setTextInput("");
     } catch (error) {
-      flashStatus(t("takeControl.typeFailed", {
-        message: normalizeUnknownError(error).message,
-      }));
+      flashStatus(
+        t("takeControl.typeFailed", {
+          message: normalizeUnknownError(error).message,
+        }),
+      );
     }
   }, [textInput, locked, agentId, sessionId, flashStatus]);
 
@@ -391,9 +399,11 @@ export default function TakeControlPanel({
           throw new Error(res.detail || "Press failed");
         flashStatus(t("takeControl.pressed", { keys: keys.join("+") }));
       } catch (error) {
-        flashStatus(t("takeControl.pressFailed", {
-          message: normalizeUnknownError(error).message,
-        }));
+        flashStatus(
+          t("takeControl.pressFailed", {
+            message: normalizeUnknownError(error).message,
+          }),
+        );
       }
     },
     [locked, agentId, sessionId, flashStatus],
@@ -447,9 +457,11 @@ export default function TakeControlPanel({
       }
       setTimeout(onClose, 1200);
     } catch (error) {
-      flashStatus(t("takeControl.unlockFailed", {
-        message: normalizeUnknownError(error).message,
-      }));
+      flashStatus(
+        t("takeControl.unlockFailed", {
+          message: normalizeUnknownError(error).message,
+        }),
+      );
       // Re-enable lock state if unlock request failed so user can try again
       setLocked(true);
       lockedRef.current = true;

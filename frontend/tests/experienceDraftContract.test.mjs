@@ -19,11 +19,11 @@ test("editing a published experience saves through an independent revision draft
   );
   assert.match(
     editor,
-    /const isRevisionSource = draft\.status === 'published' \|\| draft\.status === 'retired'/,
+    /const isRevisionSource =\s*draft\.status === ["']published["'] \|\|\s*draft\.status === ["']retired["']/,
   );
   assert.match(
     editor,
-    /if \(isRevisionSource\) return experienceApi\.createRevision\(draft\.id!, payload\)/,
+    /if \(isRevisionSource\)\s*return experienceApi\.createRevision\(draft\.id!, payload\)/,
   );
 });
 
@@ -37,7 +37,7 @@ test("publishing a published-entry edit promotes its revision instead of patchin
 test("the editor never offers draft deletion for a live published entry", () => {
   assert.match(
     editor,
-    /const canDelete = draft\.status === 'draft' \|\| draft\.status === 'retired'/,
+    /const canDelete =\s*draft\.status === ["']draft["'] \|\|\s*draft\.status === ["']retired["']/,
   );
   assert.match(editor, /\{canDelete && onDeleted && \(/);
   assert.doesNotMatch(editor, /\{!isNew && onDeleted && \(/);
