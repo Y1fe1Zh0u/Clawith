@@ -239,7 +239,13 @@ export const groupApi = {
     requireAbsent = false,
     onProgress?: (percent: number) => void,
   ) =>
-    uploadFileWithProgress(
+    uploadFileWithProgress<{
+      path: string;
+      size: number;
+      version_token: string;
+      modified_at?: string | null;
+      revision_id?: string | null;
+    }>(
       `/groups/${groupId}/workspace/upload${qs({
         path,
         expected_version_token: expectedVersionToken ?? undefined,
@@ -247,13 +253,7 @@ export const groupApi = {
       })}`,
       file,
       onProgress,
-    ).promise as Promise<{
-      path: string;
-      size: number;
-      version_token: string;
-      modified_at?: string | null;
-      revision_id?: string | null;
-    }>,
+    ).promise,
 
   downloadWorkspaceUrl: (
     groupId: string,

@@ -2,6 +2,56 @@
 
 import type { Agent, TokenResponse, User, Task } from "../types";
 import type { OAuthTenantChoice } from "./oauthCallbackResponse";
+import type {
+  ActivityItem,
+  AgentCollaborator,
+  AgentCreateRequest,
+  AgentMetrics,
+  AgentTemplate,
+  ChannelConfig,
+  ChannelConfigRequest,
+  ClawhubSkill,
+  CompanyCreateResponse,
+  CompanyStats,
+  ControlScreenshotResponse,
+  ControlStatusResponse,
+  ControlUnlockResponse,
+  CreatedAgent,
+  Credential,
+  CredentialMutationRequest,
+  FileItem,
+  FileLockResponse,
+  FileMutationResponse,
+  FilePreview,
+  FileRevision,
+  GatewayMessage,
+  InboxMessage,
+  JsonValue,
+  LlmModel,
+  OnboardingStatus,
+  PersonalAssistantResponse,
+  PlatformSettings,
+  ResolvedTenant,
+  Schedule,
+  ScheduleCreateRequest,
+  ScheduleHistoryItem,
+  ScheduleRunResponse,
+  ScheduleUpdateRequest,
+  Skill,
+  SkillImportResult,
+  SkillMutationRequest,
+  SkillUrlPreview,
+  TaskCreateRequest,
+  TaskTriggerResponse,
+  Tenant,
+  TenantChoice,
+  TenantSetupResponse,
+  TenantTokenUsage,
+  TenantUpdate,
+  Trigger,
+  TriggerUpdateRequest,
+  UploadResponse,
+} from "./apiContracts";
 import {
   AppError,
   parseHttpError,
@@ -58,11 +108,11 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
 /** Legacy/Internal generic fetcher */
 export const fetchJson = request;
 
-async function uploadFile(
+async function uploadFile<T = UploadResponse>(
   url: string,
   file: File,
   extraFields?: Record<string, string>,
-): Promise<any> {
+): Promise<T> {
   const token = localStorage.getItem("token");
   const formData = new FormData();
   formData.append("file", file);
@@ -94,15 +144,15 @@ async function uploadFile(
 // Upload with progress tracking via XMLHttpRequest.
 // Returns { promise, abort } — call abort() to cancel the upload.
 // Progress callback: 0-100 = upload phase, 101 = processing phase (server is parsing the file).
-export function uploadFileWithProgress(
+export function uploadFileWithProgress<T = UploadResponse>(
   url: string,
   file: File,
   onProgress?: (percent: number) => void,
   extraFields?: Record<string, string>,
   timeoutMs: number = 120_000,
-): { promise: Promise<any>; abort: () => void } {
+): { promise: Promise<T>; abort: () => void } {
   const xhr = new XMLHttpRequest();
-  const promise = new Promise<any>((resolve, reject) => {
+  const promise = new Promise<T>((resolve, reject) => {
     const token = localStorage.getItem("token");
     const formData = new FormData();
     formData.append("file", file);
@@ -130,7 +180,14 @@ export function uploadFileWithProgress(
         try {
           resolve(JSON.parse(xhr.responseText));
         } catch {
-          resolve(undefined);
+          reject(
+            new AppError({
+              message: "Upload returned an invalid JSON response",
+              code: "invalid_upload_response",
+              source: "http",
+              retryable: false,
+            }),
+          );
         }
       } else {
         reject(
@@ -250,7 +307,7 @@ export const authApi = {
       body: JSON.stringify({ email }),
     }),
 
-  getMyTenants: () => request<any[]>("/auth/my-tenants"),
+  getMyTenants: () => request<TenantChoice[]>("/auth/my-tenants"),
 
   switchTenant: (tenantId: string) =>
     request<{ access_token: string; redirect_url?: string; message?: string }>(
@@ -262,13 +319,13 @@ export const authApi = {
 // ─── Tenants ──────────────────────────────────────────
 export const tenantApi = {
   selfCreate: (data: { name: string }) =>
-    request<any>("/tenants/self-create", {
+    request<TenantSetupResponse>("/tenants/self-create", {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
   join: (invitationCode: string) =>
-    request<any>("/tenants/join", {
+    request<TenantSetupResponse>("/tenants/join", {
       method: "POST",
       body: JSON.stringify({ invitation_code: invitationCode }),
     }),
@@ -279,26 +336,20 @@ export const tenantApi = {
     ),
 
   resolveByDomain: (domain: string) =>
-    request<any>(
+    request<ResolvedTenant>(
       `/tenants/resolve-by-domain?domain=${encodeURIComponent(domain)}`,
     ),
 
-  me: () =>
-    request<{
-      id: string;
-      name: string;
-      default_model_id: string | null;
-      [k: string]: any;
-    }>("/tenants/me"),
+  me: () => request<Tenant>("/tenants/me"),
 
-  tokenUsage: () => request<any>("/tenants/me/token-usage"),
+  tokenUsage: () => request<TenantTokenUsage>("/tenants/me/token-usage"),
 };
 
 export const onboardingApi = {
-  status: () => request<any>("/onboarding/status"),
+  status: () => request<OnboardingStatus>("/onboarding/status"),
 
   start: (entryMode: "create" | "join") =>
-    request<any>("/onboarding/start", {
+    request<OnboardingStatus>("/onboarding/start", {
       method: "POST",
       body: JSON.stringify({ entry_mode: entryMode }),
     }),
@@ -309,36 +360,38 @@ export const onboardingApi = {
     work_style: string;
     boundaries?: string;
   }) =>
-    request<any>("/onboarding/personal-assistant", {
+    request<PersonalAssistantResponse>("/onboarding/personal-assistant", {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  complete: () => request<any>("/onboarding/complete", { method: "POST" }),
+  complete: () =>
+    request<OnboardingStatus>("/onboarding/complete", { method: "POST" }),
 };
 
 export const adminApi = {
-  listCompanies: () => request<any[]>("/admin/companies"),
+  listCompanies: () => request<CompanyStats[]>("/admin/companies"),
 
   createCompany: (data: { name: string }) =>
-    request<any>("/admin/companies", {
+    request<CompanyCreateResponse>("/admin/companies", {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  updateCompany: (id: string, data: any) =>
-    request<any>(`/tenants/${id}`, {
+  updateCompany: (id: string, data: TenantUpdate) =>
+    request<Tenant>(`/tenants/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
 
   toggleCompany: (id: string) =>
-    request<any>(`/admin/companies/${id}/toggle`, { method: "PUT" }),
+    request<CompanyStats>(`/admin/companies/${id}/toggle`, { method: "PUT" }),
 
-  getPlatformSettings: () => request<any>("/admin/platform-settings"),
+  getPlatformSettings: () =>
+    request<PlatformSettings>("/admin/platform-settings"),
 
-  updatePlatformSettings: (data: any) =>
-    request<any>("/admin/platform-settings", {
+  updatePlatformSettings: (data: Partial<PlatformSettings>) =>
+    request<PlatformSettings>("/admin/platform-settings", {
       method: "PUT",
       body: JSON.stringify(data),
     }),
@@ -351,8 +404,11 @@ export const agentApi = {
 
   get: (id: string) => request<Agent>(`/agents/${id}`),
 
-  create: (data: any) =>
-    request<any>("/agents/", { method: "POST", body: JSON.stringify(data) }),
+  create: (data: AgentCreateRequest) =>
+    request<CreatedAgent>("/agents/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   update: (id: string, data: Partial<Agent>) =>
     request<Agent>(`/agents/${id}`, {
@@ -368,11 +424,12 @@ export const agentApi = {
   stop: (id: string) =>
     request<Agent>(`/agents/${id}/stop`, { method: "POST" }),
 
-  metrics: (id: string) => request<any>(`/agents/${id}/metrics`),
+  metrics: (id: string) => request<AgentMetrics>(`/agents/${id}/metrics`),
 
-  collaborators: (id: string) => request<any[]>(`/agents/${id}/collaborators`),
+  collaborators: (id: string) =>
+    request<AgentCollaborator[]>(`/agents/${id}/collaborators`),
 
-  templates: () => request<any[]>("/agents/templates"),
+  templates: () => request<AgentTemplate[]>("/agents/templates"),
 
   // OpenClaw gateway
   generateApiKey: (id: string) =>
@@ -381,7 +438,7 @@ export const agentApi = {
     }),
 
   gatewayMessages: (id: string) =>
-    request<any[]>(`/agents/${id}/gateway-messages`),
+    request<GatewayMessage[]>(`/agents/${id}/gateway-messages`),
 };
 
 // ─── Tasks ────────────────────────────────────────────
@@ -393,7 +450,7 @@ export const taskApi = {
     return request<Task[]>(`/agents/${agentId}/tasks/?${params}`);
   },
 
-  create: (agentId: string, data: any) =>
+  create: (agentId: string, data: TaskCreateRequest) =>
     request<Task>(`/agents/${agentId}/tasks/`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -411,7 +468,7 @@ export const taskApi = {
     >(`/agents/${agentId}/tasks/${taskId}/logs`),
 
   trigger: (agentId: string, taskId: string) =>
-    request<any>(`/agents/${agentId}/tasks/${taskId}/trigger`, {
+    request<TaskTriggerResponse>(`/agents/${agentId}/tasks/${taskId}/trigger`, {
       method: "POST",
     }),
 };
@@ -419,7 +476,7 @@ export const taskApi = {
 // ─── Files ────────────────────────────────────────────
 export const fileApi = {
   list: (agentId: string, path: string = "") =>
-    request<any[]>(
+    request<FileItem[]>(
       `/agents/${agentId}/files/?path=${encodeURIComponent(path)}`,
     ),
 
@@ -464,18 +521,18 @@ export const fileApi = {
     ),
 
   preview: (agentId: string, path: string) =>
-    request<any>(
+    request<FilePreview>(
       `/agents/${agentId}/files/preview?path=${encodeURIComponent(path)}`,
     ),
 
   lock: (agentId: string, path: string, sessionId?: string | null) =>
-    request<any>(`/agents/${agentId}/files/locks`, {
+    request<FileLockResponse>(`/agents/${agentId}/files/locks`, {
       method: "POST",
       body: JSON.stringify({ path, session_id: sessionId || undefined }),
     }),
 
   unlock: (agentId: string, path: string) =>
-    request<any>(
+    request<FileLockResponse>(
       `/agents/${agentId}/files/locks?path=${encodeURIComponent(path)}`,
       {
         method: "DELETE",
@@ -483,12 +540,12 @@ export const fileApi = {
     ),
 
   revisions: (agentId: string, path: string) =>
-    request<any[]>(
+    request<FileRevision[]>(
       `/agents/${agentId}/files/revisions?path=${encodeURIComponent(path)}`,
     ),
 
   restoreRevision: (agentId: string, revisionId: string) =>
-    request<any>(`/agents/${agentId}/files/restore`, {
+    request<FileMutationResponse>(`/agents/${agentId}/files/restore`, {
       method: "POST",
       body: JSON.stringify({ revision_id: revisionId }),
     }),
@@ -511,7 +568,7 @@ export const fileApi = {
         ),
 
   importSkill: (agentId: string, skillId: string) =>
-    request<any>(`/agents/${agentId}/files/import-skill`, {
+    request<FileMutationResponse>(`/agents/${agentId}/files/import-skill`, {
       method: "POST",
       body: JSON.stringify({ skill_id: skillId }),
     }),
@@ -537,7 +594,7 @@ export type FocusApiItem = {
   status: "in_progress" | "completed";
   kind: "normal" | "system";
   source: string;
-  metadata?: Record<string, any>;
+  metadata?: { [key: string]: JsonValue };
   sort_order: number;
   completed_at?: string | null;
   created_at?: string | null;
@@ -557,10 +614,10 @@ export const focusApi = {
       key?: string;
       title?: string | null;
       description: string;
-      status?: string;
-      kind?: string;
+      status?: FocusApiItem["status"];
+      kind?: FocusApiItem["kind"];
       source?: string;
-      metadata?: Record<string, any>;
+      metadata?: { [key: string]: JsonValue };
     },
   ) =>
     request<FocusApiItem>(`/agents/${agentId}/focus/`, {
@@ -578,16 +635,16 @@ export const focusApi = {
 // ─── Channel Config ───────────────────────────────────
 export const channelApi = {
   get: (agentId: string) =>
-    request<any>(`/agents/${agentId}/channel`).catch(() => null),
+    request<ChannelConfig>(`/agents/${agentId}/channel`).catch(() => null),
 
-  create: (agentId: string, data: any) =>
-    request<any>(`/agents/${agentId}/channel`, {
+  create: (agentId: string, data: ChannelConfigRequest) =>
+    request<ChannelConfig>(`/agents/${agentId}/channel`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  update: (agentId: string, data: any) =>
-    request<any>(`/agents/${agentId}/channel`, {
+  update: (agentId: string, data: ChannelConfigRequest) =>
+    request<ChannelConfig>(`/agents/${agentId}/channel`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
@@ -605,7 +662,7 @@ export const channelApi = {
 export const enterpriseApi = {
   llmModels: () => {
     const tid = localStorage.getItem("current_tenant_id");
-    return request<any[]>(
+    return request<LlmModel[]>(
       `/enterprise/llm-models${tid ? `?tenant_id=${tid}` : ""}`,
     );
   },
@@ -614,11 +671,11 @@ export const enterpriseApi = {
     request<void>(`/enterprise/llm-models/${modelId}/set-default`, {
       method: "POST",
     }),
-  templates: () => request<any[]>("/agents/templates"),
+  templates: () => request<AgentTemplate[]>("/agents/templates"),
 
   // Enterprise Knowledge Base
   kbFiles: (path: string = "") =>
-    request<any[]>(
+    request<FileItem[]>(
       `/enterprise/knowledge-base/files?path=${encodeURIComponent(path)}`,
     ),
 
@@ -654,12 +711,13 @@ export const enterpriseApi = {
 // ─── Activity Logs ────────────────────────────────────
 export const activityApi = {
   list: (agentId: string, limit = 50) =>
-    request<any[]>(`/agents/${agentId}/activity?limit=${limit}`),
+    request<ActivityItem[]>(`/agents/${agentId}/activity?limit=${limit}`),
 };
 
 // ─── Messages ─────────────────────────────────────────
 export const messageApi = {
-  inbox: (limit = 50) => request<any[]>(`/messages/inbox?limit=${limit}`),
+  inbox: (limit = 50) =>
+    request<InboxMessage[]>(`/messages/inbox?limit=${limit}`),
 
   unreadCount: () =>
     request<{ unread_count: number }>("/messages/unread-count"),
@@ -672,24 +730,17 @@ export const messageApi = {
 
 // ─── Schedules ────────────────────────────────────────
 export const scheduleApi = {
-  list: (agentId: string) => request<any[]>(`/agents/${agentId}/schedules/`),
+  list: (agentId: string) =>
+    request<Schedule[]>(`/agents/${agentId}/schedules/`),
 
-  create: (
-    agentId: string,
-    data: {
-      name: string;
-      instruction: string;
-      cron_expr: string;
-      delivery_target_id?: string | null;
-    },
-  ) =>
-    request<any>(`/agents/${agentId}/schedules/`, {
+  create: (agentId: string, data: ScheduleCreateRequest) =>
+    request<Schedule>(`/agents/${agentId}/schedules/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  update: (agentId: string, scheduleId: string, data: any) =>
-    request<any>(`/agents/${agentId}/schedules/${scheduleId}`, {
+  update: (agentId: string, scheduleId: string, data: ScheduleUpdateRequest) =>
+    request<Schedule>(`/agents/${agentId}/schedules/${scheduleId}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
@@ -700,22 +751,27 @@ export const scheduleApi = {
     }),
 
   trigger: (agentId: string, scheduleId: string) =>
-    request<any>(`/agents/${agentId}/schedules/${scheduleId}/run`, {
-      method: "POST",
-    }),
+    request<ScheduleRunResponse>(
+      `/agents/${agentId}/schedules/${scheduleId}/run`,
+      {
+        method: "POST",
+      },
+    ),
 
   history: (agentId: string, scheduleId: string) =>
-    request<any[]>(`/agents/${agentId}/schedules/${scheduleId}/history`),
+    request<ScheduleHistoryItem[]>(
+      `/agents/${agentId}/schedules/${scheduleId}/history`,
+    ),
 };
 
 // ─── Skills ───────────────────────────────────────────
 export const skillApi = {
-  list: () => request<any[]>("/skills/"),
-  get: (id: string) => request<any>(`/skills/${id}`),
-  create: (data: any) =>
-    request<any>("/skills/", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: string, data: any) =>
-    request<any>(`/skills/${id}`, {
+  list: () => request<Skill[]>("/skills/"),
+  get: (id: string) => request<Skill>(`/skills/${id}`),
+  create: (data: SkillMutationRequest) =>
+    request<Skill>("/skills/", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<SkillMutationRequest>) =>
+    request<Skill>(`/skills/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
@@ -723,39 +779,47 @@ export const skillApi = {
   // Path-based browse for FileBrowser
   browse: {
     list: (path: string) =>
-      request<any[]>(`/skills/browse/list?path=${encodeURIComponent(path)}`),
+      request<FileItem[]>(
+        `/skills/browse/list?path=${encodeURIComponent(path)}`,
+      ),
     read: (path: string) =>
       request<{ content: string }>(
         `/skills/browse/read?path=${encodeURIComponent(path)}`,
       ),
     write: (path: string, content: string) =>
-      request<any>("/skills/browse/write", {
+      request<FileMutationResponse>("/skills/browse/write", {
         method: "PUT",
         body: JSON.stringify({ path, content }),
       }),
     delete: (path: string) =>
-      request<any>(`/skills/browse/delete?path=${encodeURIComponent(path)}`, {
-        method: "DELETE",
-      }),
+      request<FileMutationResponse>(
+        `/skills/browse/delete?path=${encodeURIComponent(path)}`,
+        {
+          method: "DELETE",
+        },
+      ),
   },
   // ClawHub marketplace integration
   clawhub: {
     search: (q: string) =>
-      request<any[]>(`/skills/clawhub/search?q=${encodeURIComponent(q)}`),
-    detail: (slug: string) => request<any>(`/skills/clawhub/detail/${slug}`),
+      request<ClawhubSkill[]>(
+        `/skills/clawhub/search?q=${encodeURIComponent(q)}`,
+      ),
+    detail: (slug: string) =>
+      request<ClawhubSkill>(`/skills/clawhub/detail/${slug}`),
     install: (slug: string) =>
-      request<any>("/skills/clawhub/install", {
+      request<SkillImportResult>("/skills/clawhub/install", {
         method: "POST",
         body: JSON.stringify({ slug }),
       }),
   },
   importFromUrl: (url: string) =>
-    request<any>("/skills/import-from-url", {
+    request<SkillImportResult>("/skills/import-from-url", {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
   previewUrl: (url: string) =>
-    request<any>("/skills/import-from-url/preview", {
+    request<SkillUrlPreview>("/skills/import-from-url/preview", {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
@@ -770,12 +834,12 @@ export const skillApi = {
         clawhub_masked: string;
       }>("/skills/settings/token"),
     setToken: (github_token: string) =>
-      request<any>("/skills/settings/token", {
+      request<{ configured: boolean }>("/skills/settings/token", {
         method: "PUT",
         body: JSON.stringify({ github_token }),
       }),
     setClawhubKey: (clawhub_key: string) =>
-      request<any>("/skills/settings/token", {
+      request<{ clawhub_configured: boolean }>("/skills/settings/token", {
         method: "PUT",
         body: JSON.stringify({ clawhub_key }),
       }),
@@ -783,12 +847,15 @@ export const skillApi = {
   // Agent-level import (writes to agent workspace)
   agentImport: {
     fromClawhub: (agentId: string, slug: string) =>
-      request<any>(`/agents/${agentId}/files/import-from-clawhub`, {
-        method: "POST",
-        body: JSON.stringify({ slug }),
-      }),
+      request<SkillImportResult>(
+        `/agents/${agentId}/files/import-from-clawhub`,
+        {
+          method: "POST",
+          body: JSON.stringify({ slug }),
+        },
+      ),
     fromUrl: (agentId: string, url: string) =>
-      request<any>(`/agents/${agentId}/files/import-from-url`, {
+      request<SkillImportResult>(`/agents/${agentId}/files/import-from-url`, {
         method: "POST",
         body: JSON.stringify({ url }),
       }),
@@ -797,10 +864,10 @@ export const skillApi = {
 
 // ─── Triggers (Aware Engine) ──────────────────────────
 export const triggerApi = {
-  list: (agentId: string) => request<any[]>(`/agents/${agentId}/triggers`),
+  list: (agentId: string) => request<Trigger[]>(`/agents/${agentId}/triggers`),
 
-  update: (agentId: string, triggerId: string, data: any) =>
-    request<any>(`/agents/${agentId}/triggers/${triggerId}`, {
+  update: (agentId: string, triggerId: string, data: TriggerUpdateRequest) =>
+    request<{ ok: boolean }>(`/agents/${agentId}/triggers/${triggerId}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
@@ -813,16 +880,21 @@ export const triggerApi = {
 
 // ─── Agent Credentials ────────────────────────────────
 export const credentialApi = {
-  list: (agentId: string) => request<any[]>(`/agents/${agentId}/credentials/`),
+  list: (agentId: string) =>
+    request<Credential[]>(`/agents/${agentId}/credentials/`),
 
-  create: (agentId: string, data: any) =>
-    request<any>(`/agents/${agentId}/credentials/`, {
+  create: (agentId: string, data: CredentialMutationRequest) =>
+    request<Credential>(`/agents/${agentId}/credentials/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
-  update: (agentId: string, credentialId: string, data: any) =>
-    request<any>(`/agents/${agentId}/credentials/${credentialId}`, {
+  update: (
+    agentId: string,
+    credentialId: string,
+    data: CredentialMutationRequest,
+  ) =>
+    request<Credential>(`/agents/${agentId}/credentials/${credentialId}`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
@@ -839,19 +911,19 @@ export const controlApi = {
     agentId: string,
     data: { session_id: string; x: number; y: number; button?: string },
   ) =>
-    request<any>(`/agents/${agentId}/control/click`, {
+    request<ControlStatusResponse>(`/agents/${agentId}/control/click`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
   type: (agentId: string, data: { session_id: string; text: string }) =>
-    request<any>(`/agents/${agentId}/control/type`, {
+    request<ControlStatusResponse>(`/agents/${agentId}/control/type`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
 
   pressKeys: (agentId: string, data: { session_id: string; keys: string[] }) =>
-    request<any>(`/agents/${agentId}/control/press_keys`, {
+    request<ControlStatusResponse>(`/agents/${agentId}/control/press_keys`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -868,7 +940,7 @@ export const controlApi = {
       duration_ms?: number;
     },
   ) =>
-    request<any>(`/agents/${agentId}/control/drag`, {
+    request<ControlStatusResponse>(`/agents/${agentId}/control/drag`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -881,16 +953,19 @@ export const controlApi = {
     ),
 
   screenshot: (agentId: string, data: { session_id: string }) =>
-    request<any>(`/agents/${agentId}/control/screenshot`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlScreenshotResponse>(
+      `/agents/${agentId}/control/screenshot`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    ),
 
   lock: (
     agentId: string,
     data: { session_id: string; platform_hint?: string; env_type?: string },
   ) =>
-    request<any>(`/agents/${agentId}/control/lock`, {
+    request<ControlStatusResponse>(`/agents/${agentId}/control/lock`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -903,7 +978,7 @@ export const controlApi = {
       platform_hint?: string;
     },
   ) =>
-    request<any>(`/agents/${agentId}/control/unlock`, {
+    request<ControlUnlockResponse>(`/agents/${agentId}/control/unlock`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
