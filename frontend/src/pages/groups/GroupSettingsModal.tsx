@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconPlus, IconRobot, IconUser, IconX } from "@tabler/icons-react";
 import { groupApi } from "../../services/groupApi";
+import { caughtErrorMessage } from "../../services/apiError";
 import { useToast } from "../../components/Toast/ToastProvider";
 import ConfirmModal from "../../components/ConfirmModal";
 import type { Group, GroupMember } from "../../types/group";
@@ -54,8 +55,10 @@ export default function GroupSettingsModal({
       await groupApi.update(group.id, { name: name.trim(), description });
       toast.success(t("groups.settingsSaved", "已保存"));
       onUpdated();
-    } catch (error: any) {
-      toast.error(error?.message ?? t("groups.settingsSaveFailed", "保存失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.settingsSaveFailed", "保存失败"),
+      );
     } finally {
       setSaving(false);
     }
@@ -69,8 +72,10 @@ export default function GroupSettingsModal({
         t("groups.removed", "已移出 {{name}}", { name: removing.display_name }),
       );
       onMembersChanged();
-    } catch (error: any) {
-      toast.error(error?.message ?? t("groups.removeFailed", "移出成员失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.removeFailed", "移出成员失败"),
+      );
     } finally {
       setRemoving(null);
     }
