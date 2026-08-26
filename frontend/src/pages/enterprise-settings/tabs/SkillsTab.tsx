@@ -5,6 +5,7 @@ import PromptModal from "../../../components/PromptModal";
 import FileBrowser from "../../../components/FileBrowser";
 import type { FileBrowserApi } from "../../../components/FileBrowser";
 import { skillApi } from "../../../services/api";
+import { caughtErrorMessage } from "../../../services/apiError";
 import { fetchJson } from "../utils/fetchJson";
 import { useAuthStore } from "../../../stores";
 import {
@@ -73,8 +74,8 @@ export default function SkillsTab() {
     try {
       const results = await skillApi.clawhub.search(searchQuery);
       setSearchResults(results);
-    } catch (e: any) {
-      showToast(e.message || "Search failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Search failed", "error");
     }
     setSearching(false);
   };
@@ -95,8 +96,8 @@ export default function SkillsTab() {
       setRefreshKey((k) => k + 1);
       // Remove from search results
       setSearchResults((prev) => prev.filter((r) => r.slug !== slug));
-    } catch (e: any) {
-      showToast(e.message || "Install failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Install failed", "error");
     }
     setInstalling(null);
   };
@@ -108,8 +109,8 @@ export default function SkillsTab() {
     try {
       const preview = await skillApi.previewUrl(urlInput);
       setUrlPreview(preview);
-    } catch (e: any) {
-      showToast(e.message || "Preview failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Preview failed", "error");
     }
     setUrlPreviewing(false);
   };
@@ -124,8 +125,8 @@ export default function SkillsTab() {
       setShowUrlModal(false);
       setUrlInput("");
       setUrlPreview(null);
-    } catch (e: any) {
-      showToast(e.message || "Import failed", "error");
+    } catch (error) {
+      showToast(caughtErrorMessage(error) || "Import failed", "error");
     }
     setUrlImporting(false);
   };
@@ -400,9 +401,10 @@ export default function SkillsTab() {
                   setTokenStatus(status);
                   setTokenInput("");
                   showToast(t("enterprise.tools.githubTokenSaved"));
-                } catch (e: any) {
+                } catch (error) {
                   showToast(
-                    e.message || t("enterprise.tools.failedToSave"),
+                    caughtErrorMessage(error) ||
+                      t("enterprise.tools.failedToSave"),
                     "error",
                   );
                 }
@@ -423,9 +425,9 @@ export default function SkillsTab() {
                     const status = await skillApi.settings.getToken();
                     setTokenStatus(status);
                     showToast(t("enterprise.tools.tokenCleared"));
-                  } catch (e: any) {
+                  } catch (error) {
                     showToast(
-                      e.message || t("enterprise.tools.failed"),
+                      caughtErrorMessage(error) || t("enterprise.tools.failed"),
                       "error",
                     );
                   }
@@ -557,9 +559,10 @@ export default function SkillsTab() {
                     setTokenStatus(status);
                     setClawhubKeyInput("");
                     showToast(t("enterprise.tools.clawhubApiKeySaved"));
-                  } catch (e: any) {
+                  } catch (error) {
                     showToast(
-                      e.message || t("enterprise.tools.failedToSave"),
+                      caughtErrorMessage(error) ||
+                        t("enterprise.tools.failedToSave"),
                       "error",
                     );
                   }
@@ -580,9 +583,10 @@ export default function SkillsTab() {
                       const status = await skillApi.settings.getToken();
                       setTokenStatus(status);
                       showToast(t("enterprise.tools.tokenCleared"));
-                    } catch (e: any) {
+                    } catch (error) {
                       showToast(
-                        e.message || t("enterprise.tools.failed"),
+                        caughtErrorMessage(error) ||
+                          t("enterprise.tools.failed"),
                         "error",
                       );
                     }
@@ -1239,9 +1243,9 @@ function CompanyLogoEditor() {
       setCropSource(null);
       qc.invalidateQueries({ queryKey: ["tenant", tenantId] });
       qc.invalidateQueries({ queryKey: ["my-tenants"] });
-    } catch (e: any) {
+    } catch (error) {
       setLogoError(
-        e.message ||
+        caughtErrorMessage(error) ||
           t("enterprise.logo.uploadFailed", "Failed to upload logo."),
       );
     } finally {
@@ -1268,9 +1272,10 @@ function CompanyLogoEditor() {
       setLogoUrl("");
       qc.invalidateQueries({ queryKey: ["tenant", tenantId] });
       qc.invalidateQueries({ queryKey: ["my-tenants"] });
-    } catch (e: any) {
+    } catch (error) {
       setLogoError(
-        e.message || t("enterprise.logo.resetFailed", "Failed to reset logo."),
+        caughtErrorMessage(error) ||
+          t("enterprise.logo.resetFailed", "Failed to reset logo."),
       );
     } finally {
       setLogoSaving(false);
@@ -1530,8 +1535,8 @@ function CompanyTimezoneEditor() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e: any) {
-      setError(e.message || "Failed to save timezone");
+    } catch (error) {
+      setError(caughtErrorMessage(error) || "Failed to save timezone");
     }
     setSaving(false);
   };
@@ -1840,9 +1845,9 @@ function A2AAsyncToggle() {
         method: "PUT",
         body: JSON.stringify({ a2a_async_enabled: next }),
       });
-    } catch (e: any) {
+    } catch (error) {
       setEnabled(!next);
-      setError(e.message || "Failed to save A2A setting");
+      setError(caughtErrorMessage(error) || "Failed to save A2A setting");
     } finally {
       setSaving(false);
     }
@@ -1998,9 +2003,9 @@ function BroadcastSection() {
       setTitle("");
       setBody("");
       setSendEmail(false);
-    } catch (e: any) {
+    } catch (error) {
       toast.error(t("common.error.broadcastFailed"), {
-        details: String(e?.message || e),
+        details: String(caughtErrorMessage(error) || error),
       });
     }
     setSending(false);
