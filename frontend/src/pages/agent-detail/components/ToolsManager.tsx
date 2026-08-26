@@ -14,6 +14,7 @@ import {
 
 import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { useToast } from "../../../components/Toast/ToastProvider";
+import { caughtErrorMessage } from "../../../services/apiError";
 import { useAuthStore } from "../../../stores";
 import {
   closeMcpAuthorizationWindow,
@@ -326,9 +327,9 @@ export default function ToolsManager({
         setConfigTool(null);
       }
       loadTools();
-    } catch (e: any) {
+    } catch (error) {
       toast.error(t("common.error.saveFailed"), {
-        details: String(e?.message || e),
+        details: String(caughtErrorMessage(error) || error),
       });
     }
     setConfigSaving(false);
@@ -539,7 +540,7 @@ export default function ToolsManager({
           ),
         );
       }
-    } catch (error: any) {
+    } catch (error) {
       closeMcpAuthorizationWindow(authorizationWindow);
       setMcpAuthorizationStates((prev) => ({
         ...prev,
@@ -550,7 +551,7 @@ export default function ToolsManager({
           "agent.tools.authorizationCheckFailed",
           "Could not check MCP authorization.",
         ),
-        { details: String(error?.message || error) },
+        { details: String(caughtErrorMessage(error) || error) },
       );
     } finally {
       setCheckingMcpAuthorizationGroup(null);
@@ -713,9 +714,9 @@ export default function ToolsManager({
                   if (res.ok) await loadTools();
                   else
                     toast.error(t("agent.tools.deleteFailed", "Delete failed"));
-                } catch (e: any) {
+                } catch (error) {
                   toast.error(t("agent.tools.deleteFailed", "Delete failed"), {
-                    details: String(e?.message || e),
+                    details: String(caughtErrorMessage(error) || error),
                   });
                 }
                 setDeletingToolId(null);
@@ -2068,9 +2069,9 @@ export default function ToolsManager({
                                   ? "var(--success)"
                                   : "var(--error)";
                               }
-                            } catch (e: any) {
+                            } catch (error) {
                               if (status) {
-                                status.textContent = `Error: ${e.message}`;
+                                status.textContent = `Error: ${caughtErrorMessage(error)}`;
                                 status.style.color = "var(--error)";
                               }
                             } finally {
@@ -2206,11 +2207,11 @@ export default function ToolsManager({
                                   : JSON.stringify(data, null, 2),
                             });
                           }
-                        } catch (e: any) {
+                        } catch (error) {
                           await dialog.alert(t("common.error.testFailed"), {
                             type: "error",
                             title: t("common.model.connectivityTest"),
-                            details: String(e?.message || e),
+                            details: String(caughtErrorMessage(error) || error),
                           });
                         } finally {
                           if (btn) btn.textContent = "Test Connection";

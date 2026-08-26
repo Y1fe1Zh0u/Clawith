@@ -6,6 +6,7 @@ import MarkdownRenderer from "./MarkdownRenderer";
 import PromptModal from "./PromptModal";
 import { useDialog } from "./Dialog/DialogProvider";
 import { fileApi, uploadFileWithProgress } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 
 export interface WorkspaceActivity {
   action: "write" | "edit" | "move" | "convert" | "delete";
@@ -992,14 +993,14 @@ export default function WorkspaceOperationPanel({
         window.setTimeout(() => {
           setUploadItems((prev) => prev.filter((item) => item.id !== itemId));
         }, 900);
-      } catch (err: any) {
+      } catch (error) {
         setUploadItems((prev) =>
           prev.map((item) =>
             item.id === itemId
               ? {
                   ...item,
                   status: "error",
-                  error: err?.message || "Upload failed",
+                  error: caughtErrorMessage(error) || "Upload failed",
                 }
               : item,
           ),
@@ -1065,12 +1066,12 @@ export default function WorkspaceOperationPanel({
       }
       onPathDeleted?.(path);
       await loadFileTree();
-    } catch (err: any) {
+    } catch (error) {
       await dialog.alert(
         t("agent.workspace.deleteFailed", "Failed to delete"),
         {
           type: "error",
-          details: String(err?.message || err),
+          details: String(caughtErrorMessage(error) || error),
         },
       );
     }
