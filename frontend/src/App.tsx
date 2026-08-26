@@ -52,7 +52,7 @@ function CompanyAdminRoute({ children }: { children: React.ReactNode }) {
   const canAccessCompanySettings =
     user?.role === "platform_admin" ||
     user?.role === "org_admin" ||
-    !!(user as any)?.is_platform_admin;
+    !!user?.is_platform_admin;
   if (!canAccessCompanySettings) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
@@ -77,6 +77,10 @@ const notificationBarPersistentDismissKey = (
 ) =>
   `notification_bar_dismissed_persistent_${notificationBarRevisionKey(config)}`;
 
+const isNotificationBarDismissed = (config: NotificationBarConfig) =>
+  !!localStorage.getItem(notificationBarPersistentDismissKey(config)) ||
+  !!sessionStorage.getItem(notificationBarSessionDismissKey(config));
+
 function NotificationBar() {
   const { i18n } = useTranslation();
   const isChinese = i18n.language?.startsWith("zh");
@@ -93,7 +97,10 @@ function NotificationBar() {
     fetch("/api/enterprise/system-settings/notification_bar/public")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d) setConfig(d);
+        if (d) {
+          setConfig(d);
+          setDismissed(isNotificationBarDismissed(d));
+        }
       })
       .catch(() => {});
   }, []);
@@ -105,12 +112,7 @@ function NotificationBar() {
       setConfig(next);
       setShowDismissMenu(false);
       if (next.text) {
-        const persistentKey = notificationBarPersistentDismissKey(next);
-        const sessionKey = notificationBarSessionDismissKey(next);
-        setDismissed(
-          !!localStorage.getItem(persistentKey) ||
-            !!sessionStorage.getItem(sessionKey),
-        );
+        setDismissed(isNotificationBarDismissed(next));
       } else {
         setDismissed(false);
       }
@@ -124,23 +126,11 @@ function NotificationBar() {
       window.removeEventListener("notification-bar-updated", handleUpdate);
   }, []);
 
-  // Check sessionStorage for dismissal (keyed by text so new messages re-show)
-  useEffect(() => {
-    if (config?.text) {
-      const persistentKey = notificationBarPersistentDismissKey(config);
-      const sessionKey = notificationBarSessionDismissKey(config);
-      setDismissed(
-        !!localStorage.getItem(persistentKey) ||
-          !!sessionStorage.getItem(sessionKey),
-      );
-    }
-  }, [config?.text, config?.updated_at]);
-
   useEffect(() => {
     if (!showDismissMenu) return;
     const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (dismissMenuRef.current?.contains(target)) return;
+      if (!(event.target instanceof Node)) return;
+      if (dismissMenuRef.current?.contains(event.target)) return;
       setShowDismissMenu(false);
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -252,6 +242,7 @@ function NotificationBar() {
 export default function App() {
   const { token, setAuth, user } = useAuthStore();
   const [loading, setLoading] = useState(true);
+  const initialAuthRef = useRef({ token, setAuth, user });
 
   useEffect(() => {
     // Initialize theme on app mount (ensures login page gets correct theme)
@@ -270,7 +261,8 @@ export default function App() {
     const urlToken = urlParams.get("token");
     const currentPath = window.location.pathname;
     const pathsWithOwnToken = ["/reset-password", "/verify-email"];
-    let effectiveToken = token;
+    const initialAuth = initialAuthRef.current;
+    let effectiveToken = initialAuth.token;
 
     if (urlToken && !pathsWithOwnToken.includes(currentPath)) {
       // Persist the new token and update the zustand store's in-memory value
@@ -289,14 +281,14 @@ export default function App() {
       window.history.replaceState({}, "", cleanUrl);
     }
 
-    if (effectiveToken && !user) {
+    if (effectiveToken && !initialAuth.user) {
       authApi
         .me()
-        .then((u) => setAuth(u, effectiveToken!))
+        .then((u) => initialAuth.setAuth(u, effectiveToken))
         .catch(() => useAuthStore.getState().logout())
         .finally(() => setLoading(false));
     } else {
-      setLoading(false);
+      Promise.resolve().then(() => setLoading(false));
     }
   }, []);
 

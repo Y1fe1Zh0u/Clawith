@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import TakeControlPanel from "./TakeControlPanel";
 
@@ -16,21 +16,6 @@ export interface LivePreviewState {
     result?: string;
     updatedAt?: number;
   };
-}
-
-export const MAX_LIVE_CODE_OUTPUT_CHARS = 120_000;
-const LIVE_CODE_TRUNCATED_NOTICE =
-  "\n\n[... older live output truncated ...]\n";
-
-export function appendLiveCodeOutput(existing: string, chunk: string): string {
-  const next = existing + chunk;
-  if (next.length <= MAX_LIVE_CODE_OUTPUT_CHARS) return next;
-
-  const keepChars = Math.max(
-    0,
-    MAX_LIVE_CODE_OUTPUT_CHARS - LIVE_CODE_TRUNCATED_NOTICE.length,
-  );
-  return LIVE_CODE_TRUNCATED_NOTICE + next.slice(-keepChars);
 }
 
 interface Props {
@@ -177,16 +162,22 @@ export default function AgentBayLivePanel({
   const [showTakeControl, setShowTakeControl] = useState(false);
 
   // Determine available tabs from live state
-  const availableTabs: TabType[] = [];
-  if (liveState.desktop) availableTabs.push("desktop");
-  if (liveState.browser) availableTabs.push("browser");
-  if (liveState.code) availableTabs.push("code");
+  const availableTabs = useMemo(() => {
+    const tabs: TabType[] = [];
+    if (liveState.desktop) tabs.push("desktop");
+    if (liveState.browser) tabs.push("browser");
+    if (liveState.code) tabs.push("code");
+    return tabs;
+  }, [liveState.desktop, liveState.browser, liveState.code]);
 
   const [activeTab, setActiveTab] = useState<TabType>("desktop");
   const codeEndRef = useRef<HTMLDivElement>(null);
 
   const [panelWidth, setPanelWidth] = useState(() => calcHalfContainerWidth());
-  const panelRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+  const userResized = useRef(false); // Once user manually drags, stop auto-resizing
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
 
   // Recalculate on window resize to keep approximate 50% split
   useEffect(() => {
@@ -199,36 +190,34 @@ export default function AgentBayLivePanel({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const isDragging = useRef(false);
-  const userResized = useRef(false); // Once user manually drags, stop auto-resizing
-  const dragStartX = useRef(0);
-  const dragStartWidth = useRef(0);
-
   // Track latest data to auto-switch tabs when new activity arrives
   const prevDesktopUrl = useRef(liveState.desktop?.screenshotUrl);
   const prevBrowserUrl = useRef(liveState.browser?.screenshotUrl);
   const prevCodeLength = useRef(liveState.code?.output?.length || 0);
 
   useEffect(() => {
-    // Switch to the tab that just received a new update
-    if (liveState.desktop?.screenshotUrl !== prevDesktopUrl.current) {
-      setActiveTab("desktop");
-      prevDesktopUrl.current = liveState.desktop?.screenshotUrl;
-    }
-    if (liveState.browser?.screenshotUrl !== prevBrowserUrl.current) {
-      setActiveTab("browser");
-      prevBrowserUrl.current = liveState.browser?.screenshotUrl;
-    }
-    const currentCodeLength = liveState.code?.output?.length || 0;
-    if (currentCodeLength !== prevCodeLength.current) {
-      setActiveTab("code");
-      prevCodeLength.current = currentCodeLength;
-    }
+    const timer = window.setTimeout(() => {
+      // Switch to the tab that just received a new update
+      if (liveState.desktop?.screenshotUrl !== prevDesktopUrl.current) {
+        setActiveTab("desktop");
+        prevDesktopUrl.current = liveState.desktop?.screenshotUrl;
+      }
+      if (liveState.browser?.screenshotUrl !== prevBrowserUrl.current) {
+        setActiveTab("browser");
+        prevBrowserUrl.current = liveState.browser?.screenshotUrl;
+      }
+      const currentCodeLength = liveState.code?.output?.length || 0;
+      if (currentCodeLength !== prevCodeLength.current) {
+        setActiveTab("code");
+        prevCodeLength.current = currentCodeLength;
+      }
 
-    // Fallback: If current tab is completely gone, switch to first available
-    if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
-      setActiveTab(availableTabs[0]);
-    }
+      // Fallback: If current tab is completely gone, switch to first available
+      if (availableTabs.length > 0 && !availableTabs.includes(activeTab)) {
+        setActiveTab(availableTabs[0]);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [
     liveState.desktop?.screenshotUrl,
     liveState.browser?.screenshotUrl,
@@ -242,7 +231,7 @@ export default function AgentBayLivePanel({
     if (activeTab === "code") {
       codeEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [liveState.code?.output]);
+  }, [liveState.code?.output, activeTab]);
 
   /* ── Drag logic for the left resize handle ── */
   const handleDragMouseDown = useCallback(

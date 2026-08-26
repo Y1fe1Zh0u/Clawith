@@ -25,10 +25,8 @@ import {
 import { bodyExcerpt } from "../../components/ExperienceDraftEditor.shared";
 import { EntryDrawer } from "../../components/ExperienceDetailDrawer";
 import PromptModal from "../../components/PromptModal";
-import {
-  appendLiveCodeOutput,
-  type LivePreviewState,
-} from "../../components/AgentBayLivePanel";
+import type { LivePreviewState } from "../../components/AgentBayLivePanel";
+import { appendLiveCodeOutput } from "../../components/AgentBayLivePanel.utils";
 import AgentSidePanel, { SidePanelTab } from "../../components/AgentSidePanel";
 import type {
   WorkspaceActivity,

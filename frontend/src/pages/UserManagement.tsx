@@ -8,13 +8,14 @@ import { useAuthStore } from "../stores";
 import { useDialog } from "../components/Dialog/DialogProvider";
 import { IconEdit } from "@tabler/icons-react";
 import { fetchJson } from "../services/api";
+import type { User } from "../types";
 
 interface UserInfo {
   id: string;
   username: string;
   email: string;
   display_name: string;
-  role: string;
+  role: User["role"];
   is_active: boolean;
   quota_message_limit: number;
   quota_message_period: string;
@@ -35,6 +36,15 @@ const PERIOD_OPTIONS = [
 ];
 
 const PAGE_SIZE = 15;
+
+function isUserRole(value: string): value is User["role"] {
+  return (
+    value === "platform_admin" ||
+    value === "org_admin" ||
+    value === "agent_admin" ||
+    value === "member"
+  );
+}
 
 export default function UserManagement() {
   const { t, i18n } = useTranslation();
@@ -86,7 +96,11 @@ export default function UserManagement() {
   };
 
   useEffect(() => {
-    loadUsers();
+    const tenantId = localStorage.getItem("current_tenant_id") || "";
+    fetchJson<UserInfo[]>(`/users/${tenantId ? `?tenant_id=${tenantId}` : ""}`)
+      .then(setUsers)
+      .catch((error: unknown) => console.error("Failed to load users", error))
+      .finally(() => setLoading(false));
   }, []);
 
   const startEdit = (user: UserInfo) => {
@@ -119,7 +133,7 @@ export default function UserManagement() {
   };
 
   // ── Role change handler ──
-  const handleRoleChange = async (userId: string, newRole: string) => {
+  const handleRoleChange = async (userId: string, newRole: User["role"]) => {
     setChangingRoleUserId(userId);
     try {
       await fetchJson(`/users/${userId}/role`, {
@@ -130,7 +144,7 @@ export default function UserManagement() {
       setTimeout(() => setToast(""), 2000);
       // If changed own role, update auth store
       if (userId === currentUser?.id) {
-        setUser({ ...currentUser, role: newRole as any });
+        setUser({ ...currentUser, role: newRole });
       }
       loadUsers();
     } catch (error) {
@@ -159,10 +173,13 @@ export default function UserManagement() {
     setInviting(true);
     setInviteResult(null);
     try {
-      const res = await fetchJson<any>("/enterprise/invite-users", {
-        method: "POST",
-        body: JSON.stringify({ emails }),
-      });
+      const res = await fetchJson<{ invited: number; message: string }>(
+        "/enterprise/invite-users",
+        {
+          method: "POST",
+          body: JSON.stringify({ emails }),
+        },
+      );
       setInviteResult({ invited: res.invited, message: res.message });
       setInviteEmails("");
       // Refresh user list after invite
@@ -452,6 +469,7 @@ export default function UserManagement() {
                       disabled={changingRoleUserId === user.id}
                       onChange={async (e) => {
                         const newRole = e.target.value;
+                        if (!isUserRole(newRole)) return;
                         const confirmMsg = isChinese
                           ? `确认将 ${user.display_name || user.username} 的角色更改为 ${newRole === "org_admin" ? "Admin" : "Member"}？`
                           : `Change ${user.display_name || user.username}'s role to ${newRole === "org_admin" ? "Admin" : "Member"}?`;

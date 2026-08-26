@@ -4,6 +4,20 @@ import { useTranslation } from "react-i18next";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { useAuthStore } from "../stores";
 import { fetchJson } from "../services/api";
+import type { User } from "../types";
+
+interface SsoProvider {
+  provider_type: string;
+  url?: string;
+  name?: string;
+}
+
+interface SsoSessionStatus {
+  access_token?: string;
+  user?: User;
+  status?: string;
+  error_msg?: string;
+}
 
 export default function SSOEntry() {
   const { t } = useTranslation();
@@ -12,17 +26,17 @@ export default function SSOEntry() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const sid = searchParams.get("sid");
   const complete = searchParams.get("complete") === "1";
-  const [error, setError] = useState("");
-  const [providers, setProviders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(() =>
+    sid ? "" : t("sso.missingSessionId"),
+  );
+  const [providers, setProviders] = useState<SsoProvider[]>([]);
+  const [loading, setLoading] = useState(!!sid && !complete);
   // Initialize polling=true when complete=1 to avoid briefly showing
   // "No SSO providers configured." before the first poll completes.
   const [polling, setPolling] = useState(complete);
 
   useEffect(() => {
     if (!sid) {
-      setError(t("sso.missingSessionId"));
-      setLoading(false);
       return;
     }
 
@@ -31,7 +45,7 @@ export default function SSOEntry() {
 
     // 2. Load SSO configs (skip auto-redirect on completion step)
     if (!complete) {
-      fetchJson<any[]>(`/sso/config?sid=${sid}`)
+      fetchJson<SsoProvider[]>(`/sso/config?sid=${sid}`)
         .then((data) => {
           setProviders(data);
           setLoading(false);
@@ -59,10 +73,8 @@ export default function SSOEntry() {
           setError(t("sso.failedToLoadConfig"));
           setLoading(false);
         });
-    } else {
-      setLoading(false);
     }
-  }, [sid, complete]);
+  }, [sid, complete, t]);
 
   useEffect(() => {
     if (!sid) return;
@@ -73,7 +85,9 @@ export default function SSOEntry() {
       if (cancelled) return;
       try {
         setPolling(true);
-        const res = await fetchJson<any>(`/sso/session/${sid}/status`);
+        const res = await fetchJson<SsoSessionStatus>(
+          `/sso/session/${sid}/status`,
+        );
         if (res?.access_token && res?.user) {
           setAuth(res.user, res.access_token);
           if (res.user && !res.user.tenant_id) {
@@ -105,7 +119,7 @@ export default function SSOEntry() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [sid, setAuth, navigate]);
+  }, [sid, setAuth, navigate, t]);
 
   if (loading) {
     return (
@@ -183,7 +197,9 @@ export default function SSOEntry() {
             key={p.provider_type}
             className="btn btn-primary"
             style={{ padding: "12px", fontSize: "16px" }}
-            onClick={() => (window.location.href = p.url)}
+            onClick={() => {
+              if (p.url) window.location.assign(p.url);
+            }}
           >
             {t("sso.loginWith", { provider: p.name })}
           </button>

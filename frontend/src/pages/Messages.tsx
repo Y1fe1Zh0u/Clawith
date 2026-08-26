@@ -3,6 +3,26 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { IconMessageCircle } from "@tabler/icons-react";
 import { messageApi } from "../services/api";
+import type { InboxMessage } from "../services/apiContracts";
+
+interface DisplayInboxMessage extends InboxMessage {
+  msg_type: string;
+  receiver_name: string;
+}
+
+function displayInboxMessage(message: InboxMessage): DisplayInboxMessage {
+  return {
+    ...message,
+    msg_type:
+      "msg_type" in message && typeof message.msg_type === "string"
+        ? message.msg_type
+        : "text",
+    receiver_name:
+      "receiver_name" in message && typeof message.receiver_name === "string"
+        ? message.receiver_name
+        : "",
+  };
+}
 
 const ACTION_ICONS: Record<string, React.ReactNode> = {
   text: <IconMessageCircle size={16} stroke={1.8} />,
@@ -16,7 +36,7 @@ export default function Messages() {
   const queryClient = useQueryClient();
   const { data: messages = [], isLoading } = useQuery({
     queryKey: ["messages-inbox"],
-    queryFn: () => messageApi.inbox(100),
+    queryFn: async () => (await messageApi.inbox(100)).map(displayInboxMessage),
     refetchInterval: 15000,
   });
 
@@ -36,9 +56,9 @@ export default function Messages() {
     },
   });
 
-  const unreadCount = messages.filter((m: any) => !m.read_at).length;
+  const unreadCount = messages.filter((message) => !message.read_at).length;
 
-  const formatTime = (iso: string) => {
+  const formatTime = (iso: string | null) => {
     if (!iso) return "";
     const d = new Date(iso);
     const now = new Date();
@@ -116,7 +136,7 @@ export default function Messages() {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-        {messages.map((msg: any) => (
+        {messages.map((msg) => (
           <div
             key={msg.id}
             onClick={() => !msg.read_at && markReadMutation.mutate(msg.id)}

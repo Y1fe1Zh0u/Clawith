@@ -1,5 +1,5 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import MarkdownRenderer from "./MarkdownRenderer";
@@ -7,6 +7,7 @@ import PromptModal from "./PromptModal";
 import { useDialog } from "./Dialog/DialogProvider";
 import { fileApi, uploadFileWithProgress } from "../services/api";
 import { caughtErrorMessage, caughtErrorStatus } from "../services/apiError";
+import type { FilePreview, FileRevision } from "../services/apiContracts";
 
 export interface WorkspaceActivity {
   action: "write" | "edit" | "move" | "convert" | "delete";
@@ -39,6 +40,35 @@ interface UploadItem {
   progress: number;
   status: "uploading" | "processing" | "done" | "error";
   error?: string;
+}
+
+interface WorkspaceRevision extends FileRevision {
+  before_content?: string;
+  after_content?: string;
+  operation?: string;
+  actor_type?: string;
+}
+
+interface WorkspaceSlideShape {
+  left?: number;
+  top?: number;
+  width?: number;
+  height?: number;
+  text?: string;
+}
+
+interface WorkspaceSlide {
+  slide: number;
+  shapes?: WorkspaceSlideShape[];
+}
+
+interface WorkspacePreview extends FilePreview {
+  text?: string;
+  slides?: WorkspaceSlide[];
+}
+
+interface WorkspaceBodyStyle extends CSSProperties {
+  "--workspace-side-width": string;
 }
 
 interface Props {
@@ -74,24 +104,6 @@ const IMAGE_EXTS = new Set([
   ".webp",
   ".bmp",
   ".svg",
-]);
-const PREVIEW_EXTS = new Set([
-  ".md",
-  ".markdown",
-  ".csv",
-  ".html",
-  ".htm",
-  ".pdf",
-  ".xlsx",
-  ".xls",
-  ".docx",
-  ".doc",
-  ".pptx",
-  ".ppt",
-  ".txt",
-  ".log",
-  ".json",
-  ...IMAGE_EXTS,
 ]);
 const MIN_SAVING_VISIBLE_MS = 650;
 const SAVED_VISIBLE_MS = 1600;
@@ -158,10 +170,6 @@ function fileName(path: string): string {
   return path.split("/").pop() || path;
 }
 
-function isPreviewable(path: string): boolean {
-  return PREVIEW_EXTS.has(extOf(path));
-}
-
 function parentDirs(path?: string | null): string[] {
   if (!path) return [WORKSPACE_ROOT];
   const parts = path.split("/").filter(Boolean);
@@ -185,12 +193,6 @@ function removeWorkspaceExpansion(dirs: Set<string>): Set<string> {
     if (isWorkspacePath(dir)) next.delete(dir);
   });
   return next;
-}
-
-function parentDir(path?: string | null): string {
-  if (!path || !path.startsWith(`${WORKSPACE_ROOT}/`)) return WORKSPACE_ROOT;
-  const parts = path.split("/");
-  return parts.length > 1 ? parts.slice(0, -1).join("/") : WORKSPACE_ROOT;
 }
 
 function directoryOf(path?: string | null): string {
@@ -217,7 +219,7 @@ function isEnterprisePath(path?: string | null): boolean {
 }
 
 function normalizeWritableDir(path?: string | null): string {
-  if (isWritableDir(path)) return path as string;
+  if (path && isWritableDir(path)) return path;
   return DEFAULT_UPLOAD_DIR;
 }
 
@@ -246,7 +248,7 @@ function trimTrailingEmpty(row: string[]): string[] {
   return next;
 }
 
-function buildRevisionDiff(revision: any): string {
+function buildRevisionDiff(revision: WorkspaceRevision): string {
   const before = revision.before_content ?? "";
   const after = revision.after_content ?? "";
   if (!before && !after) return "No preview available for this revision.";
@@ -395,12 +397,12 @@ function HtmlPreviewFrame({
   useEffect(() => {
     if (src) return;
     if (!content) {
-      setRenderContent(content);
-      return;
+      const timer = window.setTimeout(() => setRenderContent(content), 0);
+      return () => window.clearTimeout(timer);
     }
     if (!renderContent) {
-      setRenderContent(content);
-      return;
+      const timer = window.setTimeout(() => setRenderContent(content), 0);
+      return () => window.clearTimeout(timer);
     }
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
@@ -410,7 +412,7 @@ function HtmlPreviewFrame({
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
-  }, [content, renderContent]);
+  }, [content, renderContent, src]);
 
   useEffect(
     () => () => {
@@ -463,7 +465,7 @@ export default function WorkspaceOperationPanel({
 }: Props) {
   const { t } = useTranslation();
   const dialog = useDialog();
-  const [preview, setPreview] = useState<any>(null);
+  const [preview, setPreview] = useState<WorkspacePreview | null>(null);
   const [content, setContent] = useState("");
   const [draft, setDraft] = useState("");
   const [previewState, setPreviewState] = useState<
@@ -473,7 +475,7 @@ export default function WorkspaceOperationPanel({
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
-  const [revisions, setRevisions] = useState<any[]>([]);
+  const [revisions, setRevisions] = useState<WorkspaceRevision[]>([]);
   const [fileTree, setFileTree] = useState<WorkspaceFileNode[]>([]);
   const [activityOpenLocal, setActivityOpenLocal] = useState(false);
   const activityOpen = activityOpenProp ?? activityOpenLocal;
@@ -491,8 +493,6 @@ export default function WorkspaceOperationPanel({
   const [createFolderModalOpen, setCreateFolderModalOpen] = useState(false);
   const [uploadItems, setUploadItems] = useState<UploadItem[]>([]);
   const [isSideResizing, setIsSideResizing] = useState(false);
-  const [headerActionsTarget, setHeaderActionsTarget] =
-    useState<HTMLElement | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveStateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lockTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -505,8 +505,11 @@ export default function WorkspaceOperationPanel({
   const manualTreeScopeRef = useRef<TreeScope | null>(null);
 
   const ext = activePath ? extOf(activePath) : "";
-  const canModifyPath = (path?: string | null) =>
-    isEnterprisePath(path) ? canManageEnterpriseInfo : canManageWorkspace;
+  const canModifyPath = useCallback(
+    (path?: string | null) =>
+      isEnterprisePath(path) ? canManageEnterpriseInfo : canManageWorkspace,
+    [canManageEnterpriseInfo, canManageWorkspace],
+  );
   const isWritableTreeDir = (path?: string | null) =>
     isWritableDir(path) && canModifyPath(path);
   const canEdit =
@@ -531,13 +534,13 @@ export default function WorkspaceOperationPanel({
     !!liveDraft && (!activePath || !liveDraft.path || draftMatchesActiveFile);
   const liveDraftContent = liveDraft?.content || "";
 
-  useEffect(() => {
-    if (!headerActionsTargetId) {
-      setHeaderActionsTarget(null);
-      return;
-    }
-    setHeaderActionsTarget(document.getElementById(headerActionsTargetId));
-  }, [headerActionsTargetId]);
+  const headerActionsTarget = useMemo(
+    () =>
+      headerActionsTargetId
+        ? document.getElementById(headerActionsTargetId)
+        : null,
+    [headerActionsTargetId],
+  );
 
   useEffect(() => {
     if (!editing || canModifyPath(activePath)) return;
@@ -545,9 +548,9 @@ export default function WorkspaceOperationPanel({
     setDraft(content);
     setEditing(false);
     onEditingChange?.(false);
-  }, [activePath, canManageEnterpriseInfo, content, editing, onEditingChange]);
+  }, [activePath, canModifyPath, content, editing, onEditingChange]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!activePath) {
       setPreviewState("idle");
       return;
@@ -570,9 +573,9 @@ export default function WorkspaceOperationPanel({
       setRevisions([]);
       setPreviewState(caughtErrorStatus(error) === 404 ? "deleted" : "idle");
     }
-  };
+  }, [activePath, agentId]);
 
-  const loadFileTree = async () => {
+  const loadFileTree = useCallback(async () => {
     const loadDir = async (
       path: string,
       depth: number,
@@ -599,7 +602,7 @@ export default function WorkspaceOperationPanel({
       0,
     );
     setFileTree(roots);
-  };
+  }, [agentId, expandedDirs, treeScope]);
 
   useEffect(() => {
     if (activePath !== prevActivePathRef.current) {
@@ -627,14 +630,7 @@ export default function WorkspaceOperationPanel({
       return;
     }
     void load();
-  }, [
-    agentId,
-    activePath,
-    liveDraft?.id,
-    liveDraft?.path,
-    liveDraft?.content,
-    onEditingChange,
-  ]);
+  }, [agentId, activePath, liveDraft, load, onEditingChange]);
 
   useEffect(() => {
     if (!shouldRenderLiveDraft) return;
@@ -711,11 +707,18 @@ export default function WorkspaceOperationPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activities, activePath, agentId, onEditingChange, onPathDeleted]);
+  }, [
+    activities,
+    activePath,
+    agentId,
+    loadFileTree,
+    onEditingChange,
+    onPathDeleted,
+  ]);
 
   useEffect(() => {
-    loadFileTree();
-  }, [agentId, activityKey, liveDraft?.path, treeScope, expandedDirs]);
+    void loadFileTree();
+  }, [activityKey, liveDraft?.path, loadFileTree]);
 
   useEffect(() => {
     if (!activePath || treeScope !== "workspace") return;
@@ -778,45 +781,48 @@ export default function WorkspaceOperationPanel({
       if (lockTimer.current) clearInterval(lockTimer.current);
       fileApi.unlock(agentId, activePath).catch(() => {});
     };
-  }, [agentId, activePath, editing, sessionId]);
+  }, [agentId, activePath, editing, sessionId, onEditingChange]);
 
-  const clearSaveStateTimer = () => {
+  const clearSaveStateTimer = useCallback(() => {
     if (saveStateTimer.current) {
       clearTimeout(saveStateTimer.current);
       saveStateTimer.current = null;
     }
-  };
+  }, []);
 
-  const runAutosaveWithFeedback = async (nextContent: string) => {
-    if (!activePath) return;
-    clearSaveStateTimer();
-    const startedAt = Date.now();
-    setSaveState("saving");
-    try {
-      await fileApi.autosave(agentId, activePath, nextContent, sessionId);
-      const remainingSavingMs = Math.max(
-        0,
-        MIN_SAVING_VISIBLE_MS - (Date.now() - startedAt),
-      );
-      await new Promise((resolve) => setTimeout(resolve, remainingSavingMs));
-      setContent(nextContent);
-      setSaveState("saved");
-      setRevisions(
-        await fileApi.revisions(agentId, activePath).catch(() => []),
-      );
+  const runAutosaveWithFeedback = useCallback(
+    async (nextContent: string) => {
+      if (!activePath) return;
       clearSaveStateTimer();
-      saveStateTimer.current = setTimeout(() => {
-        setSaveState("idle");
-        saveStateTimer.current = null;
-      }, SAVED_VISIBLE_MS);
-    } catch {
-      setSaveState("error");
-    }
-  };
+      const startedAt = Date.now();
+      setSaveState("saving");
+      try {
+        await fileApi.autosave(agentId, activePath, nextContent, sessionId);
+        const remainingSavingMs = Math.max(
+          0,
+          MIN_SAVING_VISIBLE_MS - (Date.now() - startedAt),
+        );
+        await new Promise((resolve) => setTimeout(resolve, remainingSavingMs));
+        setContent(nextContent);
+        setSaveState("saved");
+        setRevisions(
+          await fileApi.revisions(agentId, activePath).catch(() => []),
+        );
+        clearSaveStateTimer();
+        saveStateTimer.current = setTimeout(() => {
+          setSaveState("idle");
+          saveStateTimer.current = null;
+        }, SAVED_VISIBLE_MS);
+      } catch {
+        setSaveState("error");
+      }
+    },
+    [activePath, agentId, clearSaveStateTimer, sessionId],
+  );
 
   useEffect(() => {
     return () => clearSaveStateTimer();
-  }, []);
+  }, [clearSaveStateTimer]);
 
   useEffect(() => {
     if (!editing || !activePath || draft === content) return;
@@ -827,7 +833,7 @@ export default function WorkspaceOperationPanel({
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [agentId, activePath, draft, content, editing, sessionId]);
+  }, [activePath, draft, content, editing, runAutosaveWithFeedback]);
 
   const previewType = preview?.type || preview?.kind;
   const htmlPreviewSrc = useMemo(() => {
@@ -856,7 +862,7 @@ export default function WorkspaceOperationPanel({
 
   const xlsxRows =
     previewType === "xlsx"
-      ? (preview.sheets?.[0]?.rows || [])
+      ? (preview?.sheets?.[0]?.rows || [])
           .map(trimTrailingEmpty)
           .filter((row: string[]) => row.length)
       : [];
@@ -1349,13 +1355,13 @@ export default function WorkspaceOperationPanel({
       }
       return (
         <div className="workspace-op-ppt-preview">
-          {(preview.slides || []).map((slide: any) => (
+          {(preview.slides || []).map((slide) => (
             <section className="workspace-op-slide-card" key={slide.slide}>
               <div className="workspace-op-slide-label">
                 Slide {slide.slide}
               </div>
               <div className="workspace-op-slide-canvas">
-                {(slide.shapes || []).map((shape: any, idx: number) => (
+                {(slide.shapes || []).map((shape, idx) => (
                   <div
                     key={idx}
                     className="workspace-op-slide-shape"
@@ -1809,6 +1815,13 @@ export default function WorkspaceOperationPanel({
     headerActionsTarget && hasHeaderActions
       ? createPortal(headerActions, headerActionsTarget)
       : null;
+  const workspaceBodyStyle: WorkspaceBodyStyle | undefined =
+    treeOpen || activityOpen
+      ? {
+          gridTemplateColumns: `minmax(0, 1fr) ${panelSideWidth}px`,
+          "--workspace-side-width": `${panelSideWidth}px`,
+        }
+      : undefined;
 
   return (
     <div className="workspace-op">
@@ -1816,14 +1829,7 @@ export default function WorkspaceOperationPanel({
 
       <div
         className={`workspace-op-body ${activityOpen ? "activity-open" : ""} ${treeOpen ? "" : "tree-closed"}`}
-        style={
-          treeOpen || activityOpen
-            ? {
-                gridTemplateColumns: `minmax(0, 1fr) ${panelSideWidth}px`,
-                ["--workspace-side-width" as any]: `${panelSideWidth}px`,
-              }
-            : undefined
-        }
+        style={workspaceBodyStyle}
       >
         {!treeOpen && !activityOpen && (
           <button

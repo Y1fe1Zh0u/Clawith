@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { agentApi } from "../services/api";
+import type { Agent } from "../types";
 import LinearCopyButton from "../components/LinearCopyButton";
 function fetchAuth<T>(url: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("token");
@@ -16,9 +17,17 @@ function fetchAuth<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 interface OpenClawSettingsProps {
-  agent: any;
+  agent: Agent & { has_api_key?: boolean };
   agentId: string;
   canManage: boolean;
+}
+
+interface AgentPermissions {
+  is_owner: boolean;
+  scope_type: "company" | "user" | "custom";
+  scope_ids: string[];
+  scope_names?: Array<{ name: string }>;
+  access_level: "use" | "manage";
 }
 
 export default function OpenClawSettings({
@@ -83,7 +92,8 @@ export default function OpenClawSettings({
   // ─── Permissions state ──────────────────────────────
   const { data: permData } = useQuery({
     queryKey: ["agent-permissions", agentId],
-    queryFn: () => fetchAuth<any>(`/agents/${agentId}/permissions`),
+    queryFn: () =>
+      fetchAuth<AgentPermissions>(`/agents/${agentId}/permissions`),
     enabled: !!agentId,
   });
 
@@ -136,6 +146,7 @@ export default function OpenClawSettings({
       ? "private"
       : permData?.scope_type || "company";
   const currentAccessLevel = permData?.access_level || "use";
+  const scopeNames = permData?.scope_names ?? [];
 
   return (
     <div>
@@ -522,7 +533,7 @@ export default function OpenClawSettings({
           </div>
         )}
 
-        {currentScope !== "company" && permData?.scope_names?.length > 0 && (
+        {currentScope !== "company" && scopeNames.length > 0 && (
           <div
             style={{
               marginTop: "12px",
@@ -533,7 +544,7 @@ export default function OpenClawSettings({
             <span style={{ fontWeight: 500 }}>
               {t("agent.settings.perm.currentAccess", "Current access")}:
             </span>{" "}
-            {permData.scope_names.map((s: any) => s.name).join(", ")}
+            {scopeNames.map((scope) => scope.name).join(", ")}
           </div>
         )}
 

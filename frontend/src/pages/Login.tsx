@@ -6,6 +6,7 @@ import { authApi, tenantApi, fetchJson } from "../services/api";
 import { ApiError, caughtErrorMessage } from "../services/apiError";
 import type { OAuthTenantChoice } from "../services/oauthCallbackResponse";
 import type { TokenResponse } from "../types";
+import type { ResolvedTenant } from "../services/apiContracts";
 import {
   IconAlertTriangle,
   IconArrowRight,
@@ -34,6 +35,12 @@ function verificationErrorDetail(
   };
 }
 
+interface LoginProvider {
+  provider_type: string;
+  name?: string;
+  url?: string;
+}
+
 export default function Login() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -49,10 +56,9 @@ export default function Login() {
   const [checkingEmail, setCheckingEmail] = useState(
     !!invitationCode && !!invitedEmail,
   );
-  const [tenant, setTenant] = useState<any>(null);
-  const [, setResolving] = useState(true);
-  const [ssoProviders, setSsoProviders] = useState<any[]>([]);
-  const [oauthProviders, setOauthProviders] = useState<any[]>([]);
+  const [tenant, setTenant] = useState<ResolvedTenant | null>(null);
+  const [ssoProviders, setSsoProviders] = useState<LoginProvider[]>([]);
+  const [oauthProviders, setOauthProviders] = useState<LoginProvider[]>([]);
   const [ssoLoading, setSsoLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [ssoError, setSsoError] = useState("");
@@ -82,7 +88,6 @@ export default function Login() {
     // If arriving via invitation link with email, check whether the email is already registered
     // to decide whether to show login or register form.
     if (invitationCode && invitedEmail) {
-      setCheckingEmail(true);
       fetch("/api/enterprise/check-email-exists", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -103,7 +108,6 @@ export default function Login() {
     // Resolve tenant by domain (for SSO detection only, not for login form)
     const domain = window.location.host;
     if (domain.startsWith("localhost") || domain.startsWith("127.0.0.1")) {
-      setResolving(false);
       return;
     }
 
@@ -114,76 +118,79 @@ export default function Login() {
           setTenant(res);
         }
       })
-      .catch(() => {})
-      .finally(() => setResolving(false));
-  }, []);
+      .catch(() => {});
+  }, [invitationCode, invitedEmail]);
 
   useEffect(() => {
     let cancelled = false;
-    if (isRegister) {
-      setOauthProviders([]);
-      setOauthError("");
-      return;
-    }
-
-    setOauthLoading(true);
-    setOauthError("");
-    fetchJson<any[]>("/auth/providers")
-      .then((providers) => {
-        if (cancelled) return;
-        setOauthProviders(
-          (providers || []).filter((p) =>
-            ["google", "github"].includes(p.provider_type),
-          ),
-        );
-      })
-      .catch(() => {
-        if (cancelled) return;
+    const timer = window.setTimeout(() => {
+      if (isRegister) {
         setOauthProviders([]);
-        setOauthError("Failed to load social login providers.");
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setOauthLoading(false);
-      });
+        setOauthError("");
+        return;
+      }
+      setOauthLoading(true);
+      setOauthError("");
+      fetchJson<LoginProvider[]>("/auth/providers")
+        .then((providers) => {
+          if (cancelled) return;
+          setOauthProviders(
+            (providers || []).filter((provider) =>
+              ["google", "github"].includes(provider.provider_type),
+            ),
+          );
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setOauthProviders([]);
+          setOauthError("Failed to load social login providers.");
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setOauthLoading(false);
+        });
+    }, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [isRegister]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!tenant?.sso_enabled || isRegister) {
-      setSsoProviders([]);
-      setSsoError("");
-      return;
-    }
-    if (!tenant?.id) return;
-
-    setSsoLoading(true);
-    setSsoError("");
-
-    fetchJson<{ session_id: string }>(`/sso/session?tenant_id=${tenant.id}`, {
-      method: "POST",
-    })
-      .then((res) => fetchJson<any[]>(`/sso/config?sid=${res.session_id}`))
-      .then((providers) => {
-        if (cancelled) return;
-        setSsoProviders(providers || []);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSsoError(t("auth.ssoLoadFailed", "Failed to load SSO providers."));
+    const timer = window.setTimeout(() => {
+      if (!tenant?.sso_enabled || isRegister) {
         setSsoProviders([]);
+        setSsoError("");
+        return;
+      }
+      setSsoLoading(true);
+      setSsoError("");
+      fetchJson<{ session_id: string }>(`/sso/session?tenant_id=${tenant.id}`, {
+        method: "POST",
       })
-      .finally(() => {
-        if (cancelled) return;
-        setSsoLoading(false);
-      });
+        .then((res) =>
+          fetchJson<LoginProvider[]>(`/sso/config?sid=${res.session_id}`),
+        )
+        .then((providers) => {
+          if (cancelled) return;
+          setSsoProviders(providers || []);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSsoError(t("auth.ssoLoadFailed", "Failed to load SSO providers."));
+          setSsoProviders([]);
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setSsoLoading(false);
+        });
+    }, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [tenant?.id, tenant?.sso_enabled, isRegister, t]);
 
@@ -484,7 +491,7 @@ export default function Login() {
         `/auth/${providerType}/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
       );
       if (res?.authorization_url) {
-        window.location.href = res.authorization_url;
+        window.location.assign(res.authorization_url);
       }
     } catch (error) {
       setError(caughtErrorMessage(error) || "Failed to start social login");
@@ -665,7 +672,9 @@ export default function Login() {
                                   gap: "10px",
                                   border: "1px solid var(--border-subtle)",
                                 }}
-                                onClick={() => (window.location.href = p.url)}
+                                onClick={() => {
+                                  if (p.url) window.location.assign(p.url);
+                                }}
                               >
                                 {meta.icon ? (
                                   <img

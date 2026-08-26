@@ -5,6 +5,7 @@ import { caughtErrorMessage } from "../services/apiError";
 import { IconAlertTriangle, IconArrowRight, IconX } from "@tabler/icons-react";
 import { useAuthStore } from "../stores";
 import { tenantApi, authApi } from "../services/api";
+import type { TenantSetupResponse } from "../services/apiContracts";
 import { AtlasFrame, StarField } from "../components/atlas";
 
 export default function CompanySetup() {
@@ -21,7 +22,11 @@ export default function CompanySetup() {
   // Fallback: if user exists but is not active, they're in the registration flow
   // (the Navigate in ProtectedRoute may strip location.state).
   const fromRegister =
-    (location.state as any)?.fromRegister || (user && !user.is_active);
+    (typeof location.state === "object" &&
+      location.state !== null &&
+      "fromRegister" in location.state &&
+      location.state.fromRegister === true) ||
+    !!(user && !user.is_active);
 
   // Join company form
   const [inviteCode, setInviteCode] = useState("");
@@ -34,7 +39,7 @@ export default function CompanySetup() {
     // Check if self-creation is allowed
     tenantApi
       .registrationConfig()
-      .then((d: any) => {
+      .then((d) => {
         setAllowCreate(d.allow_self_create_company);
       })
       .catch(() => {});
@@ -63,7 +68,7 @@ export default function CompanySetup() {
     }
   };
 
-  const applyTenantSetupResult = async (result: any) => {
+  const applyTenantSetupResult = async (result: TenantSetupResponse) => {
     const nextTenantId = result?.tenant?.id ? String(result.tenant.id) : "";
     if (result?.access_token) {
       localStorage.setItem("token", result.access_token);

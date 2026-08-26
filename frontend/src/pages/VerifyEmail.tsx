@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Link,
   useSearchParams,
@@ -27,7 +27,12 @@ export default function VerifyEmail() {
 
   // Get email from location state (passed from register) or from URL params
   const [email] = useState<string>(
-    (location.state as any)?.email ||
+    (typeof location.state === "object" &&
+    location.state !== null &&
+    "email" in location.state &&
+    typeof location.state.email === "string"
+      ? location.state.email
+      : "") ||
       searchParams.get("email") ||
       user?.email ||
       "",
@@ -51,50 +56,56 @@ export default function VerifyEmail() {
     }
   }, [user, navigate]);
 
-  const handleVerify = async (tokenToUse: string) => {
-    if (!tokenToUse || tokenToUse.length < 6) return;
+  const handleVerify = useCallback(
+    async (tokenToUse: string) => {
+      if (!tokenToUse || tokenToUse.length < 6) return;
 
-    setLoading(true);
-    setStatus("verifying");
-    setError("");
+      setLoading(true);
+      setStatus("verifying");
+      setMessage("");
 
-    try {
-      const res = await authApi.verifyEmail(tokenToUse);
-      setStatus("success");
-      setMessage(isChinese ? "邮箱验证成功！" : "Email verified successfully!");
+      try {
+        const res = await authApi.verifyEmail(tokenToUse);
+        setStatus("success");
+        setMessage(
+          isChinese ? "邮箱验证成功！" : "Email verified successfully!",
+        );
 
-      // Auto-login with the returned token
-      if (res.access_token && res.user) {
-        setAuth(res.user, res.access_token);
+        // Auto-login with the returned token
+        if (res.access_token && res.user) {
+          setAuth(res.user, res.access_token);
 
-        // Redirect based on needs_company_setup
-        setTimeout(() => {
-          if (res.needs_company_setup) {
-            navigate("/setup-company");
-          } else {
-            navigate("/");
-          }
-        }, 1500); // Short delay to show success message
+          // Redirect based on needs_company_setup
+          setTimeout(() => {
+            if (res.needs_company_setup) {
+              navigate("/setup-company");
+            } else {
+              navigate("/");
+            }
+          }, 1500); // Short delay to show success message
+        }
+      } catch (error) {
+        setStatus("error");
+        setMessage(
+          caughtErrorMessage(error) ||
+            (isChinese
+              ? "验证失败，请检查验证码是否正确"
+              : "Verification failed, please check the code"),
+        );
+      } finally {
+        setLoading(false);
       }
-    } catch (error) {
-      setStatus("error");
-      setMessage(
-        caughtErrorMessage(error) ||
-          (isChinese
-            ? "验证失败，请检查验证码是否正确"
-            : "Verification failed, please check the code"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [isChinese, navigate, setAuth],
+  );
 
   // Auto-verify if token is in URL
   useEffect(() => {
     if (urlToken) {
-      handleVerify(urlToken);
+      const timer = window.setTimeout(() => void handleVerify(urlToken), 0);
+      return () => window.clearTimeout(timer);
     }
-  }, [urlToken]);
+  }, [urlToken, handleVerify]);
 
   const handleResend = async () => {
     if (!email) {
@@ -118,13 +129,6 @@ export default function VerifyEmail() {
       });
     } finally {
       setLoading(false);
-    }
-  };
-
-  const setError = (msg: string) => {
-    if (msg) {
-      setStatus("error");
-      setMessage(msg);
     }
   };
 

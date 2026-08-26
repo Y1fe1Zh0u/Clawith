@@ -266,9 +266,7 @@ const COMPANY_REGION_TIMEZONES: Record<string, string> = {
 
 const getDisplayRegionName = (code: string, locale: string) => {
   try {
-    const DisplayNames = (Intl as any).DisplayNames;
-    if (!DisplayNames) return code;
-    return new DisplayNames([locale], { type: "region" }).of(code) || code;
+    return new Intl.DisplayNames([locale], { type: "region" }).of(code) || code;
   } catch {
     return code;
   }

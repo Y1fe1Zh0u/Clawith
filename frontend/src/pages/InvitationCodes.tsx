@@ -1,9 +1,31 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 
+interface InvitationCode {
+  id: string;
+  code: string;
+  used_count: number;
+  max_uses: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+interface InvitationCodePage {
+  items?: InvitationCode[];
+  total?: number;
+}
+
+const invitationHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem("token");
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
 export default function InvitationCodes() {
   const { t } = useTranslation();
-  const [codes, setCodes] = useState<any[]>([]);
+  const [codes, setCodes] = useState<InvitationCode[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
@@ -12,12 +34,6 @@ export default function InvitationCodes() {
   const [maxUses, setMaxUses] = useState(1);
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState("");
-
-  const token = localStorage.getItem("token");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const loadCodes = useCallback(
     async (p?: number, q?: string) => {
@@ -29,9 +45,9 @@ export default function InvitationCodes() {
       });
       if (currentSearch) params.set("search", currentSearch);
       const res = await fetch(`/api/enterprise/invitation-codes?${params}`, {
-        headers,
+        headers: invitationHeaders(),
       });
-      const data = await res.json();
+      const data: InvitationCodePage = await res.json();
       setCodes(data.items || []);
       setTotal(data.total || 0);
     },
@@ -39,8 +55,9 @@ export default function InvitationCodes() {
   );
 
   useEffect(() => {
-    loadCodes(page, search);
-  }, [page, search]);
+    const timer = window.setTimeout(() => void loadCodes(page, search), 0);
+    return () => window.clearTimeout(timer);
+  }, [page, search, loadCodes]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -53,7 +70,7 @@ export default function InvitationCodes() {
     setCreating(true);
     await fetch("/api/enterprise/invitation-codes", {
       method: "POST",
-      headers,
+      headers: invitationHeaders(),
       body: JSON.stringify({ count: batchCount, max_uses: maxUses }),
     });
     setPage(1);
@@ -67,7 +84,7 @@ export default function InvitationCodes() {
   const deactivate = async (id: string) => {
     await fetch(`/api/enterprise/invitation-codes/${id}`, {
       method: "DELETE",
-      headers,
+      headers: invitationHeaders(),
     });
     await loadCodes();
   };
@@ -269,7 +286,7 @@ export default function InvitationCodes() {
           </div>
         )}
 
-        {codes.map((c: any) => (
+        {codes.map((c) => (
           <div
             key={c.id}
             style={{

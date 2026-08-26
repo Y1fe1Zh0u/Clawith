@@ -14,6 +14,11 @@ import ChannelConfig from "../components/ChannelConfig";
 import LinearCopyButton from "../components/LinearCopyButton";
 import { validateAgentName } from "../utils/agentNameValidation";
 import { buildOpenClawInstruction } from "../utils/openClawInstruction";
+import type {
+  AgentCreateRequest,
+  LlmModel,
+  Skill,
+} from "../services/apiContracts";
 const STEPS = [
   "basicInfo",
   "personality",
@@ -21,7 +26,20 @@ const STEPS = [
   "permissions",
   "channel",
 ] as const;
-const OPENCLAW_STEPS = ["basicInfo", "permissions"] as const;
+
+interface AgentCreateForm {
+  name: string;
+  role_description: string;
+  personality: string;
+  boundaries: string;
+  primary_model_id: string;
+  fallback_model_id: string;
+  permission_scope_type: "company" | "user" | "custom";
+  permission_access_level: "use" | "manage";
+  max_tokens_per_day: string;
+  max_tokens_per_month: string;
+  skill_ids: string[];
+}
 
 export default function AgentCreate() {
   const { t, i18n } = useTranslation();
@@ -48,18 +66,18 @@ export default function AgentCreate() {
     localStorage.getItem("current_tenant_id"),
   );
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<AgentCreateForm>({
     name: "",
     role_description: "",
     personality: "",
     boundaries: "",
-    primary_model_id: "" as string,
-    fallback_model_id: "" as string,
+    primary_model_id: "",
+    fallback_model_id: "",
     permission_scope_type: "company",
     permission_access_level: "use",
     max_tokens_per_day: "",
     max_tokens_per_month: "",
-    skill_ids: [] as string[],
+    skill_ids: [],
   });
   const [channelValues, setChannelValues] = useState<Record<string, string>>(
     {},
@@ -80,17 +98,21 @@ export default function AgentCreate() {
   });
   useEffect(() => {
     if (!myTenant?.default_model_id) return;
-    const enabledModels = (models as any[]).filter((m: any) => m.enabled);
-    const exists = enabledModels.some(
-      (m: any) => m.id === myTenant.default_model_id,
+    const defaultModelId = myTenant.default_model_id;
+    const exists = models.some(
+      (model: LlmModel) => model.enabled && model.id === defaultModelId,
     );
-    if (exists) {
-      setForm((prev) =>
-        prev.primary_model_id
-          ? prev
-          : { ...prev, primary_model_id: myTenant.default_model_id! },
-      );
-    }
+    if (!exists) return;
+    const timer = window.setTimeout(
+      () =>
+        setForm((prev) =>
+          prev.primary_model_id
+            ? prev
+            : { ...prev, primary_model_id: defaultModelId },
+        ),
+      0,
+    );
+    return () => window.clearTimeout(timer);
   }, [myTenant?.default_model_id, models]);
 
   // Fetch global skills for step 3
@@ -103,19 +125,26 @@ export default function AgentCreate() {
   useEffect(() => {
     if (globalSkills.length > 0) {
       const defaultIds = globalSkills
-        .filter((s: any) => s.is_default)
-        .map((s: any) => s.id);
+        .filter((skill: Skill) => skill.is_default)
+        .map((skill: Skill) => skill.id);
       if (defaultIds.length > 0) {
-        setForm((prev) => ({
-          ...prev,
-          skill_ids: Array.from(new Set([...prev.skill_ids, ...defaultIds])),
-        }));
+        const timer = window.setTimeout(
+          () =>
+            setForm((prev) => ({
+              ...prev,
+              skill_ids: Array.from(
+                new Set([...prev.skill_ids, ...defaultIds]),
+              ),
+            })),
+          0,
+        );
+        return () => window.clearTimeout(timer);
       }
     }
   }, [globalSkills]);
 
   const createMutation = useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async (data: AgentCreateRequest) => {
       const agent = await agentApi.create(data);
       return agent;
     },
@@ -212,7 +241,8 @@ export default function AgentCreate() {
         navigate(`/agents/${agent.id}`);
       }
     },
-    onError: (err: any) => setError(err.message),
+    onError: (err: unknown) =>
+      setError(err instanceof Error ? err.message : String(err)),
   });
 
   const validateStep0 = (): boolean => {
@@ -251,7 +281,7 @@ export default function AgentCreate() {
         "请输入有效的正整数",
       );
     }
-    const enabledModels = (models as any[]).filter((m: any) => m.enabled);
+    const enabledModels = models.filter((model: LlmModel) => model.enabled);
     if (
       agentType === "native" &&
       enabledModels.length > 0 &&
@@ -302,8 +332,9 @@ export default function AgentCreate() {
     });
   };
 
-  const selectedModel = models.find((m: any) => m.id === form.primary_model_id);
-  const activeSteps = agentType === "openclaw" ? OPENCLAW_STEPS : STEPS;
+  const selectedModel = models.find(
+    (model: LlmModel) => model.id === form.primary_model_id,
+  );
 
   // If OpenClaw agent just created, show success page with API key
   if (createdApiKey && createMutation.data) {
@@ -666,26 +697,28 @@ export default function AgentCreate() {
           <div className="form-group" style={{ marginTop: "8px" }}>
             <label className="form-label">{t("wizard.step4.title")}</label>
             <div style={{ display: "flex", gap: "8px" }}>
-              {[
-                {
-                  value: "company",
-                  label: t("wizard.step4.companyWide"),
-                  desc: t("wizard.step4.companyWideDesc"),
-                },
-                {
-                  value: "user",
-                  label: t("wizard.step4.selfOnly"),
-                  desc: t("wizard.step4.selfOnlyDesc"),
-                },
-                {
-                  value: "custom",
-                  label: t("agent.settings.perm.custom", "Custom"),
-                  desc: t(
-                    "agent.settings.perm.customDesc",
-                    "Only selected members and agents can see and use it. Plaza is disabled",
-                  ),
-                },
-              ].map((scope) => (
+              {(
+                [
+                  {
+                    value: "company",
+                    label: t("wizard.step4.companyWide"),
+                    desc: t("wizard.step4.companyWideDesc"),
+                  },
+                  {
+                    value: "user",
+                    label: t("wizard.step4.selfOnly"),
+                    desc: t("wizard.step4.selfOnlyDesc"),
+                  },
+                  {
+                    value: "custom",
+                    label: t("agent.settings.perm.custom", "Custom"),
+                    desc: t(
+                      "agent.settings.perm.customDesc",
+                      "Only selected members and agents can see and use it. Plaza is disabled",
+                    ),
+                  },
+                ] as const
+              ).map((scope) => (
                 <label
                   key={scope.value}
                   style={{
@@ -878,8 +911,8 @@ export default function AgentCreate() {
                   }}
                 >
                   {models
-                    .filter((m: any) => m.enabled)
-                    .map((m: any) => (
+                    .filter((model: LlmModel) => model.enabled)
+                    .map((m: LlmModel) => (
                       <label
                         key={m.id}
                         style={{
@@ -1081,7 +1114,7 @@ export default function AgentCreate() {
             <div
               style={{ display: "flex", flexDirection: "column", gap: "8px" }}
             >
-              {globalSkills.map((skill: any) => {
+              {globalSkills.map((skill: Skill) => {
                 const isDefault = skill.is_default;
                 const isChecked = form.skill_ids.includes(skill.id);
                 return (
@@ -1213,26 +1246,28 @@ export default function AgentCreate() {
                 marginBottom: "20px",
               }}
             >
-              {[
-                {
-                  value: "company",
-                  label: t("wizard.step4.companyWide"),
-                  desc: t("wizard.step4.companyWideDesc"),
-                },
-                {
-                  value: "user",
-                  label: t("wizard.step4.selfOnly"),
-                  desc: t("wizard.step4.selfOnlyDesc"),
-                },
-                {
-                  value: "custom",
-                  label: t("agent.settings.perm.custom", "Custom"),
-                  desc: t(
-                    "agent.settings.perm.customDesc",
-                    "Only selected members and agents can see and use it. Plaza is disabled",
-                  ),
-                },
-              ].map((scope) => (
+              {(
+                [
+                  {
+                    value: "company",
+                    label: t("wizard.step4.companyWide"),
+                    desc: t("wizard.step4.companyWideDesc"),
+                  },
+                  {
+                    value: "user",
+                    label: t("wizard.step4.selfOnly"),
+                    desc: t("wizard.step4.selfOnlyDesc"),
+                  },
+                  {
+                    value: "custom",
+                    label: t("agent.settings.perm.custom", "Custom"),
+                    desc: t(
+                      "agent.settings.perm.customDesc",
+                      "Only selected members and agents can see and use it. Plaza is disabled",
+                    ),
+                  },
+                ] as const
+              ).map((scope) => (
                 <label
                   key={scope.value}
                   style={{
@@ -1289,26 +1324,28 @@ export default function AgentCreate() {
                   {t("wizard.step4.accessLevel", "Default Access Level")}
                 </label>
                 <div style={{ display: "flex", gap: "8px" }}>
-                  {[
-                    {
-                      value: "use",
-                      icon: <IconEye size={14} stroke={1.8} />,
-                      label: t("wizard.step4.useLevel", "Use"),
-                      desc: t(
-                        "wizard.step4.useDesc",
-                        "Can use Task, Chat, Tools, Skills, Workspace",
-                      ),
-                    },
-                    {
-                      value: "manage",
-                      icon: <IconSettings size={14} stroke={1.8} />,
-                      label: t("wizard.step4.manageLevel", "Manage"),
-                      desc: t(
-                        "wizard.step4.manageDesc",
-                        "Full access including Settings, Mind, and Directory",
-                      ),
-                    },
-                  ].map((lvl) => (
+                  {(
+                    [
+                      {
+                        value: "use",
+                        icon: <IconEye size={14} stroke={1.8} />,
+                        label: t("wizard.step4.useLevel", "Use"),
+                        desc: t(
+                          "wizard.step4.useDesc",
+                          "Can use Task, Chat, Tools, Skills, Workspace",
+                        ),
+                      },
+                      {
+                        value: "manage",
+                        icon: <IconSettings size={14} stroke={1.8} />,
+                        label: t("wizard.step4.manageLevel", "Manage"),
+                        desc: t(
+                          "wizard.step4.manageDesc",
+                          "Full access including Settings, Mind, and Directory",
+                        ),
+                      },
+                    ] as const
+                  ).map((lvl) => (
                     <label
                       key={lvl.value}
                       style={{

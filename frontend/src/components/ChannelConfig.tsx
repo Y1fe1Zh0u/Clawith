@@ -4,9 +4,11 @@ import { caughtErrorMessage } from "../services/apiError";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
 import { channelApi } from "../services/api";
+import type { ChannelConfigRequest, JsonValue } from "../services/apiContracts";
 import LinearCopyButton from "./LinearCopyButton";
 // ─── Shared fetchAuth (same as AgentDetail) ─────────────
-function fetchAuth<T>(url: string, options?: RequestInit): Promise<T> {
+function fetchAuth<T>(url: string, options?: RequestInit): Promise<T>;
+function fetchAuth(url: string, options?: RequestInit): Promise<unknown> {
   const token = localStorage.getItem("token");
   return fetch(`/api${url}`, {
     ...options,
@@ -16,7 +18,7 @@ function fetchAuth<T>(url: string, options?: RequestInit): Promise<T> {
     },
   }).then(async (r) => {
     if (r.status === 204) {
-      return undefined as T;
+      return undefined;
     }
     if (!r.ok) {
       const error = await r
@@ -24,7 +26,7 @@ function fetchAuth<T>(url: string, options?: RequestInit): Promise<T> {
         .catch(() => ({ detail: `HTTP ${r.status}` }));
       throw new Error(error.detail || `HTTP ${r.status}`);
     }
-    return r.json() as Promise<T>;
+    return r.json();
   });
 }
 
@@ -80,6 +82,75 @@ interface ChannelDef {
   // Atlassian-specific test connection feature
   hasTestConnection?: boolean;
 }
+
+interface StoredChannelConfig {
+  is_configured?: boolean;
+  is_connected?: boolean;
+  app_id?: string;
+  app_secret?: string;
+  encrypt_key?: string;
+  verification_token?: string;
+  cloud_id?: string;
+  extra_config?: {
+    connection_mode?: string;
+    session_expired?: boolean;
+    ilink_user_id?: string;
+    bot_id?: string;
+    bot_secret?: string;
+    wecom_agent_id?: string;
+    tenant_id?: string;
+    agent_id?: string;
+  } | null;
+}
+
+interface WebhookConfig {
+  webhook_url?: string;
+}
+
+interface AtlassianTestResult {
+  ok: boolean;
+  message?: string;
+  tool_count?: number;
+  error?: string;
+}
+
+interface WechatQr {
+  qrcode: string;
+  qrcode_img_content: string;
+}
+
+interface WechatQrStatus {
+  status?: string;
+}
+
+function stringValue(value: JsonValue | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function booleanValue(value: JsonValue | undefined): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+type ChannelSavePayload = Omit<ChannelConfigRequest, "channel_type"> & {
+  channel_type?: string;
+  connection_mode?: string;
+  bot_id?: string;
+  bot_secret?: string;
+  bot_token?: string;
+  signing_secret?: string;
+  application_id?: string;
+  public_key?: string;
+  tenant_id?: string;
+  corp_id?: string;
+  wecom_agent_id?: string;
+  secret?: string;
+  token?: string;
+  encoding_aes_key?: string;
+  app_key?: string;
+  agent_id?: string;
+  api_key?: string;
+  cloud_id?: string;
+};
 
 // ─── SVG Icons ──────────────────────────────────────────
 const SlackIcon = (
@@ -526,110 +597,148 @@ export default function ChannelConfig({
 
   // Atlassian test connection state
   const [atlassianTesting, setAtlassianTesting] = useState(false);
-  const [atlassianTestResult, setAtlassianTestResult] = useState<{
-    ok: boolean;
-    message?: string;
-    tool_count?: number;
-    error?: string;
-  } | null>(null);
+  const [atlassianTestResult, setAtlassianTestResult] =
+    useState<AtlassianTestResult | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
-  const [wechatQr, setWechatQr] = useState<{
-    qrcode: string;
-    qrcode_img_content: string;
-  } | null>(null);
+  const [wechatQr, setWechatQr] = useState<WechatQr | null>(null);
   const [wechatQrImageSrc, setWechatQrImageSrc] = useState("");
   const [wechatQrStatus, setWechatQrStatus] = useState("");
   const [wechatLoadingQr, setWechatLoadingQr] = useState(false);
 
   // ─── Edit mode: queries for each channel ────────────
   const enabled = mode === "edit" && !!agentId && canManage;
+  const activeAgentId = agentId ?? "";
 
   const { data: feishuConfig } = useQuery({
     queryKey: ["channel", agentId],
-    queryFn: () => channelApi.get(agentId!),
+    queryFn: () => channelApi.get(activeAgentId),
     enabled: enabled,
   });
   const { data: feishuWebhook } = useQuery({
     queryKey: ["webhook-url", agentId],
-    queryFn: () => channelApi.webhookUrl(agentId!),
+    queryFn: () => channelApi.webhookUrl(activeAgentId),
     enabled: enabled,
   });
   const { data: slackConfig } = useQuery({
     queryKey: ["slack-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/slack-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/slack-channel`).catch(
+        () => null,
+      ),
     enabled: enabled,
   });
   const { data: slackWebhook } = useQuery({
     queryKey: ["slack-webhook-url", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/slack-channel/webhook-url`),
+      fetchAuth<WebhookConfig>(`/agents/${agentId}/slack-channel/webhook-url`),
     enabled: enabled,
   });
   const { data: discordConfig } = useQuery({
     queryKey: ["discord-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/discord-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(
+        `/agents/${agentId}/discord-channel`,
+      ).catch(() => null),
     enabled: enabled,
   });
   const { data: discordWebhook } = useQuery({
     queryKey: ["discord-webhook-url", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/discord-channel/webhook-url`),
+      fetchAuth<WebhookConfig>(
+        `/agents/${agentId}/discord-channel/webhook-url`,
+      ),
     enabled: enabled,
   });
   const { data: teamsConfig } = useQuery({
     queryKey: ["teams-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/teams-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/teams-channel`).catch(
+        () => null,
+      ),
     enabled: enabled,
   });
   const { data: teamsWebhook } = useQuery({
     queryKey: ["teams-webhook-url", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/teams-channel/webhook-url`).catch(
-        () => null,
-      ),
+      fetchAuth<WebhookConfig>(
+        `/agents/${agentId}/teams-channel/webhook-url`,
+      ).catch(() => null),
     enabled: enabled,
   });
   const { data: dingtalkConfig } = useQuery({
     queryKey: ["dingtalk-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/dingtalk-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(
+        `/agents/${agentId}/dingtalk-channel`,
+      ).catch(() => null),
     enabled: enabled,
   });
   const { data: wechatConfig } = useQuery({
     queryKey: ["wechat-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/wechat-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/wechat-channel`).catch(
+        () => null,
+      ),
     enabled: enabled,
   });
   const { data: wecomConfig } = useQuery({
     queryKey: ["wecom-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/wecom-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/wecom-channel`).catch(
+        () => null,
+      ),
     enabled: enabled,
   });
   const { data: wecomWebhook } = useQuery({
     queryKey: ["wecom-webhook-url", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/wecom-channel/webhook-url`),
+      fetchAuth<WebhookConfig>(`/agents/${agentId}/wecom-channel/webhook-url`),
     enabled: enabled,
   });
   const { data: atlassianConfig } = useQuery({
     queryKey: ["atlassian-channel", agentId],
     queryFn: () =>
-      fetchAuth<any>(`/agents/${agentId}/atlassian-channel`).catch(() => null),
+      fetchAuth<StoredChannelConfig>(
+        `/agents/${agentId}/atlassian-channel`,
+      ).catch(() => null),
     enabled: enabled,
   });
   // Helper: get config data for a channel
-  const getConfig = (id: string): any => {
+  const getConfig = (id: string): StoredChannelConfig | null | undefined => {
     switch (id) {
       case "feishu":
-        return feishuConfig;
+        return feishuConfig
+          ? {
+              is_configured: feishuConfig.is_configured,
+              is_connected: feishuConfig.is_connected,
+              app_id: feishuConfig.app_id ?? undefined,
+              extra_config: feishuConfig.extra_config
+                ? {
+                    connection_mode: stringValue(
+                      feishuConfig.extra_config.connection_mode,
+                    ),
+                    session_expired: booleanValue(
+                      feishuConfig.extra_config.session_expired,
+                    ),
+                    ilink_user_id: stringValue(
+                      feishuConfig.extra_config.ilink_user_id,
+                    ),
+                    bot_id: stringValue(feishuConfig.extra_config.bot_id),
+                    bot_secret: stringValue(
+                      feishuConfig.extra_config.bot_secret,
+                    ),
+                    wecom_agent_id: stringValue(
+                      feishuConfig.extra_config.wecom_agent_id,
+                    ),
+                    tenant_id: stringValue(feishuConfig.extra_config.tenant_id),
+                    agent_id: stringValue(feishuConfig.extra_config.agent_id),
+                  }
+                : null,
+            }
+          : feishuConfig;
       case "slack":
         return slackConfig;
       case "discord":
@@ -650,7 +759,7 @@ export default function ChannelConfig({
   };
 
   // Helper: get webhook data for a channel
-  const getWebhook = (id: string): any => {
+  const getWebhook = (id: string): WebhookConfig | null | undefined => {
     switch (id) {
       case "feishu":
         return feishuWebhook;
@@ -669,9 +778,21 @@ export default function ChannelConfig({
 
   // ─── Edit mode: mutations ───────────────────────────
   const saveMutation = useMutation({
-    mutationFn: ({ ch, data }: { ch: ChannelDef; data: any }) => {
+    mutationFn: ({
+      ch,
+      data,
+    }: {
+      ch: ChannelDef;
+      data: ChannelSavePayload;
+    }) => {
       if (ch.useChannelApi) {
-        return channelApi.create(agentId!, data);
+        if (!data.channel_type) {
+          throw new Error("Channel type is required");
+        }
+        return channelApi.create(activeAgentId, {
+          ...data,
+          channel_type: data.channel_type,
+        });
       }
       return fetchAuth(`/agents/${agentId}/${ch.apiSlug}`, {
         method: "POST",
@@ -713,7 +834,7 @@ export default function ChannelConfig({
   const deleteMutation = useMutation({
     mutationFn: ({ ch }: { ch: ChannelDef }) => {
       if (ch.useChannelApi) {
-        return channelApi.delete(agentId!);
+        return channelApi.delete(activeAgentId);
       }
       return fetchAuth(`/agents/${agentId}/${ch.apiSlug}`, {
         method: "DELETE",
@@ -751,7 +872,7 @@ export default function ChannelConfig({
     setAtlassianTesting(true);
     setAtlassianTestResult(null);
     try {
-      const res = await fetchAuth<any>(
+      const res = await fetchAuth<AtlassianTestResult>(
         `/agents/${agentId}/atlassian-channel/test`,
         { method: "POST" },
       );
@@ -769,7 +890,7 @@ export default function ChannelConfig({
 
     const poll = async () => {
       try {
-        const result = await fetchAuth<any>(
+        const result = await fetchAuth<WechatQrStatus>(
           `/agents/${agentId}/wechat-channel/qrcode-status?qrcode=${encodeURIComponent(wechatQr.qrcode)}`,
         );
         if (cancelled) return;
@@ -805,8 +926,8 @@ export default function ChannelConfig({
     let disposed = false;
     let objectUrl = "";
     if (!raw) {
-      setWechatQrImageSrc("");
-      return;
+      const timer = window.setTimeout(() => setWechatQrImageSrc(""), 0);
+      return () => window.clearTimeout(timer);
     }
     if (raw.startsWith("http://") || raw.startsWith("https://")) {
       const token = localStorage.getItem("token");
@@ -864,8 +985,8 @@ export default function ChannelConfig({
       };
     }
     if (raw.startsWith("data:image/")) {
-      setWechatQrImageSrc(raw);
-      return;
+      const timer = window.setTimeout(() => setWechatQrImageSrc(raw), 0);
+      return () => window.clearTimeout(timer);
     }
 
     QRCode.toDataURL(raw, {
@@ -890,7 +1011,7 @@ export default function ChannelConfig({
     return () => {
       disposed = true;
     };
-  }, [wechatQr?.qrcode_img_content]);
+  }, [wechatQr?.qrcode_img_content, agentId]);
 
   const createWechatQr = async () => {
     if (!agentId) return;
@@ -898,7 +1019,7 @@ export default function ChannelConfig({
     setWechatQrStatus("");
     setWechatQrImageSrc("");
     try {
-      const qr = await fetchAuth<any>(
+      const qr = await fetchAuth<WechatQr>(
         `/agents/${agentId}/wechat-channel/qrcode`,
         {
           method: "POST",
@@ -1404,7 +1525,7 @@ export default function ChannelConfig({
 
   // ─── Render edit mode channel card ───────────────────
   const renderEditChannel = (ch: ChannelDef) => {
-    const config = getConfig(ch.id);
+    const config = getConfig(ch.id) ?? {};
     const webhook = getWebhook(ch.id);
     const isOpen = openChannels[ch.id] || false;
     const isEditing = editingChannels[ch.id] || false;
