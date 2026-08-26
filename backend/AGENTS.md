@@ -150,6 +150,24 @@ instead of misclassifying them as ordinary provider or business outcomes.
 
 Test every supported source form through the real consumer-facing boundary.
 
+## Failure containment and blocking decisions
+
+A Tool, Provider, integration, observer, or optional-capability failure does not
+block the parent Run or unrelated work by default. Contain the failure at the
+owning capability boundary, record its exact outcome, and return a bounded,
+actionable error through the public result contract so the model or owning
+workflow can decide the next action.
+
+Blocking a Turn, Run, downstream handler, or unrelated capability is an
+explicit product and Runtime contract. Before introducing new blocking
+semantics, identify why safe continuation is impossible, document the affected
+contract and recovery behavior, and confirm the decision with the user.
+
+Security or authorization denial, durable-state corruption, protocol
+invalidity, and uncertain irreversible side effects may fail closed. Do not use
+these exceptions to turn ordinary Tool or Provider failures into global
+failures.
+
 ## State publication
 
 Publish events, notifications, cache updates, projections, and user-visible
