@@ -756,7 +756,7 @@ export default function ChannelConfig({
         { method: "POST" },
       );
       setAtlassianTestResult(res);
-    } catch (e: any) {
+    } catch (e) {
       setAtlassianTestResult({ ok: false, error: String(e) });
     }
     setAtlassianTesting(false);

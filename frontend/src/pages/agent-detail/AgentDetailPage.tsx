@@ -6203,7 +6203,7 @@ export default function AgentDetailPage() {
       setHistoryMsgs((prev) => [...preParsed, ...prev]);
       setHistoryOldestTimestamp(page.oldestCursor);
       setHistoryHasMore(page.hasMore);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load more history messages:", err);
     } finally {
       setHistoryLoadingMore(false);
@@ -6282,7 +6282,7 @@ export default function AgentDetailPage() {
       setChatMessages((prev) => [...preParsed, ...prev]);
       setChatOldestTimestamp(page.oldestCursor);
       setChatHistoryHasMore(page.hasMore);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load more chat history messages:", err);
     } finally {
       setChatHistoryLoadingMore(false);

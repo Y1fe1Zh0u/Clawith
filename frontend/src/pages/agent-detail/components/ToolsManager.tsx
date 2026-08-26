@@ -486,7 +486,7 @@ export default function ToolsManager({
         },
         body: JSON.stringify(payload),
       });
-    } catch (err: any) {
+    } catch (err) {
       console.error("Bulk update failed", err);
       loadTools();
     }
