@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { adminApi, fetchJson } from "../services/api";
 import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
-import { saveAccentColor, getSavedAccentColor } from "../utils/theme";
 import { IconFilter, IconShieldCheck } from "@tabler/icons-react";
 import PlatformDashboard from "./PlatformDashboard";
 import LinearCopyButton from "../components/LinearCopyButton";

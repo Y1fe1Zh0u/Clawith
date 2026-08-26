@@ -164,7 +164,7 @@ export default function AgentBayLivePanel({
   onClearCode,
   onCloseCode,
 }: Props) {
-  const { t } = useTranslation();
+  useTranslation();
 
   // Keep a ref to the latest onLiveUpdate so TakeControl callbacks always
   // call the current version, even when captured in stale closures.

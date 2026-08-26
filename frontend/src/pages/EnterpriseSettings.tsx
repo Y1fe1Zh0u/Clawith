@@ -12,7 +12,6 @@ import InvitationCodes from "./InvitationCodes";
 import { useDialog } from "../components/Dialog/DialogProvider";
 import { useToast } from "../components/Toast/ToastProvider";
 import { caughtErrorMessage } from "../services/apiError";
-import { buildCompanyRegions } from "../utils/companyRegions";
 import OrgTab from "./enterprise-settings/tabs/OrgTab";
 import SkillsTab from "./enterprise-settings/tabs/SkillsTab";
 import OkrTab from "./enterprise-settings/tabs/OkrTab";

@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import PromptModal from "../../../components/PromptModal";
 import FileBrowser from "../../../components/FileBrowser";
 import type { FileBrowserApi } from "../../../components/FileBrowser";
 import { skillApi } from "../../../services/api";

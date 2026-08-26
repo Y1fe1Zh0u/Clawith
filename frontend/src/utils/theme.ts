@@ -27,18 +27,6 @@ function lighten(
   ];
 }
 
-/** Darken a color by mixing with black */
-function darken(
-  rgb: [number, number, number],
-  amount: number,
-): [number, number, number] {
-  return rgb.map((c) => Math.round(c * (1 - amount))) as [
-    number,
-    number,
-    number,
-  ];
-}
-
 function rgbToHex(rgb: [number, number, number]): string {
   return "#" + rgb.map((c) => c.toString(16).padStart(2, "0")).join("");
 }

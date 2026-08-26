@@ -18,7 +18,7 @@ import { useAuthStore } from "../stores";
 import { useToast } from "../components/Toast/ToastProvider";
 
 export default function VerifyEmail() {
-  const { t, i18n } = useTranslation();
+  const { i18n } = useTranslation();
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -26,7 +26,7 @@ export default function VerifyEmail() {
   const { setAuth, user } = useAuthStore();
 
   // Get email from location state (passed from register) or from URL params
-  const [email, setEmail] = useState<string>(
+  const [email] = useState<string>(
     (location.state as any)?.email ||
       searchParams.get("email") ||
       user?.email ||

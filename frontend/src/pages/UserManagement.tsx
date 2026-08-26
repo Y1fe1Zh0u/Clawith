@@ -5,7 +5,6 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
-import LinearCopyButton from "../components/LinearCopyButton";
 import { useDialog } from "../components/Dialog/DialogProvider";
 import { IconEdit } from "@tabler/icons-react";
 import { fetchJson } from "../services/api";

@@ -28,7 +28,7 @@ export default function Login() {
     !!invitationCode && !!invitedEmail,
   );
   const [tenant, setTenant] = useState<any>(null);
-  const [resolving, setResolving] = useState(true);
+  const [, setResolving] = useState(true);
   const [ssoProviders, setSsoProviders] = useState<any[]>([]);
   const [oauthProviders, setOauthProviders] = useState<any[]>([]);
   const [ssoLoading, setSsoLoading] = useState(false);

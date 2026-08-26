@@ -176,7 +176,7 @@ const MetricCard = ({
 // ─── Main Component ──────────────────────────────────────
 
 export default function PlatformDashboard() {
-  const { t } = useTranslation();
+  useTranslation();
   const [timeRange, setTimeRange] = useState<30 | 7>(30);
   const [loadingStats, setLoadingStats] = useState(false);
   const [loadingLeaders, setLoadingLeaders] = useState(false);
