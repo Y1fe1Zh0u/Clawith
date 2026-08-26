@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconAlertTriangle, IconCheck } from "@tabler/icons-react";
 import { authApi } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 
 export default function ResetPassword() {
   const { t } = useTranslation();
@@ -54,9 +55,9 @@ export default function ResetPassword() {
       await authApi.resetPassword({ token, new_password: password });
       setSuccess(true);
       window.setTimeout(() => navigate("/login"), 1200);
-    } catch (err: any) {
+    } catch (error) {
       setError(
-        err.message ||
+        caughtErrorMessage(error) ||
           t("auth.resetPasswordFailed", "Failed to reset password"),
       );
     } finally {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../services/apiError";
 import { IconAlertTriangle, IconArrowRight, IconX } from "@tabler/icons-react";
 import { useAuthStore } from "../stores";
 import { tenantApi, authApi } from "../services/api";
@@ -100,8 +101,8 @@ export default function CompanySetup() {
       const result = await tenantApi.join(inviteCode);
       await applyTenantSetupResult(result);
       navigate("/onboarding?mode=join");
-    } catch (err: any) {
-      const msg = err.message || "Failed to join company";
+    } catch (error) {
+      const msg = caughtErrorMessage(error) || "Failed to join company";
       if (showJoinModal) setJoinError(msg);
       else setError(msg);
     } finally {
@@ -121,8 +122,8 @@ export default function CompanySetup() {
       } else {
         navigate("/onboarding?mode=create");
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to create company");
+    } catch (error) {
+      setError(caughtErrorMessage(error) || "Failed to create company");
     } finally {
       setLoading(false);
     }

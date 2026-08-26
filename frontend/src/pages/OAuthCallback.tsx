@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { fetchJson } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
 
 interface TenantChoice {
@@ -61,8 +62,8 @@ export default function OAuthCallback() {
         }
         navigate("/", { replace: true });
       })
-      .catch((err: any) => {
-        setError(err.message || t("oauth.oauthLoginFailed"));
+      .catch((error) => {
+        setError(caughtErrorMessage(error) || t("oauth.oauthLoginFailed"));
       });
   }, [navigate, provider, setAuth, t, tenants]);
 
@@ -87,8 +88,8 @@ export default function OAuthCallback() {
         return;
       }
       navigate("/", { replace: true });
-    } catch (err: any) {
-      setError(err.message || t("oauth.loginFailed"));
+    } catch (error) {
+      setError(caughtErrorMessage(error) || t("oauth.loginFailed"));
       setLoading(false);
     }
   };
