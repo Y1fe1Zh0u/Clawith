@@ -43,7 +43,7 @@ export async function loadDirectHistoryTurn<T extends DirectHistoryRow>({
 }: LoadDirectHistoryTurnOptions<T>): Promise<DirectHistoryTurnPage<T>> {
   let cursor = before;
   let rows: T[] = [];
-  let hasMore = true;
+  let hasMore: boolean;
   const seenCursors = new Set([before]);
 
   for (

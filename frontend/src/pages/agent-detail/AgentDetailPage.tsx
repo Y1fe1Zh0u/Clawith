@@ -3505,7 +3505,7 @@ export default function AgentDetailPage() {
                         setLivePanelVisible(true);
                         collapseSidebarsForLivePanel();
                     }
-                    let toolArgs: any = parsedDraft;
+                    let toolArgs: any;
                     try {
                         toolArgs = JSON.parse(d.arguments || '{}');
                     } catch {
@@ -4282,7 +4282,7 @@ export default function AgentDetailPage() {
             const now = new Date();
             const diffMs = now.getTime() - d.getTime();
             const isToday = d.toDateString() === now.toDateString();
-            let timeStr = '';
+            let timeStr: string;
             if (isToday) timeStr = d.toLocaleTimeString(tsLocale, { hour: '2-digit', minute: '2-digit' });
             else if (diffMs < 7 * 86400000) timeStr = d.toLocaleDateString(tsLocale, { weekday: 'short' }) + ' ' + d.toLocaleTimeString(tsLocale, { hour: '2-digit', minute: '2-digit' });
             else timeStr = d.toLocaleDateString(tsLocale, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(tsLocale, { hour: '2-digit', minute: '2-digit' });
@@ -4476,8 +4476,6 @@ export default function AgentDetailPage() {
 
         let userMsg = chatInput.trim();
         let contentForLLM = userMsg;
-        let displayFiles = '';
-
         if (attachedFiles.length > 0) {
             let filesPrompt = '';
             let filesDisplay = '';
@@ -4514,7 +4512,7 @@ export default function AgentDetailPage() {
                 contentForLLM = userMsg ? `${filesPrompt}\nQuestion: ${userMsg}` : `Please analyze these files:\n\n${filesPrompt}`;
             }
 
-            displayFiles = filesDisplay.trim();
+            const displayFiles = filesDisplay.trim();
             userMsg = userMsg ? `${displayFiles}\n${userMsg}` : displayFiles;
         }
 
