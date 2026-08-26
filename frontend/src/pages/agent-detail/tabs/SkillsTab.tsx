@@ -353,7 +353,7 @@ export default function SkillsTab(props: Props) {
                       if (!canManage) return;
                       setAgentClawhubInstalling(result.slug);
                       try {
-                        const response = await skillApi.agentImport.fromClawhub(
+                        await skillApi.agentImport.fromClawhub(
                           agentId,
                           result.slug,
                         );
@@ -691,7 +691,7 @@ export default function SkillsTab(props: Props) {
                         if (!canManage) return;
                         setImportingSkillId(skill.id);
                         try {
-                          const response = await fileApi.importSkill(
+                          await fileApi.importSkill(
                             agentId,
                             skill.id,
                           );

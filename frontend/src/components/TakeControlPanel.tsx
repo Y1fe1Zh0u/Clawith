@@ -132,7 +132,7 @@ export default function TakeControlPanel({
     mountedRef.current = true;
     (async () => {
       try {
-        const res = await controlApi.lock(agentId, {
+        await controlApi.lock(agentId, {
           session_id: sessionId,
           env_type: envType,
         });
