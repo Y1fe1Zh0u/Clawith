@@ -19,7 +19,7 @@ import { useNavigate } from "react-router-dom";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { fetchJson } from "../services/api";
 import { useAuthStore } from "../stores";
-import { useDialog } from "../components/Dialog/DialogProvider";
+import { useDialog } from "../components/Dialog/DialogContext";
 
 // ─── Type Definitions ────────────────────────────────────────────────────────
 
@@ -68,16 +68,6 @@ interface Period {
   end: string;
   label: string;
   is_current: boolean;
-}
-
-interface LegacyWorkReport {
-  id: string;
-  tenant_id: string;
-  okr_agent_id: string;
-  report_type: string;
-  period_label: string;
-  content: string;
-  created_at: string;
 }
 
 interface CompanyReport {
@@ -579,15 +569,11 @@ function KRCard({
 // ── Add KR inline form ──
 function AddKRForm({
   objectiveId,
-  periodStart,
-  periodEnd,
   isChinese,
   onCreated,
   onCancel,
 }: {
   objectiveId: string;
-  periodStart: string;
-  periodEnd: string;
   isChinese: boolean;
   onCreated: () => void;
   onCancel: () => void;
@@ -990,8 +976,6 @@ function ObjectiveCard({
           {addingKR && (
             <AddKRForm
               objectiveId={obj.id}
-              periodStart={obj.period_start}
-              periodEnd={obj.period_end}
               isChinese={isChinese}
               onCreated={() => {
                 setAddingKR(false);
@@ -1266,7 +1250,9 @@ export default function OKR() {
   const okrRoleMode = isAdmin ? "admin" : "member";
   const queryClient = useQueryClient();
 
-  const [selectedPeriod, setSelectedPeriod] = useState<Period | null>(null);
+  const [selectedPeriodChoice, setSelectedPeriod] = useState<Period | null>(
+    null,
+  );
   const [creating, setCreating] = useState(false);
   const [activeTab, setActiveTab] = useState<"dashboards" | "reports">(
     "dashboards",
@@ -1281,6 +1267,9 @@ export default function OKR() {
     staleTime: 0,
     refetchOnWindowFocus: true,
   });
+  const visibleActiveTab = settings?.daily_report_enabled
+    ? activeTab
+    : "dashboards";
 
   // Fetch periods (only when enabled)
   const { data: periods = [] } = useQuery<Period[]>({
@@ -1289,24 +1278,21 @@ export default function OKR() {
     enabled: !!settings?.enabled,
   });
 
-  // Auto-select the current period, and keep the selected object fresh when
-  // the period list is reloaded after settings or time-boundary changes.
-  useEffect(() => {
-    if (periods.length === 0) return;
-    const selectedStillExists = selectedPeriod
+  const selectedPeriod = useMemo(() => {
+    if (periods.length === 0) return null;
+    const selectedStillExists = selectedPeriodChoice
       ? periods.find(
-          (p) =>
-            p.start === selectedPeriod.start && p.end === selectedPeriod.end,
+          (period) =>
+            period.start === selectedPeriodChoice.start &&
+            period.end === selectedPeriodChoice.end,
         )
       : null;
-    if (!selectedPeriod || !selectedStillExists) {
-      const current =
-        periods.find((p) => p.is_current) ?? periods[periods.length - 1];
-      setSelectedPeriod(current);
-    } else if (selectedStillExists !== selectedPeriod) {
-      setSelectedPeriod(selectedStillExists);
-    }
-  }, [periods, selectedPeriod]);
+    return (
+      selectedStillExists ??
+      periods.find((period) => period.is_current) ??
+      periods[periods.length - 1]
+    );
+  }, [periods, selectedPeriodChoice]);
 
   useEffect(() => {
     if (!periodMenuOpen) return;
@@ -1321,12 +1307,6 @@ export default function OKR() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [periodMenuOpen]);
-
-  useEffect(() => {
-    if (settings && !settings.daily_report_enabled) {
-      setActiveTab("dashboards");
-    }
-  }, [settings?.daily_report_enabled]);
 
   // Fetch objectives for selected period — fresh on mount/focus so OKR Agent creation is visible
   const { data: objectives = [], isLoading: objLoading } = useQuery<
@@ -1531,15 +1511,15 @@ export default function OKR() {
                 fontSize: "13px",
                 fontWeight: 500,
                 background:
-                  activeTab === "dashboards"
+                  visibleActiveTab === "dashboards"
                     ? "var(--bg-primary)"
                     : "transparent",
                 color:
-                  activeTab === "dashboards"
+                  visibleActiveTab === "dashboards"
                     ? "var(--text-primary)"
                     : "var(--text-secondary)",
                 boxShadow:
-                  activeTab === "dashboards"
+                  visibleActiveTab === "dashboards"
                     ? "0 1px 2px rgba(0,0,0,0.05)"
                     : "none",
                 border: "none",
@@ -1557,13 +1537,15 @@ export default function OKR() {
                 fontSize: "13px",
                 fontWeight: 500,
                 background:
-                  activeTab === "reports" ? "var(--bg-primary)" : "transparent",
+                  visibleActiveTab === "reports"
+                    ? "var(--bg-primary)"
+                    : "transparent",
                 color:
-                  activeTab === "reports"
+                  visibleActiveTab === "reports"
                     ? "var(--text-primary)"
                     : "var(--text-secondary)",
                 boxShadow:
-                  activeTab === "reports"
+                  visibleActiveTab === "reports"
                     ? "0 1px 2px rgba(0,0,0,0.05)"
                     : "none",
                 border: "none",
@@ -1587,7 +1569,7 @@ export default function OKR() {
             alignSelf: "start",
           }}
         >
-          {activeTab === "dashboards" && (
+          {visibleActiveTab === "dashboards" && (
             <>
               {/* Period Selector */}
               {periods.length > 0 && (
@@ -1755,7 +1737,7 @@ export default function OKR() {
         </div>
       </div>
 
-      {activeTab === "dashboards" && (
+      {visibleActiveTab === "dashboards" && (
         <>
           {/* Create Objective form */}
           {creating && selectedPeriod && (
@@ -2029,7 +2011,7 @@ export default function OKR() {
         </>
       )}
 
-      {settings?.daily_report_enabled && activeTab === "reports" && (
+      {settings?.daily_report_enabled && visibleActiveTab === "reports" && (
         <ReportsTab isChinese={isChinese} />
       )}
     </div>
@@ -2059,13 +2041,7 @@ function MembersWithoutOKRPanel({
     refetchOnWindowFocus: true,
   });
 
-  // When a background failure is detected via refetch, clear the stale
-  // success message so the error banner becomes visible automatically.
-  React.useEffect(() => {
-    if (data?.last_outreach_error && nudgeResult) {
-      setNudgeResult(null);
-    }
-  }, [data?.last_outreach_error, nudgeResult]);
+  const visibleNudgeResult = data?.last_outreach_error ? null : nudgeResult;
 
   // Don't render when loading or no incomplete members
   if (isLoading || !data || !data.members_without_okr?.length) {
@@ -2243,7 +2219,7 @@ function MembersWithoutOKRPanel({
                 ? "请先与 OKR Agent 确认公司 OKR，再催促成员。"
                 : "Please set company OKRs with the OKR Agent before nudging members."}
           </div>
-          {nudgeResult && (
+          {visibleNudgeResult && (
             <div
               style={{
                 fontSize: "12px",
@@ -2254,7 +2230,7 @@ function MembersWithoutOKRPanel({
                 gap: "6px",
               }}
             >
-              <span>{nudgeResult}</span>
+              <span>{visibleNudgeResult}</span>
               {okr_agent_id && (
                 <a
                   href={`/agents/${okr_agent_id}`}
@@ -2271,7 +2247,7 @@ function MembersWithoutOKRPanel({
             </div>
           )}
           {/* Show error banner if the last background outreach task failed */}
-          {!nudgeResult && last_outreach_error && (
+          {!visibleNudgeResult && last_outreach_error && (
             <div
               style={{
                 fontSize: "12px",
@@ -2547,18 +2523,11 @@ function ReportsTab({ isChinese }: { isChinese: boolean }) {
     },
   });
 
-  useEffect(() => {
-    if (!companyReports.length) {
-      setExpandedCompanyReportId(null);
-      return;
-    }
-    if (
-      !expandedCompanyReportId ||
-      !companyReports.some((report) => report.id === expandedCompanyReportId)
-    ) {
-      setExpandedCompanyReportId(companyReports[0].id);
-    }
-  }, [companyReports, expandedCompanyReportId]);
+  const visibleExpandedCompanyReportId = companyReports.some(
+    (report) => report.id === expandedCompanyReportId,
+  )
+    ? expandedCompanyReportId
+    : (companyReports[0]?.id ?? null);
 
   const filteredMemberReports = useMemo(() => {
     const keyword = memberSearch.trim().toLowerCase();
@@ -2569,21 +2538,6 @@ function ReportsTab({ isChinese }: { isChinese: boolean }) {
         report.group_label.toLowerCase().includes(keyword),
     );
   }, [memberReports, memberSearch]);
-
-  useEffect(() => {
-    if (!filteredMemberReports.length) {
-      setSelectedMemberReportId(null);
-      return;
-    }
-    if (
-      !selectedMemberReportId ||
-      !filteredMemberReports.some(
-        (report) => report.id === selectedMemberReportId,
-      )
-    ) {
-      setSelectedMemberReportId(filteredMemberReports[0].id);
-    }
-  }, [filteredMemberReports, selectedMemberReportId]);
 
   const selectedMemberReport =
     filteredMemberReports.find(
@@ -2715,7 +2669,7 @@ function ReportsTab({ isChinese }: { isChinese: boolean }) {
             }}
           >
             {companyReports.map((report) => {
-              const expanded = expandedCompanyReportId === report.id;
+              const expanded = visibleExpandedCompanyReportId === report.id;
               const showMissing = report.missing_count > 0;
               const showRefresh = report.needs_refresh && isAdmin;
               return (

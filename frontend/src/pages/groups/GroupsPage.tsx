@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,7 +32,7 @@ import {
   useGroupRealtime,
 } from "../../hooks/useGroupRealtime";
 import { useAuthStore } from "../../stores";
-import { useToast } from "../../components/Toast/ToastProvider";
+import { useToast } from "../../components/Toast/ToastContext";
 import { createRandomUUID } from "../../utils/randomUUID";
 import PromptModal from "../../components/PromptModal";
 import ConfirmModal from "../../components/ConfirmModal";
@@ -107,6 +114,12 @@ const mergeMessages = (
   return [...byId.values()].sort((a, b) => compareCursor(a.cursor, b.cursor));
 };
 
+interface MessagePageState {
+  scopeKey: string | null;
+  messages: GroupMessage[];
+  hasMore: boolean;
+}
+
 export default function GroupsPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -116,25 +129,26 @@ export default function GroupsPage() {
     groupId?: string;
     sessionId?: string;
   }>();
+  const routeScopeKey = groupId && sessionId ? `${groupId}:${sessionId}` : null;
   const currentUser = useAuthStore((state) => state.user);
 
-  const [messages, setMessages] = useState<GroupMessage[]>([]);
-  const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [cancellingRuns, setCancellingRuns] = useState(false);
   const [reconcilingExecutionId, setReconcilingExecutionId] = useState<
     string | null
   >(null);
-  const [awaitingPlannedRuns, setAwaitingPlannedRuns] = useState(false);
+  const [awaitingPlannedRunsScope, setAwaitingPlannedRunsScope] = useState<
+    string | null
+  >(null);
   // One nav rail now: a tree of groups with their sessions nested underneath. It collapses to a
   // stub, and the side panel stays out of the way until asked for.
   const [groupsCollapsed, setGroupsCollapsed] = useState(() =>
     readFlag("groups.groupsCollapsed", false),
   );
-  // Which groups are expanded in the tree. The active group is expanded on navigation (effect
-  // below); others start collapsed.
+  // Which groups are expanded in the tree. The initial route and navigation handlers expand their
+  // target; users may still collapse any group by hand.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    () => new Set(),
+    () => new Set(groupId ? [groupId] : []),
   );
   const [showPanel, setShowPanel] = useState(() =>
     readFlag("groups.showPanel", false),
@@ -160,7 +174,10 @@ export default function GroupsPage() {
   );
   const readRequestsRef = useRef<Set<string>>(new Set());
   const lastReadMessageBySessionRef = useRef<Map<string, string>>(new Map());
-  const planningTransitionUntilRef = useRef(0);
+  const planningTransitionRef = useRef<{
+    scopeKey: string | null;
+    until: number;
+  }>({ scopeKey: null, until: 0 });
 
   const {
     data: groups = [],
@@ -237,6 +254,22 @@ export default function GroupsPage() {
   const activeSession = sessions.find((session) => session.id === sessionId);
   const activeGroupId = activeGroup?.id;
   const activeSessionId = activeSession?.id;
+  const messageScopeKey =
+    activeGroupId && activeSessionId
+      ? `${activeGroupId}:${activeSessionId}`
+      : null;
+  const [messagePage, setMessagePage] = useState<MessagePageState>({
+    scopeKey: null,
+    messages: [],
+    hasMore: false,
+  });
+  const visibleMessagePage =
+    messagePage.scopeKey === messageScopeKey
+      ? messagePage
+      : { scopeKey: messageScopeKey, messages: [], hasMore: false };
+  const messages = visibleMessagePage.messages;
+  const hasMore = visibleMessagePage.hasMore;
+  const messageScopeRef = useRef(messageScopeKey);
 
   const { data: activeRunStates = [], refetch: refetchActiveRuns } = useQuery<
     GroupRunStateWithReconciliation[]
@@ -255,11 +288,21 @@ export default function GroupsPage() {
         (run) => run.can_cancel && run.system_role === "group_planning",
       );
       if (hasPlanningRun) {
-        planningTransitionUntilRef.current =
-          Date.now() + ACTIVE_RUN_TRANSITION_GRACE_MS;
+        planningTransitionRef.current = {
+          scopeKey: routeScopeKey,
+          until: Date.now() + ACTIVE_RUN_TRANSITION_GRACE_MS,
+        };
+        setAwaitingPlannedRunsScope(routeScopeKey);
+      }
+      if (runs.some((run) => run.can_cancel && Boolean(run.agent_id))) {
+        setAwaitingPlannedRunsScope(null);
       }
       if (runs.some((run) => run.can_cancel)) return 1000;
-      return Date.now() < planningTransitionUntilRef.current ? 250 : false;
+      const transition = planningTransitionRef.current;
+      return transition.scopeKey === routeScopeKey &&
+        Date.now() < transition.until
+        ? 250
+        : false;
     },
   });
   const activeRunIds = activeRunStates
@@ -280,6 +323,7 @@ export default function GroupsPage() {
   const agentRunVisible = activeRunStates.some(
     (run) => run.can_cancel && Boolean(run.agent_id),
   );
+  const awaitingPlannedRuns = awaitingPlannedRunsScope === routeScopeKey;
   const isPlanning =
     planningRunVisible || (awaitingPlannedRuns && !agentRunVisible);
   const runningAgents = useMemo(() => {
@@ -310,30 +354,18 @@ export default function GroupsPage() {
   const isManager = me?.role === "manager";
 
   useEffect(() => {
-    planningTransitionUntilRef.current = 0;
-    setAwaitingPlannedRuns(false);
-  }, [groupId, sessionId]);
-
-  useEffect(() => {
-    if (planningRunVisible) {
-      planningTransitionUntilRef.current =
-        Date.now() + ACTIVE_RUN_TRANSITION_GRACE_MS;
-      setAwaitingPlannedRuns(true);
-      return;
-    }
-    if (agentRunVisible) {
-      setAwaitingPlannedRuns(false);
-      return;
-    }
-    if (!awaitingPlannedRuns) return;
-    const remaining = planningTransitionUntilRef.current - Date.now();
-    if (remaining <= 0) {
-      setAwaitingPlannedRuns(false);
-      return;
-    }
-    const timer = setTimeout(() => setAwaitingPlannedRuns(false), remaining);
+    if (planningRunVisible || agentRunVisible || !awaitingPlannedRuns) return;
+    const transition = planningTransitionRef.current;
+    const remaining =
+      transition.scopeKey === routeScopeKey
+        ? Math.max(0, transition.until - Date.now())
+        : 0;
+    const timer = setTimeout(
+      () => setAwaitingPlannedRunsScope(null),
+      remaining,
+    );
     return () => clearTimeout(timer);
-  }, [agentRunVisible, awaitingPlannedRuns, planningRunVisible]);
+  }, [agentRunVisible, awaitingPlannedRuns, planningRunVisible, routeScopeKey]);
 
   // Header facts line: the group's makeup, which does not change as the session switches.
   const memberCounts = useMemo(
@@ -366,34 +398,23 @@ export default function GroupsPage() {
     navigate(`/groups/${groupId}/${landing.id}`, { replace: true });
   }, [groupId, sessionId, sessions, navigate]);
 
-  // The active group is always expanded in the tree; the user can still collapse it by hand.
-  useEffect(() => {
-    if (!groupId) return;
-    setExpandedGroups((current) => {
-      if (current.has(groupId)) return current;
-      const next = new Set(current);
-      next.add(groupId);
-      return next;
-    });
-  }, [groupId]);
-
   // Load the newest page whenever the session changes.
   useEffect(() => {
-    if (!activeGroupId || !activeSessionId) {
-      setMessages([]);
-      setHasMore(false);
-      return;
-    }
+    if (!activeGroupId || !activeSessionId || !messageScopeKey) return;
     let cancelled = false;
-    setMessages([]);
-    setHasMore(false);
     void groupApi
       .messages(activeGroupId, activeSessionId, { limit: HISTORY_PAGE_SIZE })
       .then((page) => {
         if (cancelled) return;
         // Merge rather than replace: a pushed message can land while this page is in flight.
-        setMessages((previous) => mergeMessages(previous, page));
-        setHasMore(page.length === HISTORY_PAGE_SIZE);
+        setMessagePage((current) => ({
+          scopeKey: messageScopeKey,
+          messages: mergeMessages(
+            current.scopeKey === messageScopeKey ? current.messages : [],
+            page,
+          ),
+          hasMore: page.length === HISTORY_PAGE_SIZE,
+        }));
       })
       .catch(() => {
         if (!cancelled) toast.error(t("groups.loadFailed", "加载消息失败"));
@@ -401,10 +422,16 @@ export default function GroupsPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeGroupId, activeSessionId, toast, t]);
+  }, [activeGroupId, activeSessionId, messageScopeKey, toast, t]);
 
   const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  useLayoutEffect(() => {
+    messageScopeRef.current = messageScopeKey;
+  }, [messageScopeKey]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const getLastCursor = useCallback(() => {
     const list = messagesRef.current;
@@ -413,10 +440,22 @@ export default function GroupsPage() {
 
   const receiveMessages = useCallback(
     (incomingSessionId: string, incoming: GroupMessage[]) => {
-      if (incomingSessionId !== sessionId) return;
-      setMessages((previous) => mergeMessages(previous, incoming));
+      if (
+        incomingSessionId !== activeSessionId ||
+        !messageScopeKey ||
+        messageScopeRef.current !== messageScopeKey
+      )
+        return;
+      setMessagePage((current) => ({
+        scopeKey: messageScopeKey,
+        messages: mergeMessages(
+          current.scopeKey === messageScopeKey ? current.messages : [],
+          incoming,
+        ),
+        hasMore: current.scopeKey === messageScopeKey ? current.hasMore : false,
+      }));
     },
-    [sessionId],
+    [activeSessionId, messageScopeKey],
   );
 
   const onGroupActivity = useCallback(
@@ -593,15 +632,29 @@ export default function GroupsPage() {
     });
 
   const loadMore = async () => {
-    if (!groupId || !sessionId || loadingMore || messages.length === 0) return;
+    if (
+      !groupId ||
+      !sessionId ||
+      !messageScopeKey ||
+      loadingMore ||
+      messages.length === 0
+    )
+      return;
     setLoadingMore(true);
     try {
       const older = await groupApi.messages(groupId, sessionId, {
         limit: HISTORY_PAGE_SIZE,
         before: messages[0].cursor,
       });
-      setMessages((previous) => mergeMessages(previous, older));
-      setHasMore(older.length === HISTORY_PAGE_SIZE);
+      if (messageScopeRef.current !== messageScopeKey) return;
+      setMessagePage((current) => {
+        if (current.scopeKey !== messageScopeKey) return current;
+        return {
+          ...current,
+          messages: mergeMessages(current.messages, older),
+          hasMore: older.length === HISTORY_PAGE_SIZE,
+        };
+      });
     } catch {
       toast.error(t("groups.loadFailed", "加载消息失败"));
     } finally {
@@ -613,7 +666,7 @@ export default function GroupsPage() {
     content: string,
     mentionParticipantIds: string[],
   ) => {
-    if (!groupId || !sessionId) return;
+    if (!groupId || !sessionId || !messageScopeKey) return;
     try {
       const intake = await groupApi.sendMessage(groupId, sessionId, {
         content,
@@ -622,11 +675,21 @@ export default function GroupsPage() {
         })),
         message_id: createRandomUUID(),
       });
-      setMessages((previous) => mergeMessages(previous, [intake.message]));
+      if (messageScopeRef.current !== messageScopeKey) return;
+      setMessagePage((current) => ({
+        scopeKey: messageScopeKey,
+        messages: mergeMessages(
+          current.scopeKey === messageScopeKey ? current.messages : [],
+          [intake.message],
+        ),
+        hasMore: current.scopeKey === messageScopeKey ? current.hasMore : false,
+      }));
       if (intake.dispatch_kind === "planning") {
-        planningTransitionUntilRef.current =
-          Date.now() + ACTIVE_RUN_TRANSITION_GRACE_MS;
-        setAwaitingPlannedRuns(true);
+        planningTransitionRef.current = {
+          scopeKey: routeScopeKey,
+          until: Date.now() + ACTIVE_RUN_TRANSITION_GRACE_MS,
+        };
+        setAwaitingPlannedRunsScope(routeScopeKey);
       }
       if (intake.run_ids.length > 0) void refetchActiveRuns();
 
@@ -714,6 +777,7 @@ export default function GroupsPage() {
       });
       setCreatingGroup(false);
       await refetchGroups();
+      setExpandedGroups((current) => new Set(current).add(group.id));
       navigate(`/groups/${group.id}`);
     } catch (error) {
       toast.error(
@@ -887,7 +951,12 @@ export default function GroupsPage() {
                       <button
                         type="button"
                         className="group-row-main"
-                        onClick={() => navigate(`/groups/${group.id}`)}
+                        onClick={() => {
+                          setExpandedGroups((current) =>
+                            new Set(current).add(group.id),
+                          );
+                          navigate(`/groups/${group.id}`);
+                        }}
                       >
                         <span className="group-row-name">{group.name}</span>
                         {rollup && rollup.unread > 0 && (

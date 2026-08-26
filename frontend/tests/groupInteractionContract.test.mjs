@@ -88,9 +88,11 @@ test("an inaccessible group route is not used as a message or member fetch scope
 test("session metadata refresh does not clear and reload the visible message stream", () => {
   assert.match(groupsPage, /const activeGroupId = activeGroup\?\.id/);
   assert.match(groupsPage, /const activeSessionId = activeSession\?\.id/);
+  assert.match(groupsPage, /messagePage\.scopeKey === messageScopeKey/);
+  assert.match(groupsPage, /current\.scopeKey === messageScopeKey/);
   assert.match(
     groupsPage,
-    /groupApi[\s\S]*?\.messages\(activeGroupId, activeSessionId,[\s\S]*?\}, \[activeGroupId, activeSessionId, toast, t\]\);/,
+    /activeGroupId,\s*activeSessionId,\s*messageScopeKey/,
   );
   assert.doesNotMatch(
     groupsPage,
@@ -141,11 +143,11 @@ test("group and direct histories share user-driven prepend pagination semantics"
 
 test("planning-to-entry transition keeps polling and preserves the typing indicator", () => {
   assert.match(groupsPage, /ACTIVE_RUN_TRANSITION_GRACE_MS/);
-  assert.match(groupsPage, /planningTransitionUntilRef/);
-  assert.match(groupsPage, /setAwaitingPlannedRuns\(true\)/);
+  assert.match(groupsPage, /planningTransitionRef/);
+  assert.match(groupsPage, /setAwaitingPlannedRunsScope\(routeScopeKey\)/);
   assert.match(
     groupsPage,
-    /Date\.now\(\) < planningTransitionUntilRef\.current \? 250 : false/,
+    /transition\.scopeKey === routeScopeKey[\s\S]*?Date\.now\(\) < transition\.until/,
   );
   assert.match(
     groupsPage,
