@@ -18,6 +18,17 @@ class _ScalarResult:
         return self._value
 
 
+class _ListResult:
+    def __init__(self, values: list[object]) -> None:
+        self._values = values
+
+    def scalars(self) -> "_ListResult":
+        return self
+
+    def all(self) -> list[object]:
+        return self._values
+
+
 class _RecordingDB:
     def __init__(self, existing: object | None = None) -> None:
         self.existing = existing
@@ -29,6 +40,9 @@ class _RecordingDB:
 
     def add(self, _value: object) -> None:
         self.events.append("add")
+
+    async def delete(self, _value: object) -> None:
+        self.events.append("delete")
 
     async def commit(self) -> None:
         self.events.append("commit")
@@ -300,3 +314,127 @@ async def test_corrupt_atlassian_ciphertext_is_rejected_before_runtime_dispatch(
 
     assert outcome.status == "failed"
     assert outcome.error_code == "mcp_configuration_invalid"
+
+
+@pytest.mark.asyncio
+async def test_atlassian_assignment_cleanup_preserves_shared_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_id = uuid.uuid4()
+    assignment = SimpleNamespace(agent_id=agent_id, enabled=True)
+    shared_tool = SimpleNamespace(id=uuid.uuid4(), category="atlassian")
+    deleted: list[object] = []
+    db = object()
+
+    async def execute(cleanup_db: object, _statement: object) -> _ListResult:
+        assert cleanup_db is db
+        return _ListResult([assignment])
+
+    async def delete(cleanup_db: object, value: object) -> None:
+        assert cleanup_db is db
+        deleted.append(value)
+
+    monkeypatch.setattr(atlassian_api.query_dao, "execute", execute)
+    monkeypatch.setattr(atlassian_api.query_dao, "delete", delete)
+
+    removed = await atlassian_api._remove_atlassian_tool_assignments(
+        agent_id,
+        db,
+    )
+
+    assert removed == 1
+    assert deleted == [assignment]
+    assert shared_tool not in deleted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_category_config_delete_owns_atlassian_assignment_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_fails: bool,
+) -> None:
+    actor, agent = _actor_and_agent()
+    db = _RecordingDB()
+
+    async def require_manager(*_args: object) -> SimpleNamespace:
+        return agent
+
+    async def cleanup(
+        cleanup_agent_id: uuid.UUID,
+        cleanup_db: object,
+    ) -> int:
+        assert cleanup_agent_id == agent.id
+        assert cleanup_db is db
+        db.events.append("cleanup")
+        if cleanup_fails:
+            raise RuntimeError("cleanup failed")
+        return 1
+
+    monkeypatch.setattr(tools_api, "_require_agent_tool_manager", require_manager)
+    monkeypatch.setattr("app.core.permissions.is_agent_creator", lambda *_args: True)
+    monkeypatch.setattr(atlassian_api, "_remove_atlassian_tool_assignments", cleanup)
+
+    if cleanup_fails:
+        with pytest.raises(HTTPException) as exc_info:
+            await tools_api.delete_category_config(
+                agent_id=agent.id,
+                category="atlassian",
+                current_user=actor,
+                db=db,
+            )
+        assert exc_info.value.status_code == 500
+        assert db.events == ["execute", "cleanup", "rollback"]
+    else:
+        await tools_api.delete_category_config(
+            agent_id=agent.id,
+            category="atlassian",
+            current_user=actor,
+            db=db,
+        )
+        assert db.events == ["execute", "cleanup", "commit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_legacy_atlassian_delete_owns_assignment_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_fails: bool,
+) -> None:
+    actor, agent = _actor_and_agent()
+    config = SimpleNamespace(id=uuid.uuid4())
+    db = _RecordingDB(config)
+
+    async def check_access(*_args: object) -> tuple[SimpleNamespace, str]:
+        return agent, "manage"
+
+    async def cleanup(
+        cleanup_agent_id: uuid.UUID,
+        cleanup_db: object,
+    ) -> int:
+        assert cleanup_agent_id == agent.id
+        assert cleanup_db is db
+        db.events.append("cleanup")
+        if cleanup_fails:
+            raise RuntimeError("cleanup failed")
+        return 1
+
+    monkeypatch.setattr(atlassian_api, "check_agent_access", check_access)
+    monkeypatch.setattr(atlassian_api, "is_agent_creator", lambda *_args: True)
+    monkeypatch.setattr(atlassian_api, "_remove_atlassian_tool_assignments", cleanup)
+
+    if cleanup_fails:
+        with pytest.raises(HTTPException) as exc_info:
+            await atlassian_api.delete_atlassian_channel(
+                agent_id=agent.id,
+                current_user=actor,
+                db=db,
+            )
+        assert exc_info.value.status_code == 500
+        assert db.events == ["execute", "delete", "cleanup", "rollback"]
+    else:
+        await atlassian_api.delete_atlassian_channel(
+            agent_id=agent.id,
+            current_user=actor,
+            db=db,
+        )
+        assert db.events == ["execute", "delete", "cleanup", "commit"]

@@ -1192,12 +1192,23 @@ async def delete_category_config(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove config")
 
-    await db.execute(
-        delete(ChannelConfig).where(
-            ChannelConfig.agent_id == agent_id,
-            ChannelConfig.channel_type == category,
+    try:
+        await db.execute(
+            delete(ChannelConfig).where(
+                ChannelConfig.agent_id == agent_id,
+                ChannelConfig.channel_type == category,
+            )
         )
-    )
+        if category == "atlassian":
+            from app.api.atlassian import _remove_atlassian_tool_assignments
+
+            await _remove_atlassian_tool_assignments(agent_id, db)
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Tool category cleanup failed",
+        ) from exc
     await db.commit()
 
 

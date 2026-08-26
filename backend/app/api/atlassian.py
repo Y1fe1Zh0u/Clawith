@@ -135,7 +135,15 @@ async def delete_atlassian_channel(
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="Atlassian not configured")
-    await query_dao.delete(db, config)
+    try:
+        await query_dao.delete(db, config)
+        await _remove_atlassian_tool_assignments(agent_id, db)
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Atlassian configuration cleanup failed",
+        ) from exc
     await query_dao.commit(db)
 
 
@@ -303,6 +311,28 @@ async def _sync_atlassian_tools_for_agent(
             assigned += 1
 
     logger.info(f"[AtlassianChannel] {assigned} new tool assignments for agent {agent_id}")
+
+
+async def _remove_atlassian_tool_assignments(
+    agent_id: uuid.UUID,
+    db: AsyncSession,
+) -> int:
+    """Remove one Agent's Atlassian assignments without deleting shared Tools."""
+    from app.models.tool import AgentTool, Tool
+
+    result = await query_dao.execute(
+        db,
+        select(AgentTool)
+        .join(Tool, AgentTool.tool_id == Tool.id)
+        .where(
+            AgentTool.agent_id == agent_id,
+            Tool.category == "atlassian",
+        ),
+    )
+    assignments = list(result.scalars().all())
+    for assignment in assignments:
+        await query_dao.delete(db, assignment)
+    return len(assignments)
 
 
 async def get_atlassian_api_key_for_agent(agent_id: uuid.UUID, db=None) -> str | None:

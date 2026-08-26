@@ -12,6 +12,8 @@ Atlassian configuration spans the owning `ChannelConfig`, discovered shared `Too
 
 Atlassian discovery, Tool upsert, AgentTool assignment, and ChannelConfig mutation reuse the request's `AsyncSession`. The route owns the single commit after synchronization succeeds. Missing credentials, discovery failure, empty discovery results, encryption failure, or persistence failure cannot return configuration success; the request rolls back instead. Atlassian configuration routes await this operation directly and do not create unowned background tasks.
 
+Deleting either Atlassian configuration surface removes the owning `ChannelConfig` and that Agent's Atlassian `AgentTool` assignments in the same transaction. Shared `Tool` discovery records remain available for other Agents. Cleanup failure rolls back both sides, so configuration deletion cannot leave an enabled orphan assignment.
+
 ## Alternatives considered
 
 - Preserve background synchronization and report eventual status separately. Rejected because no durable synchronization object or consumer currently owns that lifecycle.
@@ -20,8 +22,8 @@ Atlassian discovery, Tool upsert, AgentTool assignment, and ChannelConfig mutati
 
 ## Consequences
 
-Atlassian configuration may take as long as provider discovery, but success means the encrypted configuration and assigned tools committed together. Provider unavailability is visible as an HTTP failure and does not publish partial configuration state. Other MCP providers retain their existing credential contracts.
+Atlassian configuration may take as long as provider discovery, but success means the encrypted configuration and assigned tools committed together. Provider unavailability is visible as an HTTP failure and does not publish partial configuration state. Removing configuration also removes only the requesting Agent's assignments; shared Tool records and other Agents' assignments are preserved. Other MCP providers retain their existing credential contracts.
 
 ## Verification
 
-Regression coverage verifies missing-key rejection before database work, encrypted AgentTool persistence, shared-session sync before the single commit, rollback on synchronization failure, and corrupt-ciphertext rejection before MCP dispatch. Backend Pyright and the focused Atlassian, dynamic MCP, and LLM capability tests must remain green.
+Regression coverage verifies missing-key rejection before database work, encrypted AgentTool persistence, shared-session sync before the single commit, rollback on synchronization failure, corrupt-ciphertext rejection before MCP dispatch, and atomic assignment cleanup through both deletion routes. Backend Pyright and the focused Atlassian, dynamic MCP, and LLM capability tests must remain green.
