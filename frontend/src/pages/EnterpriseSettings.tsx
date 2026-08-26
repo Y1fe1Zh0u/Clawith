@@ -1171,7 +1171,7 @@ export default function EnterpriseSettings() {
                                                         onClick={async () => {
                                                             setEditingToolId(tool.id);
                                                             setShowAdvancedToolConfig(false);
-                                                            let cfg = applyConfigDefaults(tool.config_schema?.fields || [], tool.config || {});
+                                                            const cfg = applyConfigDefaults(tool.config_schema?.fields || [], tool.config || {});
                                                             if (tool.name === 'jina_search' || tool.name === 'jina_read') {
                                                                 try {
                                                                     const token = localStorage.getItem('token');
