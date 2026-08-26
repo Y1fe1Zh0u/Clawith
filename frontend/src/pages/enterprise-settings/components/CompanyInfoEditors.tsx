@@ -410,7 +410,9 @@ export function CompanyNameEditor() {
       qc.invalidateQueries({ queryKey: ["my-tenants"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch {}
+    } catch {
+      // Keep the edited company name in place so the user can retry.
+    }
     setSaving(false);
   };
 

@@ -2737,7 +2737,7 @@ export default function AgentDetailPage() {
                 if (!silent && currentAgentIdRef.current === agentId) setSessionsLoading(false);
                 return data;
             }
-        } catch { }
+        } catch { /* The existing empty-session fallback below remains authoritative. */ }
         if (!silent && currentAgentIdRef.current === agentId) setSessionsLoading(false);
         return [];
     };
@@ -4033,7 +4033,7 @@ export default function AgentDetailPage() {
             const caret = el.value.length;
             try {
                 el.setSelectionRange(caret, caret);
-            } catch { }
+            } catch { /* Some input implementations do not support selection ranges. */ }
         };
         requestAnimationFrame(focusWhenReady);
     }, [activeTab]);

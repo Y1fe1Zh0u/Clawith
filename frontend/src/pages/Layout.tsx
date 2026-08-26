@@ -2330,7 +2330,9 @@ export default function Layout() {
           onDone={async () => {
             try {
               await onboardingApi.complete();
-            } catch {}
+            } catch {
+              // Completion sync is best effort; keep the finished tour navigable.
+            }
             navigate(
               tourAssistantId
                 ? `/agents/${tourAssistantId}/chat?onboarding=1`

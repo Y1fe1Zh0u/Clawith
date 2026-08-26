@@ -495,7 +495,9 @@ export default function TakeControlPanel({
         session_id: sessionId,
         export_cookies: false,
       });
-    } catch {}
+    } catch {
+      // Unlock is best effort during cancellation; continue returning the last screenshot.
+    }
     // Pass the last screenshot to the parent so live preview updates
     if (lastScreenshotRef.current && onLastScreenshot) {
       console.log(

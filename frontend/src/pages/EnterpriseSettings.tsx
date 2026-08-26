@@ -184,7 +184,7 @@ export default function EnterpriseSettings() {
             });
             setCompanyIntroSaved(true);
             setTimeout(() => setCompanyIntroSaved(false), 2000);
-        } catch { }
+        } catch { /* Keep the edited introduction in place so the user can retry. */ }
         setCompanyIntroSaving(false);
     };
     const [auditFilter, setAuditFilter] = useState<'all' | 'background' | 'actions'>('all');
@@ -1178,7 +1178,7 @@ export default function EnterpriseSettings() {
                                                                     const res = await fetch('/api/enterprise/system-settings/jina_api_key', { headers: { Authorization: `Bearer ${token}` } });
                                                                     const d = await res.json();
                                                                     if (d.value?.api_key) cfg.api_key = d.value.api_key;
-                                                                } catch { }
+                                                                } catch { /* The optional Jina key does not block editing the base configuration. */ }
                                                             }
                                                             setEditingConfig(cfg);
                                                         }}
