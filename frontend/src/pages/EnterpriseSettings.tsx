@@ -38,11 +38,23 @@ import {
   IconTools,
   IconUser,
 } from "@tabler/icons-react";
-import type { JsonValue, Tenant } from "../services/apiContracts";
+import type { JsonValue } from "../services/apiContracts";
 import {
   importMcpToolsTransaction,
   McpCredentialSaveError,
 } from "../services/mcpImportTransaction";
+import { parseTenantResponse } from "../services/apiResponseParsers";
+import {
+  parseApprovalList,
+  parseAuditLogList,
+  parseCompanyIntroSetting,
+  parseCreatedMcpTool,
+  parseEnterpriseStats,
+  parseEnterpriseToolList,
+  parseMcpTestResult,
+  parseTenantDeleteResult,
+  parseTenantQuotas,
+} from "../services/directPageResponseParsers";
 
 type TabKey =
   | "llm"
@@ -124,39 +136,6 @@ interface McpTestResult {
   tools?: McpDiscoveredTool[];
 }
 
-interface CreatedMcpTool {
-  id: string;
-  name: string;
-}
-
-interface Approval {
-  id: string;
-  action_type: string;
-  agent_name?: string;
-  agent_id: string;
-  created_at: string;
-  status: "pending" | "approved" | "rejected";
-}
-
-interface AuditLog {
-  id: string;
-  action: string;
-  created_at: string;
-  actor_name?: string;
-  actor_type?: string;
-  resource_type?: string;
-  resource_id?: string;
-  agent_id?: string;
-  details?: Record<string, JsonValue> | null;
-}
-
-interface EnterpriseStats {
-  total_users: number;
-  running_agents: number;
-  total_agents: number;
-  pending_approvals: number;
-}
-
 interface TenantQuotas {
   default_message_limit: number;
   default_message_period: string;
@@ -167,14 +146,6 @@ interface TenantQuotas {
   default_max_triggers: number;
   min_poll_interval_floor: number;
   max_webhook_rate_ceiling: number;
-}
-
-interface CompanyIntroSetting {
-  value?: { content?: string };
-}
-
-interface TenantDeleteResponse {
-  fallback_tenant_id: string;
 }
 
 interface LoadState {
@@ -349,7 +320,8 @@ export default function EnterpriseSettings() {
   const [quotaLoadAttempt, setQuotaLoadAttempt] = useState(0);
   useEffect(() => {
     if (activeTab === "quotas") {
-      fetchJson<Partial<TenantQuotas>>("/enterprise/tenant-quotas")
+      fetchJson<unknown>("/enterprise/tenant-quotas")
+        .then(parseTenantQuotas)
         .then((d) => {
           if (d && Object.keys(d).length) setQuotaForm((f) => ({ ...f, ...d }));
           setQuotaLoadState({ status: "ready", error: "" });
@@ -366,7 +338,7 @@ export default function EnterpriseSettings() {
     if (quotaLoadState.status !== "ready") return;
     setQuotaSaving(true);
     try {
-      await fetchJson("/enterprise/tenant-quotas", {
+      await fetchJson<void>("/enterprise/tenant-quotas", {
         method: "PATCH",
         body: JSON.stringify(quotaForm),
       });
@@ -407,7 +379,8 @@ export default function EnterpriseSettings() {
     if (!selectedTenantId) return;
     let active = true;
     const tenantKey = `company_intro_${selectedTenantId}`;
-    fetchJson<CompanyIntroSetting>(`/enterprise/system-settings/${tenantKey}`)
+    fetchJson<unknown>(`/enterprise/system-settings/${tenantKey}`)
+      .then(parseCompanyIntroSetting)
       .then((d) => {
         if (!active) return;
         setCompanyIntroDraft({
@@ -443,7 +416,7 @@ export default function EnterpriseSettings() {
       return;
     setCompanyIntroSaving(true);
     try {
-      await fetchJson(`/enterprise/system-settings/${companyIntroKey}`, {
+      await fetchJson<void>(`/enterprise/system-settings/${companyIntroKey}`, {
         method: "PUT",
         body: JSON.stringify({ value: { content: companyIntro } }),
       });
@@ -676,16 +649,18 @@ export default function EnterpriseSettings() {
   };
   const loadAllTools = async () => {
     const tid = selectedTenantId;
-    const data = await fetchJson<EnterpriseTool[]>(
-      `/tools${tid ? `?tenant_id=${tid}` : ""}`,
+    const data = parseEnterpriseToolList(
+      await fetchJson<unknown>(`/tools${tid ? `?tenant_id=${tid}` : ""}`),
     );
     setAllTools(data);
   };
   const loadAgentInstalledTools = async () => {
     try {
       const tid = selectedTenantId;
-      const data = await fetchJson<EnterpriseTool[]>(
-        `/tools/agent-installed${tid ? `?tenant_id=${tid}` : ""}`,
+      const data = parseEnterpriseToolList(
+        await fetchJson<unknown>(
+          `/tools/agent-installed${tid ? `?tenant_id=${tid}` : ""}`,
+        ),
       );
       setAgentInstalledTools(data);
     } catch (error) {
@@ -703,7 +678,7 @@ export default function EnterpriseSettings() {
       { apiKey: mcpForm.api_key },
       {
         createTool: (tool) =>
-          fetchJson<CreatedMcpTool>("/tools", {
+          fetchJson<unknown>("/tools", {
             method: "POST",
             body: JSON.stringify({
               name: `mcp_${tool.name}`,
@@ -719,9 +694,9 @@ export default function EnterpriseSettings() {
               is_default: false,
               tenant_id: selectedTenantId || undefined,
             }),
-          }),
+          }).then(parseCreatedMcpTool),
         saveCredential: async () => {
-          await fetchJson("/tools/mcp-server", {
+          await fetchJson<void>("/tools/mcp-server", {
             method: "PUT",
             body: JSON.stringify({
               server_name: serverName,
@@ -732,7 +707,7 @@ export default function EnterpriseSettings() {
           });
         },
         deleteTool: async (id) => {
-          await fetchJson(`/tools/${id}`, { method: "DELETE" });
+          await fetchJson<void>(`/tools/${id}`, { method: "DELETE" });
         },
       },
     );
@@ -741,16 +716,18 @@ export default function EnterpriseSettings() {
     if (activeTab !== "tools") return;
     let active = true;
     const tid = selectedTenantId;
-    fetchJson<EnterpriseTool[]>(`/tools${tid ? `?tenant_id=${tid}` : ""}`)
+    fetchJson<unknown>(`/tools${tid ? `?tenant_id=${tid}` : ""}`)
+      .then(parseEnterpriseToolList)
       .then((tools) => {
         if (active) setAllTools(tools);
       })
       .catch(() => {
         if (active) setAllTools([]);
       });
-    fetchJson<EnterpriseTool[]>(
+    fetchJson<unknown>(
       `/tools/agent-installed${tid ? `?tenant_id=${tid}` : ""}`,
     )
+      .then(parseEnterpriseToolList)
       .then((tools) => {
         if (active) setAgentInstalledTools(tools);
       })
@@ -764,7 +741,10 @@ export default function EnterpriseSettings() {
 
   const { data: currentTenant } = useQuery({
     queryKey: ["tenant", selectedTenantId],
-    queryFn: () => fetchJson<Tenant>(`/tenants/${selectedTenantId}`),
+    queryFn: async () =>
+      parseTenantResponse(
+        await fetchJson<unknown>(`/tenants/${selectedTenantId}`),
+      ),
     enabled: !!selectedTenantId,
   });
 
@@ -772,23 +752,25 @@ export default function EnterpriseSettings() {
   const { data: stats } = useQuery({
     queryKey: ["enterprise-stats", selectedTenantId],
     queryFn: () =>
-      fetchJson<EnterpriseStats>(
+      fetchJson<unknown>(
         `/enterprise/stats${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
       ),
+    select: parseEnterpriseStats,
   });
 
   // ─── Approvals
   const { data: approvals = [] } = useQuery({
     queryKey: ["approvals", selectedTenantId],
     queryFn: () =>
-      fetchJson<Approval[]>(
+      fetchJson<unknown>(
         `/enterprise/approvals${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
       ),
+    select: parseApprovalList,
     enabled: activeTab === "approvals",
   });
   const resolveApproval = useMutation({
     mutationFn: ({ id, action }: { id: string; action: string }) =>
-      fetchJson(`/enterprise/approvals/${id}/resolve`, {
+      fetchJson<void>(`/enterprise/approvals/${id}/resolve`, {
         method: "POST",
         body: JSON.stringify({ action }),
       }),
@@ -812,9 +794,10 @@ export default function EnterpriseSettings() {
   const { data: auditLogs = [] } = useQuery({
     queryKey: ["audit-logs", selectedTenantId],
     queryFn: () =>
-      fetchJson<AuditLog[]>(
+      fetchJson<unknown>(
         `/enterprise/audit-logs?limit=200${selectedTenantId ? `&tenant_id=${selectedTenantId}` : ""}`,
       ),
+    select: parseAuditLogList,
     enabled: activeTab === "audit",
   });
   const filteredAuditLogs = auditLogs.filter((log) => {
@@ -1339,9 +1322,10 @@ export default function EnterpriseSettings() {
                   );
                   if (!ok) return;
                   try {
-                    const res = await fetchJson<TenantDeleteResponse>(
-                      `/tenants/${selectedTenantId}`,
-                      { method: "DELETE" },
+                    const res = parseTenantDeleteResult(
+                      await fetchJson<unknown>(`/tenants/${selectedTenantId}`, {
+                        method: "DELETE",
+                      }),
                     );
                     // Switch to fallback tenant
                     const fallbackId = res.fallback_tenant_id;
@@ -2148,7 +2132,7 @@ export default function EnterpriseSettings() {
                                           );
                                           if (!ok) return;
                                           try {
-                                            await fetchJson(
+                                            await fetchJson<void>(
                                               `/tools/agent-tool/${row.agent_tool_id}`,
                                               { method: "DELETE" },
                                             );
@@ -2395,15 +2379,14 @@ export default function EnterpriseSettings() {
                             setMcpTesting(true);
                             setMcpTestResult(null);
                             try {
-                              const r = await fetchJson<McpTestResult>(
-                                "/tools/test-mcp",
-                                {
+                              const r = parseMcpTestResult(
+                                await fetchJson<unknown>("/tools/test-mcp", {
                                   method: "POST",
                                   body: JSON.stringify({
                                     server_url: mcpForm.server_url,
                                     api_key: mcpForm.api_key || undefined,
                                   }),
-                                },
+                                }),
                               );
                               setMcpTestResult(r);
                             } catch (error) {
@@ -2703,7 +2686,7 @@ export default function EnterpriseSettings() {
                         tool_id: t.id,
                         enabled,
                       }));
-                      await fetchJson("/tools/bulk", {
+                      await fetchJson<void>("/tools/bulk", {
                         method: "PUT",
                         body: JSON.stringify(payload),
                       });
@@ -2928,7 +2911,7 @@ export default function EnterpriseSettings() {
                                   },
                                 );
                                 if (!ok) return;
-                                await fetchJson(`/tools/${tool.id}`, {
+                                await fetchJson<void>(`/tools/${tool.id}`, {
                                   method: "DELETE",
                                 });
                                 loadAllTools();
@@ -2952,7 +2935,7 @@ export default function EnterpriseSettings() {
                               type="checkbox"
                               checked={tool.enabled}
                               onChange={async (e) => {
-                                await fetchJson(`/tools/${tool.id}`, {
+                                await fetchJson<void>(`/tools/${tool.id}`, {
                                   method: "PUT",
                                   body: JSON.stringify({
                                     enabled: e.target.checked,
@@ -3651,7 +3634,7 @@ export default function EnterpriseSettings() {
                           onClick={async () => {
                             setMcpServerSaving(true);
                             try {
-                              await fetchJson("/tools/mcp-server", {
+                              await fetchJson<void>("/tools/mcp-server", {
                                 method: "PUT",
                                 body: JSON.stringify({
                                   server_name: editingMcpServer.server_name,
@@ -4037,7 +4020,7 @@ export default function EnterpriseSettings() {
                                       );
                                     }
                                   } else {
-                                    await fetchJson(`/tools/${tool.id}`, {
+                                    await fetchJson<void>(`/tools/${tool.id}`, {
                                       method: "PUT",
                                       body: JSON.stringify({
                                         config: editingConfig,
@@ -4235,7 +4218,7 @@ export default function EnterpriseSettings() {
                                     (tl) => tl.name === primaryToolName,
                                   ) || catTools[0];
                                 if (representativeTool) {
-                                  await fetchJson(
+                                  await fetchJson<void>(
                                     `/tools/${representativeTool.id}`,
                                     {
                                       method: "PUT",

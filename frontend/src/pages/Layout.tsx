@@ -27,6 +27,11 @@ import {
 } from "../services/api";
 import type { Agent, User } from "../types";
 import type { TenantChoice } from "../services/apiContracts";
+import {
+  parseNotificationItems,
+  parseUnreadCount,
+  type NotificationItemResponse as NotificationItem,
+} from "../services/directPageResponseParsers";
 import { useGroupUnread } from "../hooks/useGroupUnread";
 import { useToast } from "../components/Toast/ToastContext";
 
@@ -83,17 +88,6 @@ function resolveUiLangCode(lang: string | undefined): string {
   if (!lang) return "en";
   if (lang.startsWith("zh")) return "zh";
   return "en";
-}
-
-interface NotificationItem {
-  id: string;
-  type: string;
-  title: string;
-  body?: string;
-  sender_name?: string;
-  created_at?: string;
-  is_read: boolean;
-  link?: string;
 }
 
 /* Compute display badge status for an agent */
@@ -844,8 +838,8 @@ export default function Layout() {
   const { data: unreadCount = 0 } = useQuery({
     queryKey: ["notifications-unread"],
     queryFn: async () => {
-      const res = await fetchJson<{ unread_count: number }>(
-        "/notifications/unread-count",
+      const res = parseUnreadCount(
+        await fetchJson<unknown>("/notifications/unread-count"),
       );
       return res.unread_count || 0;
     },
@@ -854,9 +848,11 @@ export default function Layout() {
   });
   const { data: notifications = [] } = useQuery({
     queryKey: ["notifications", notifCategory],
-    queryFn: () =>
-      fetchJson<NotificationItem[]>(
-        `/notifications?limit=50${notifCategory !== "all" ? `&category=${notifCategory}` : ""}`,
+    queryFn: async () =>
+      parseNotificationItems(
+        await fetchJson<unknown>(
+          `/notifications?limit=50${notifCategory !== "all" ? `&category=${notifCategory}` : ""}`,
+        ),
       ),
     enabled: !!user && showNotifications,
   });

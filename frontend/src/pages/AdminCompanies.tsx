@@ -15,6 +15,7 @@ import {
   parsePlatformSettings,
   parseSystemEmailSetting,
 } from "../services/platformAdminConfigResponse";
+import { parseUpdatedAtSetting } from "../services/directPageResponseParsers";
 // Format large token numbers with K/M/B suffixes
 function formatTokens(n: number | null | undefined): string {
   if (n == null) return "-";
@@ -50,11 +51,6 @@ const PAGE_SIZE = 15;
 
 type SocialProviderType = "google" | "github";
 
-interface NotificationBarValue {
-  enabled: boolean;
-  text: string;
-}
-
 interface SystemEmailConfig {
   SYSTEM_EMAIL_ENABLED: boolean;
   SYSTEM_EMAIL_FROM_ADDRESS: string;
@@ -65,11 +61,6 @@ interface SystemEmailConfig {
   SYSTEM_SMTP_PASSWORD: string;
   SYSTEM_SMTP_SSL: boolean;
   SYSTEM_SMTP_TIMEOUT_SECONDS: number;
-}
-
-interface SystemSettingResponse<T> {
-  value?: T;
-  updated_at?: string | null;
 }
 
 interface EmailTemplate {
@@ -83,14 +74,6 @@ interface OAuthProviderConfig {
   client_secret?: string;
   app_secret?: string;
   scope?: string;
-}
-
-interface IdentityProviderResponse {
-  id: string;
-  provider_type: string;
-  name?: string;
-  is_active?: boolean;
-  config?: OAuthProviderConfig;
 }
 
 interface OAuthProvider {
@@ -444,14 +427,17 @@ function PlatformTab() {
     if (!requirePlatformConfig()) return false;
     setNbSaving(true);
     try {
-      const payload = await fetchJson<
-        SystemSettingResponse<NotificationBarValue>
-      >("/enterprise/system-settings/notification_bar", {
-        method: "PUT",
-        body: JSON.stringify({
-          value: { enabled: nextEnabled, text: nextText },
-        }),
-      });
+      const payload = parseUpdatedAtSetting(
+        await fetchJson<unknown>(
+          "/enterprise/system-settings/notification_bar",
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              value: { enabled: nextEnabled, text: nextText },
+            }),
+          },
+        ),
+      );
       setNbEnabled(nextEnabled);
       setNbText(nextText);
       window.dispatchEvent(
@@ -488,10 +474,13 @@ function PlatformTab() {
     if (!requirePlatformConfig()) return;
     setEmailConfigSaving(true);
     try {
-      await fetchJson("/enterprise/system-settings/system_email_platform", {
-        method: "PUT",
-        body: JSON.stringify({ value: systemEmailConfig }),
-      });
+      await fetchJson<void>(
+        "/enterprise/system-settings/system_email_platform",
+        {
+          method: "PUT",
+          body: JSON.stringify({ value: systemEmailConfig }),
+        },
+      );
       setEmailConfigSaved(true);
       setTimeout(() => setEmailConfigSaved(false), 2000);
       showToast("Email config saved");
@@ -511,7 +500,7 @@ function PlatformTab() {
     setTestEmailSending(true);
     setTestEmailResult(null);
     try {
-      await fetchJson("/enterprise/system-email/test", {
+      await fetchJson<void>("/enterprise/system-email/test", {
         method: "POST",
         body: JSON.stringify({ email: testEmailAddr }),
       });
@@ -535,7 +524,7 @@ function PlatformTab() {
     if (!requirePlatformConfig()) return;
     setTemplatesSaving(true);
     try {
-      await fetchJson("/enterprise/email-templates", {
+      await fetchJson<void>("/enterprise/email-templates", {
         method: "PUT",
         body: JSON.stringify({ templates: emailTemplates }),
       });
@@ -601,25 +590,24 @@ function PlatformTab() {
     };
 
     try {
-      const result = provider.id
-        ? await fetchJson<IdentityProviderResponse>(
-            `/enterprise/identity-providers/${provider.id}`,
-            {
-              method: "PUT",
-              body: JSON.stringify({
-                name: payload.name,
-                is_active: payload.is_active,
-                config: payload.config,
-              }),
-            },
-          )
-        : await fetchJson<IdentityProviderResponse>(
-            "/enterprise/identity-providers",
-            {
+      const result = parseIdentityProviders([
+        provider.id
+          ? await fetchJson<unknown>(
+              `/enterprise/identity-providers/${provider.id}`,
+              {
+                method: "PUT",
+                body: JSON.stringify({
+                  name: payload.name,
+                  is_active: payload.is_active,
+                  config: payload.config,
+                }),
+              },
+            )
+          : await fetchJson<unknown>("/enterprise/identity-providers", {
               method: "POST",
               body: JSON.stringify(payload),
-            },
-          );
+            }),
+      ])[0];
 
       setOauthProviders((prev) => ({
         ...prev,

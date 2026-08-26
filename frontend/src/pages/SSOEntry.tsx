@@ -4,20 +4,11 @@ import { useTranslation } from "react-i18next";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { useAuthStore } from "../stores";
 import { fetchJson } from "../services/api";
-import type { User } from "../types";
-
-interface SsoProvider {
-  provider_type: string;
-  url?: string;
-  name?: string;
-}
-
-interface SsoSessionStatus {
-  access_token?: string;
-  user?: User;
-  status?: string;
-  error_msg?: string;
-}
+import {
+  parseSsoProviders,
+  parseSsoSessionStatus,
+  type SsoProviderResponse as SsoProvider,
+} from "../services/directPageResponseParsers";
 
 export default function SSOEntry() {
   const { t } = useTranslation();
@@ -41,11 +32,14 @@ export default function SSOEntry() {
     }
 
     // 1. Mark as scanned
-    fetchJson(`/sso/session/${sid}/scan`, { method: "PUT" }).catch(() => {});
+    fetchJson<void>(`/sso/session/${sid}/scan`, { method: "PUT" }).catch(
+      () => {},
+    );
 
     // 2. Load SSO configs (skip auto-redirect on completion step)
     if (!complete) {
-      fetchJson<SsoProvider[]>(`/sso/config?sid=${sid}`)
+      fetchJson<unknown>(`/sso/config?sid=${sid}`)
+        .then(parseSsoProviders)
         .then((data) => {
           setProviders(data);
           setLoading(false);
@@ -85,8 +79,8 @@ export default function SSOEntry() {
       if (cancelled) return;
       try {
         setPolling(true);
-        const res = await fetchJson<SsoSessionStatus>(
-          `/sso/session/${sid}/status`,
+        const res = parseSsoSessionStatus(
+          await fetchJson<unknown>(`/sso/session/${sid}/status`),
         );
         if (res?.access_token && res?.user) {
           setAuth(res.user, res.access_token);

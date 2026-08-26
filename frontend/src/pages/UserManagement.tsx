@@ -9,24 +9,11 @@ import { useDialog } from "../components/Dialog/DialogContext";
 import { IconEdit } from "@tabler/icons-react";
 import { fetchJson } from "../services/api";
 import type { User } from "../types";
-
-interface UserInfo {
-  id: string;
-  username: string;
-  email: string;
-  display_name: string;
-  role: User["role"];
-  is_active: boolean;
-  quota_message_limit: number;
-  quota_message_period: string;
-  quota_messages_used: number;
-  quota_max_agents: number;
-  quota_agent_ttl_hours: number;
-  agents_count: number;
-  feishu_open_id?: string;
-  created_at?: string;
-  source?: string;
-}
+import {
+  parseInviteUsersResult,
+  parseUserManagementUsers,
+  type UserManagementUser as UserInfo,
+} from "../services/directPageResponseParsers";
 
 const PERIOD_OPTIONS = [
   { value: "permanent", label: "Permanent" },
@@ -85,8 +72,10 @@ export default function UserManagement() {
     setLoading(true);
     try {
       const tenantId = localStorage.getItem("current_tenant_id") || "";
-      const data = await fetchJson<UserInfo[]>(
-        `/users/${tenantId ? `?tenant_id=${tenantId}` : ""}`,
+      const data = parseUserManagementUsers(
+        await fetchJson<unknown>(
+          `/users/${tenantId ? `?tenant_id=${tenantId}` : ""}`,
+        ),
       );
       setUsers(data);
     } catch (e) {
@@ -97,7 +86,8 @@ export default function UserManagement() {
 
   useEffect(() => {
     const tenantId = localStorage.getItem("current_tenant_id") || "";
-    fetchJson<UserInfo[]>(`/users/${tenantId ? `?tenant_id=${tenantId}` : ""}`)
+    fetchJson<unknown>(`/users/${tenantId ? `?tenant_id=${tenantId}` : ""}`)
+      .then(parseUserManagementUsers)
       .then(setUsers)
       .catch((error: unknown) => console.error("Failed to load users", error))
       .finally(() => setLoading(false));
@@ -117,7 +107,7 @@ export default function UserManagement() {
     if (!editingUserId) return;
     setSaving(true);
     try {
-      await fetchJson(`/users/${editingUserId}/quota`, {
+      await fetchJson<void>(`/users/${editingUserId}/quota`, {
         method: "PATCH",
         body: JSON.stringify(editForm),
       });
@@ -136,7 +126,7 @@ export default function UserManagement() {
   const handleRoleChange = async (userId: string, newRole: User["role"]) => {
     setChangingRoleUserId(userId);
     try {
-      await fetchJson(`/users/${userId}/role`, {
+      await fetchJson<void>(`/users/${userId}/role`, {
         method: "PATCH",
         body: JSON.stringify({ role: newRole }),
       });
@@ -173,12 +163,11 @@ export default function UserManagement() {
     setInviting(true);
     setInviteResult(null);
     try {
-      const res = await fetchJson<{ invited: number; message: string }>(
-        "/enterprise/invite-users",
-        {
+      const res = parseInviteUsersResult(
+        await fetchJson<unknown>("/enterprise/invite-users", {
           method: "POST",
           body: JSON.stringify({ emails }),
-        },
+        }),
       );
       setInviteResult({ invited: res.invited, message: res.message });
       setInviteEmails("");

@@ -12,26 +12,18 @@ import {
 } from "../services/api";
 import type { Agent, Task } from "../types";
 import type { ActivityItem, TenantTokenUsage } from "../services/apiContracts";
+import {
+  parseDashboardOkrObjectives,
+  parseDashboardOkrPeriods,
+  parseOkrSettings,
+  type DashboardOkrObjective as OkrObjective,
+} from "../services/directPageResponseParsers";
 
 type LayoutOutletContext = {
   openTalentMarket?: () => void;
 };
 
 type KrStatus = "on_track" | "at_risk" | "behind" | "completed";
-
-interface OkrPeriod {
-  start: string;
-  end: string;
-  is_current: boolean;
-}
-
-interface OkrKeyResult {
-  status: string;
-}
-
-interface OkrObjective {
-  key_results?: OkrKeyResult[];
-}
 
 interface DashboardActivity extends ActivityItem {
   agent_id: string;
@@ -234,7 +226,8 @@ function OKRSummaryCard() {
   // Load settings first
   const { data: settings } = useQuery({
     queryKey: ["okr-settings-dash"],
-    queryFn: () => fetchJson<{ enabled: boolean }>("/okr/settings"),
+    queryFn: async () =>
+      parseOkrSettings(await fetchJson<unknown>("/okr/settings")),
     staleTime: 60000,
   });
 
@@ -243,13 +236,17 @@ function OKRSummaryCard() {
     queryKey: ["okr-objectives-dash"],
     queryFn: async () => {
       // Fetch periods first to get the current period
-      const periods = await fetchJson<OkrPeriod[]>("/okr/periods");
+      const periods = parseDashboardOkrPeriods(
+        await fetchJson<unknown>("/okr/periods"),
+      );
       const current =
         periods.find((period) => period.is_current) ??
         periods[periods.length - 1];
       if (!current) return [];
-      return fetchJson<OkrObjective[]>(
-        `/okr/objectives?period_start=${current.start}&period_end=${current.end}`,
+      return parseDashboardOkrObjectives(
+        await fetchJson<unknown>(
+          `/okr/objectives?period_start=${current.start}&period_end=${current.end}`,
+        ),
       );
     },
     enabled: !!settings?.enabled,

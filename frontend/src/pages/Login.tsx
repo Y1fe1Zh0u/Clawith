@@ -8,6 +8,12 @@ import type { OAuthTenantChoice } from "../services/oauthCallbackResponse";
 import type { TokenResponse } from "../types";
 import type { ResolvedTenant } from "../services/apiContracts";
 import {
+  parseAuthorizationUrl,
+  parseSessionId,
+  parseSsoProviders,
+  type SsoProviderResponse as LoginProvider,
+} from "../services/directPageResponseParsers";
+import {
   IconAlertTriangle,
   IconArrowRight,
   IconCheck,
@@ -33,12 +39,6 @@ function verificationErrorDetail(
         ? detail.email
         : undefined,
   };
-}
-
-interface LoginProvider {
-  provider_type: string;
-  name?: string;
-  url?: string;
 }
 
 export default function Login() {
@@ -131,7 +131,8 @@ export default function Login() {
       }
       setOauthLoading(true);
       setOauthError("");
-      fetchJson<LoginProvider[]>("/auth/providers")
+      fetchJson<unknown>("/auth/providers")
+        .then(parseSsoProviders)
         .then((providers) => {
           if (cancelled) return;
           setOauthProviders(
@@ -167,12 +168,12 @@ export default function Login() {
       }
       setSsoLoading(true);
       setSsoError("");
-      fetchJson<{ session_id: string }>(`/sso/session?tenant_id=${tenant.id}`, {
+      fetchJson<unknown>(`/sso/session?tenant_id=${tenant.id}`, {
         method: "POST",
       })
-        .then((res) =>
-          fetchJson<LoginProvider[]>(`/sso/config?sid=${res.session_id}`),
-        )
+        .then(parseSessionId)
+        .then((res) => fetchJson<unknown>(`/sso/config?sid=${res.session_id}`))
+        .then(parseSsoProviders)
         .then((providers) => {
           if (cancelled) return;
           setSsoProviders(providers || []);
@@ -487,8 +488,10 @@ export default function Login() {
   const startOAuthLogin = async (providerType: string) => {
     try {
       const redirectUri = `${window.location.origin}/oauth/callback/${providerType}`;
-      const res = await fetchJson<{ authorization_url: string }>(
-        `/auth/${providerType}/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
+      const res = parseAuthorizationUrl(
+        await fetchJson<unknown>(
+          `/auth/${providerType}/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
+        ),
       );
       if (res?.authorization_url) {
         window.location.assign(res.authorization_url);
