@@ -39,6 +39,17 @@ const QUICK_KEYS: { label: string; keys: string[] }[] = [
   { label: "Backspace", keys: ["Backspace"] },
 ];
 
+interface DragOverlay {
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+  originX: number;
+  originY: number;
+  endX: number;
+  endY: number;
+}
+
 /* ── Icons ── */
 const CloseIcon = (
   <svg
@@ -107,6 +118,8 @@ export default function TakeControlPanel({
   const imgRef = useRef<HTMLImageElement>(null);
   const pollingRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const translationRef = useRef(t);
+  const envTypeRef = useRef(envType);
   // Track the latest screenshot data URI for passing to parent on close
   const lastScreenshotRef = useRef<string | null>(null);
   // Track the actual screen size for coordinate mapping
@@ -119,7 +132,7 @@ export default function TakeControlPanel({
     screenX: number;
     screenY: number;
   } | null>(null);
-  const [dragEnd, setDragEnd] = useState<{ x: number; y: number } | null>(null);
+  const [dragOverlay, setDragOverlay] = useState<DragOverlay | null>(null);
   const isDraggingRef = useRef(false);
 
   // Track lock state via ref for cleanup
@@ -128,6 +141,11 @@ export default function TakeControlPanel({
     lockedRef.current = locked;
   }, [locked]);
 
+  useEffect(() => {
+    translationRef.current = t;
+    envTypeRef.current = envType;
+  }, [envType, t]);
+
   // Acquire lock on mount, then auto-fetch the current page URL to pre-fill domain
   useEffect(() => {
     mountedRef.current = true;
@@ -135,11 +153,11 @@ export default function TakeControlPanel({
       try {
         await controlApi.lock(agentId, {
           session_id: sessionId,
-          env_type: envType,
+          env_type: envTypeRef.current,
         });
         if (mountedRef.current) {
           setLocked(true);
-          setStatusText(t("takeControl.inControl"));
+          setStatusText(translationRef.current("takeControl.inControl"));
 
           // Auto-populate domain from the current active page URL
           try {
@@ -162,7 +180,7 @@ export default function TakeControlPanel({
       } catch (error) {
         if (mountedRef.current) {
           setStatusText(
-            t("takeControl.lockFailed", {
+            translationRef.current("takeControl.lockFailed", {
               message: normalizeUnknownError(error).message,
             }),
           );
@@ -178,7 +196,6 @@ export default function TakeControlPanel({
           .catch(() => {});
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, sessionId]);
 
   // Poll screenshots using sequential setTimeout to avoid request pileup.
@@ -268,7 +285,7 @@ export default function TakeControlPanel({
         screenY: e.clientY,
       };
       isDraggingRef.current = false;
-      setDragEnd(null);
+      setDragOverlay(null);
     },
     [locked, mapToScreenCoords],
   );
@@ -284,10 +301,20 @@ export default function TakeControlPanel({
         flashStatus(t("takeControl.dragToRelease"));
       }
       if (isDraggingRef.current) {
-        setDragEnd({ x: e.clientX, y: e.clientY });
+        const rect = imgRef.current.getBoundingClientRect();
+        setDragOverlay({
+          width: rect.width,
+          height: rect.height,
+          left: imgRef.current.offsetLeft,
+          top: imgRef.current.offsetTop,
+          originX: dragOriginRef.current.screenX - rect.left,
+          originY: dragOriginRef.current.screenY - rect.top,
+          endX: e.clientX - rect.left,
+          endY: e.clientY - rect.top,
+        });
       }
     },
-    [locked, flashStatus],
+    [locked, flashStatus, t],
   );
 
   // mouseup: commit drag or fall back to a click
@@ -296,7 +323,7 @@ export default function TakeControlPanel({
       if (!locked || !imgRef.current || !dragOriginRef.current) return;
       const origin = dragOriginRef.current;
       dragOriginRef.current = null;
-      setDragEnd(null);
+      setDragOverlay(null);
 
       if (isDraggingRef.current) {
         // --- DRAG ---
@@ -351,7 +378,7 @@ export default function TakeControlPanel({
         }
       }
     },
-    [locked, agentId, sessionId, mapToScreenCoords, flashStatus],
+    [locked, agentId, sessionId, mapToScreenCoords, flashStatus, t],
   );
 
   // Cancel drag if mouse leaves the screenshot area
@@ -359,10 +386,10 @@ export default function TakeControlPanel({
     if (isDraggingRef.current) {
       isDraggingRef.current = false;
       dragOriginRef.current = null;
-      setDragEnd(null);
+      setDragOverlay(null);
       flashStatus(t("takeControl.inControl"));
     }
-  }, [flashStatus]);
+  }, [flashStatus, t]);
 
   // Handle text input
   const handleSendText = useCallback(async () => {
@@ -383,7 +410,7 @@ export default function TakeControlPanel({
         }),
       );
     }
-  }, [textInput, locked, agentId, sessionId, flashStatus]);
+  }, [textInput, locked, agentId, sessionId, flashStatus, t]);
 
   // Handle quick key press
   const handleQuickKey = useCallback(
@@ -406,7 +433,7 @@ export default function TakeControlPanel({
         );
       }
     },
-    [locked, agentId, sessionId, flashStatus],
+    [locked, agentId, sessionId, flashStatus, t],
   );
 
   // Complete login — export cookies and close
@@ -474,6 +501,7 @@ export default function TakeControlPanel({
     onClose,
     onLastScreenshot,
     flashStatus,
+    t,
   ]);
 
   // Handle cancel
@@ -539,7 +567,7 @@ export default function TakeControlPanel({
       );
     }
     onClose();
-  }, [locked, agentId, sessionId, onClose, onLastScreenshot, flashStatus]);
+  }, [locked, agentId, sessionId, onClose, onLastScreenshot, flashStatus, t]);
 
   return (
     <div className="tc-overlay">
@@ -597,16 +625,17 @@ export default function TakeControlPanel({
                 draggable={false}
               />
               {/* Drag arrow overlay */}
-              {dragEnd && dragOriginRef.current && (
+              {dragOverlay && (
                 <svg
                   style={{
                     position: "absolute",
-                    inset: 0,
-                    width: "100%",
-                    height: "100%",
+                    left: dragOverlay.left,
+                    top: dragOverlay.top,
+                    width: dragOverlay.width,
+                    height: dragOverlay.height,
                     pointerEvents: "none",
                   }}
-                  viewBox={`0 0 ${imgRef.current?.offsetWidth ?? 800} ${imgRef.current?.offsetHeight ?? 600}`}
+                  viewBox={`0 0 ${dragOverlay.width} ${dragOverlay.height}`}
                   preserveAspectRatio="none"
                 >
                   <defs>
@@ -622,35 +651,17 @@ export default function TakeControlPanel({
                     </marker>
                   </defs>
                   <circle
-                    cx={
-                      dragOriginRef.current.screenX -
-                      (imgRef.current?.getBoundingClientRect().left ?? 0)
-                    }
-                    cy={
-                      dragOriginRef.current.screenY -
-                      (imgRef.current?.getBoundingClientRect().top ?? 0)
-                    }
+                    cx={dragOverlay.originX}
+                    cy={dragOverlay.originY}
                     r="5"
                     fill="#6366f1"
                     opacity="0.9"
                   />
                   <line
-                    x1={
-                      dragOriginRef.current.screenX -
-                      (imgRef.current?.getBoundingClientRect().left ?? 0)
-                    }
-                    y1={
-                      dragOriginRef.current.screenY -
-                      (imgRef.current?.getBoundingClientRect().top ?? 0)
-                    }
-                    x2={
-                      dragEnd.x -
-                      (imgRef.current?.getBoundingClientRect().left ?? 0)
-                    }
-                    y2={
-                      dragEnd.y -
-                      (imgRef.current?.getBoundingClientRect().top ?? 0)
-                    }
+                    x1={dragOverlay.originX}
+                    y1={dragOverlay.originY}
+                    x2={dragOverlay.endX}
+                    y2={dragOverlay.endY}
                     stroke="#6366f1"
                     strokeWidth="2"
                     strokeDasharray="5 3"
