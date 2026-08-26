@@ -10,17 +10,17 @@ Project scripts and dependencies are defined in `package.json`; `package-lock.js
 
 Run Frontend commands from `frontend/`:
 
-| Action | Command |
-| --- | --- |
-| Install locked dependencies | `npm ci` |
-| Run the development server | `npm run dev` |
-| Run a focused test file | `node --test tests/<test_file>.test.mjs` |
-| Run the complete Frontend test suite | `npm test` |
-| Run static type checks | `npx tsc --noEmit` |
-| Run lint checks | `npm run lint` |
-| Check formatting | `npm run format:check` |
-| Format supported files | `npm run format` |
-| Build the production bundle | `npm run build` |
+| Action                               | Command                                  |
+| ------------------------------------ | ---------------------------------------- |
+| Install locked dependencies          | `npm ci`                                 |
+| Run the development server           | `npm run dev`                            |
+| Run a focused test file              | `node --test tests/<test_file>.test.mjs` |
+| Run the complete Frontend test suite | `npm test`                               |
+| Run static type checks               | `npx tsc --noEmit`                       |
+| Run lint checks                      | `npm run lint`                           |
+| Check formatting                     | `npm run format:check`                   |
+| Format supported files               | `npm run format`                         |
+| Build the production bundle          | `npm run build`                          |
 
 Use focused tests during development. Use the repository testing policy as the authority for when the complete Frontend suite and production build are required.
 

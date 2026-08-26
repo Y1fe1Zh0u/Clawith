@@ -1,13 +1,13 @@
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
 
 const groupsPage = readFileSync(
-  new URL('../src/pages/groups/GroupsPage.tsx', import.meta.url),
-  'utf8',
+  new URL("../src/pages/groups/GroupsPage.tsx", import.meta.url),
+  "utf8",
 );
 
-test('group workspace reconciliation is offered only for actionable workspace candidates', () => {
+test("group workspace reconciliation is offered only for actionable workspace candidates", () => {
   assert.match(
     groupsPage,
     /pending\.can_reconcile && pending\.workspace_resolution/,
@@ -19,7 +19,7 @@ test('group workspace reconciliation is offered only for actionable workspace ca
   );
 });
 
-test('group workspace reconciliation uses the approved copy and decisions', () => {
+test("group workspace reconciliation uses the approved copy and decisions", () => {
   assert.match(groupsPage, /文件内容有变化/);
   assert.match(
     groupsPage,

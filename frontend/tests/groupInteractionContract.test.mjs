@@ -1,37 +1,37 @@
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
 
 const groupsPage = readFileSync(
-  new URL('../src/pages/groups/GroupsPage.tsx', import.meta.url),
-  'utf8',
+  new URL("../src/pages/groups/GroupsPage.tsx", import.meta.url),
+  "utf8",
 );
 const promptModal = readFileSync(
-  new URL('../src/components/PromptModal.tsx', import.meta.url),
-  'utf8',
+  new URL("../src/components/PromptModal.tsx", import.meta.url),
+  "utf8",
 );
 const toastProvider = readFileSync(
-  new URL('../src/components/Toast/ToastProvider.tsx', import.meta.url),
-  'utf8',
+  new URL("../src/components/Toast/ToastProvider.tsx", import.meta.url),
+  "utf8",
 );
 const groupUnread = readFileSync(
-  new URL('../src/hooks/useGroupUnread.ts', import.meta.url),
-  'utf8',
+  new URL("../src/hooks/useGroupUnread.ts", import.meta.url),
+  "utf8",
 );
 const messageStream = readFileSync(
-  new URL('../src/pages/groups/MessageStream.tsx', import.meta.url),
-  'utf8',
+  new URL("../src/pages/groups/MessageStream.tsx", import.meta.url),
+  "utf8",
 );
 const messageComposer = readFileSync(
-  new URL('../src/pages/groups/MessageComposer.tsx', import.meta.url),
-  'utf8',
+  new URL("../src/pages/groups/MessageComposer.tsx", import.meta.url),
+  "utf8",
 );
 const groupStyles = readFileSync(
-  new URL('../src/pages/groups/groups.css', import.meta.url),
-  'utf8',
+  new URL("../src/pages/groups/groups.css", import.meta.url),
+  "utf8",
 );
 
-test('new group sessions may use the backend default title while group names stay required', () => {
+test("new group sessions may use the backend default title while group names stay required", () => {
   assert.match(promptModal, /allowEmpty\?: boolean/);
   assert.match(promptModal, /allowEmpty \|\| Boolean\(value\.trim\(\)\)/);
   assert.match(groupsPage, /title=\{t\('groups\.newSession'[\s\S]*?allowEmpty/);
@@ -41,7 +41,7 @@ test('new group sessions may use the backend default title while group names sta
   );
 });
 
-test('name prompts do not submit while an IME is still composing text', () => {
+test("name prompts do not submit while an IME is still composing text", () => {
   assert.match(promptModal, /e\.nativeEvent\.isComposing/);
   assert.match(
     promptModal,
@@ -49,23 +49,29 @@ test('name prompts do not submit while an IME is still composing text', () => {
   );
 });
 
-test('an inaccessible group route is not used as a message or member fetch scope', () => {
+test("an inaccessible group route is not used as a message or member fetch scope", () => {
   assert.match(groupsPage, /isFetchedAfterMount: groupsFetchedAfterMount/);
   assert.match(groupsPage, /isRefetchError: groupsRefetchError/);
   assert.match(groupsPage, /refetchOnMount: 'always'/);
-  assert.match(groupsPage, /const groupsReady = groupsFetchedAfterMount && !groupsRefetchError/);
+  assert.match(
+    groupsPage,
+    /const groupsReady = groupsFetchedAfterMount && !groupsRefetchError/,
+  );
   assert.match(groupsPage, /const activeGroup = groupsReady \?/);
   assert.match(groupsPage, /queries: \(groupsReady \? groups : \[\]\)\.map/);
   assert.match(groupsPage, /enabled: Boolean\(activeGroup\)/);
   assert.match(groupsPage, /if \(!activeGroup \|\| !activeSession\)/);
   assert.match(groupsPage, /groupId: activeGroup\?\.id/);
   assert.match(groupsPage, /sessionId: activeSession\?\.id/);
-  assert.match(groupUnread, /const groupsReady = isFetchedAfterMount && !isRefetchError/);
+  assert.match(
+    groupUnread,
+    /const groupsReady = isFetchedAfterMount && !isRefetchError/,
+  );
   assert.match(groupUnread, /queries: \(groupsReady \? groups : \[\]\)\.map/);
   assert.match(groupsPage, /navigate\('\/groups', \{ replace: true \}\)/);
 });
 
-test('session metadata refresh does not clear and reload the visible message stream', () => {
+test("session metadata refresh does not clear and reload the visible message stream", () => {
   assert.match(groupsPage, /const activeGroupId = activeGroup\?\.id/);
   assert.match(groupsPage, /const activeSessionId = activeSession\?\.id/);
   assert.match(
@@ -78,13 +84,13 @@ test('session metadata refresh does not clear and reload the visible message str
   );
 });
 
-test('toast context methods keep stable identities across toast renders', () => {
+test("toast context methods keep stable identities across toast renders", () => {
   assert.match(toastProvider, /useMemo/);
   assert.match(toastProvider, /const value: ToastContextValue = useMemo\(/);
   assert.match(toastProvider, /\}\), \[show\]\);/);
 });
 
-test('group composer and stream use session-wide active runs', () => {
+test("group composer and stream use session-wide active runs", () => {
   assert.match(groupsPage, /groupApi\.activeRuns/);
   assert.match(groupsPage, /\['group-active-runs', groupId, sessionId\]/);
   assert.match(groupsPage, /groupApi\.cancelRun/);
@@ -96,26 +102,44 @@ test('group composer and stream use session-wide active runs', () => {
   assert.match(groupsPage, /runningAgents=\{runningAgents\}/);
 });
 
-test('group and direct histories share user-driven prepend pagination semantics', () => {
+test("group and direct histories share user-driven prepend pagination semantics", () => {
   assert.match(messageStream, /useOlderHistoryGesture/);
   assert.match(messageStream, /usePrependScrollAnchor/);
-  assert.match(messageStream, /onWheelCapture=\{historyLoadGesture\.onWheelCapture\}/);
-  assert.match(messageStream, /onTouchMoveCapture=\{historyLoadGesture\.onTouchMoveCapture\}/);
+  assert.match(
+    messageStream,
+    /onWheelCapture=\{historyLoadGesture\.onWheelCapture\}/,
+  );
+  assert.match(
+    messageStream,
+    /onTouchMoveCapture=\{historyLoadGesture\.onTouchMoveCapture\}/,
+  );
   assert.match(messageStream, /prependAnchor\.isPrependingRef\.current/);
   assert.doesNotMatch(messageStream, /previousHeightRef/);
-  assert.match(groupStyles, /\.group-stream\s*\{[\s\S]*?overflow-anchor:\s*none/);
-  assert.match(groupStyles, /\.group-stream\s*\{[\s\S]*?overscroll-behavior-y:\s*contain/);
+  assert.match(
+    groupStyles,
+    /\.group-stream\s*\{[\s\S]*?overflow-anchor:\s*none/,
+  );
+  assert.match(
+    groupStyles,
+    /\.group-stream\s*\{[\s\S]*?overscroll-behavior-y:\s*contain/,
+  );
 });
 
-test('planning-to-entry transition keeps polling and preserves the typing indicator', () => {
+test("planning-to-entry transition keeps polling and preserves the typing indicator", () => {
   assert.match(groupsPage, /ACTIVE_RUN_TRANSITION_GRACE_MS/);
   assert.match(groupsPage, /planningTransitionUntilRef/);
   assert.match(groupsPage, /setAwaitingPlannedRuns\(true\)/);
-  assert.match(groupsPage, /Date\.now\(\) < planningTransitionUntilRef\.current \? 250 : false/);
-  assert.match(groupsPage, /planningRunVisible \|\| \(awaitingPlannedRuns && !agentRunVisible\)/);
+  assert.match(
+    groupsPage,
+    /Date\.now\(\) < planningTransitionUntilRef\.current \? 250 : false/,
+  );
+  assert.match(
+    groupsPage,
+    /planningRunVisible \|\| \(awaitingPlannedRuns && !agentRunVisible\)/,
+  );
 });
 
-test('planning and running agents keep the single transient typing indicator', () => {
+test("planning and running agents keep the single transient typing indicator", () => {
   assert.match(messageStream, /\{isPlanning && \(/);
   assert.match(messageStream, /groups\.taskPlanning/);
   assert.match(messageStream, /\{runningAgents\.map\(\(agent\) => \(/);
@@ -130,17 +154,23 @@ test('planning and running agents keep the single transient typing indicator', (
   );
 });
 
-test('group planning failures preserve the backend message and diagnostics', () => {
+test("group planning failures preserve the backend message and diagnostics", () => {
   assert.match(groupsPage, /intake\.error\?\.message/);
   assert.match(groupsPage, /intake\.error\?\.trace_id/);
   assert.match(groupsPage, /intake\.error\?\.code \?\? intake\.error_code/);
 });
 
-test('mention candidates stay reachable by pointer and keyboard scrolling', () => {
+test("mention candidates stay reachable by pointer and keyboard scrolling", () => {
   assert.doesNotMatch(messageComposer, /\.slice\(0, 8\)/);
   assert.match(messageComposer, /mentionPopupRef/);
   assert.match(messageComposer, /mentionOptionRefs/);
   assert.match(messageComposer, /popup\.scrollTop/);
-  assert.match(groupStyles, /\.group-mention-popup\s*\{[\s\S]*?overflow-y:\s*auto/);
-  assert.match(groupStyles, /\.group-mention-popup\s*\{[\s\S]*?overscroll-behavior:\s*contain/);
+  assert.match(
+    groupStyles,
+    /\.group-mention-popup\s*\{[\s\S]*?overflow-y:\s*auto/,
+  );
+  assert.match(
+    groupStyles,
+    /\.group-mention-popup\s*\{[\s\S]*?overscroll-behavior:\s*contain/,
+  );
 });
