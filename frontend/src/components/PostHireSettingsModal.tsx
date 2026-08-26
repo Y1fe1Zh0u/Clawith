@@ -4,6 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { IconAlertTriangle, IconSettings, IconX } from "@tabler/icons-react";
 import { agentApi, authApi, enterpriseApi, tenantApi } from "../services/api";
+import type { AgentCreateRequest, LlmModel } from "../services/apiContracts";
+import { caughtErrorMessage } from "../services/apiError";
+import type { Agent } from "../types";
 import { translateTemplate } from "../i18n/templateTranslations";
 import { useDialog } from "./Dialog/DialogProvider";
 
@@ -13,14 +16,6 @@ interface Template {
   description?: string;
   icon?: string;
   category?: string;
-}
-
-interface Model {
-  id: string;
-  provider: string;
-  model: string;
-  label?: string;
-  enabled?: boolean;
 }
 
 interface Props {
@@ -41,6 +36,28 @@ export default function PostHireSettingsModal({
   onClose,
   onDone,
 }: Props) {
+  if (!open || !template) return null;
+
+  return (
+    <PostHireSettingsModalContent
+      template={template}
+      onClose={onClose}
+      onDone={onDone}
+    />
+  );
+}
+
+interface PostHireSettingsModalContentProps {
+  template: Template;
+  onClose: () => void;
+  onDone?: () => void;
+}
+
+function PostHireSettingsModalContent({
+  template,
+  onClose,
+  onDone,
+}: PostHireSettingsModalContentProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -53,25 +70,22 @@ export default function PostHireSettingsModal({
   const { data: myTenant } = useQuery({
     queryKey: ["tenant", "me"],
     queryFn: () => tenantApi.me(),
-    enabled: open,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: currentUser } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: authApi.me,
-    enabled: open,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: models = [] } = useQuery({
     queryKey: ["llm-models"],
     queryFn: enterpriseApi.llmModels,
-    enabled: open,
   });
 
   const enabledModels = useMemo(
-    () => (models as Model[]).filter((m) => m.enabled !== false),
+    () => models.filter((model) => model.enabled !== false),
     [models],
   );
 
@@ -88,35 +102,20 @@ export default function PostHireSettingsModal({
     navigate("/enterprise#llm");
   };
 
-  // Default the model picker to the tenant default (or first enabled)
-  // once both are available.
-  useEffect(() => {
-    if (!open) return;
-    if (modelId) return;
-    const preferred =
-      myTenant?.default_model_id &&
-      enabledModels.find((m) => m.id === myTenant.default_model_id)
-        ? myTenant.default_model_id
-        : enabledModels[0]?.id || "";
-    if (preferred) setModelId(preferred);
-  }, [open, myTenant?.default_model_id, enabledModels, modelId]);
-
-  // Reset local form whenever the modal closes so the next open is clean.
-  useEffect(() => {
-    if (!open) {
-      setVisibility("company");
-      setModelId("");
-    }
-  }, [open]);
+  const preferredModelId =
+    myTenant?.default_model_id &&
+    enabledModels.some((model) => model.id === myTenant.default_model_id)
+      ? myTenant.default_model_id
+      : enabledModels[0]?.id || "";
+  const selectedModelId = modelId || preferredModelId;
 
   useEffect(() => {
-    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [onClose]);
 
   const hire = useMutation({
     mutationFn: (navigateAfter: boolean) => {
@@ -124,7 +123,7 @@ export default function PostHireSettingsModal({
       if (enabledModels.length === 0) {
         return Promise.reject(new Error(t("postHire.noModelError")));
       }
-      if (!modelId) {
+      if (!selectedModelId) {
         return Promise.reject(new Error(t("postHire.modelRequired")));
       }
       // Localize name + role_description when the UI is in Chinese so
@@ -140,23 +139,23 @@ export default function PostHireSettingsModal({
         },
         isChinese,
       );
-      const payload: any = {
+      const payload: AgentCreateRequest = {
         name: localized.name,
         role_description: localized.description,
         template_id: template.id,
-        primary_model_id: modelId || undefined,
+        primary_model_id: selectedModelId || undefined,
         permission_access_level: "manage",
+        permission_scope_type:
+          visibility === "company"
+            ? "company"
+            : visibility === "custom"
+              ? "custom"
+              : "user",
+        permission_scope_ids: [],
       };
-      payload.permission_scope_type =
-        visibility === "company"
-          ? "company"
-          : visibility === "custom"
-            ? "custom"
-            : "user";
-      payload.permission_scope_ids = [];
       return agentApi
         .create(payload)
-        .then((agent: any) => ({ agent, navigateAfter }));
+        .then((agent: Pick<Agent, "id">) => ({ agent, navigateAfter }));
     },
     onSuccess: ({ agent, navigateAfter }) => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -165,17 +164,16 @@ export default function PostHireSettingsModal({
       // tab). AgentDetail picks up the hash on mount.
       if (navigateAfter) navigate(`/agents/${agent.id}#chat`);
     },
-    onError: async (err: any) => {
+    onError: async (error: unknown) => {
       await dialog.alert(t("postHire.createFailed"), {
         type: "error",
-        details: String(err?.message || err),
+        details: caughtErrorMessage(error) ?? String(error),
       });
     },
   });
 
-  if (!open || !template) return null;
-
-  const labelFor = (m: Model) => m.label || `${m.provider} · ${m.model}`;
+  const labelFor = (model: LlmModel) =>
+    model.label || `${model.provider} · ${model.model}`;
   const busy = hire.isPending;
 
   return (
@@ -296,7 +294,7 @@ export default function PostHireSettingsModal({
             ) : (
               <select
                 className="form-input"
-                value={modelId}
+                value={selectedModelId}
                 onChange={(e) => setModelId(e.target.value)}
                 disabled={busy}
                 style={{ width: "100%" }}

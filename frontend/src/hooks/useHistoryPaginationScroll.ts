@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
-  PointerEvent as ReactPointerEvent,
   RefObject,
   TouchEvent as ReactTouchEvent,
   WheelEvent as ReactWheelEvent,
@@ -138,7 +137,7 @@ export function useOlderHistoryGesture<T extends HTMLElement>({
     [requestOlder],
   );
 
-  const onPointerDownCapture = useCallback((_event: ReactPointerEvent<T>) => {
+  const onPointerDownCapture = useCallback(() => {
     pointerIntentUntilRef.current = Date.now() + 1000;
   }, []);
 

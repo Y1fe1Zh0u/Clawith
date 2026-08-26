@@ -18,18 +18,36 @@ export default function PromptModal({
   onConfirm,
   onCancel,
 }: PromptModalProps) {
+  if (!open) return null;
+
+  return (
+    <PromptModalContent
+      title={title}
+      placeholder={placeholder}
+      allowEmpty={allowEmpty}
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />
+  );
+}
+
+type PromptModalContentProps = Omit<PromptModalProps, "open">;
+
+function PromptModalContent({
+  title,
+  placeholder,
+  allowEmpty = false,
+  onConfirm,
+  onCancel,
+}: PromptModalContentProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (open) {
-      setValue("");
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
-  }, [open]);
-
-  if (!open) return null;
+    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 100);
+    return () => window.clearTimeout(focusTimer);
+  }, []);
 
   const canConfirm = allowEmpty || Boolean(value.trim());
   const confirm = () => {

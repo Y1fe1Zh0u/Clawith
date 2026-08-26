@@ -162,7 +162,6 @@ function markdownToHtml(
   let inList: "ul" | "ol" | null = null;
   let inBlockquote = false;
   let inTable = false;
-  let tableHeader = false;
 
   const flushList = () => {
     if (inList) {
@@ -180,7 +179,6 @@ function markdownToHtml(
     if (inTable) {
       html += "</tbody></table>";
       inTable = false;
-      tableHeader = false;
     }
   };
 
@@ -274,14 +272,12 @@ function markdownToHtml(
         .filter((_, i, a) => i > 0 && i < a.length - 1);
       // Separator row
       if (cols.every((c) => /^[-:]+$/.test(c))) {
-        tableHeader = true;
         continue;
       }
       if (!inTable) {
         html +=
           '<table style="border-collapse:collapse;margin:8px 0;font-size:13px;width:100%"><thead>';
         inTable = true;
-        tableHeader = false;
         // This is the header row
         html +=
           "<tr>" +
@@ -412,8 +408,8 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
 
   const handleContainerClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
 
       const downloadButton = target.closest<HTMLElement>(
         "[data-markdown-image-download]",

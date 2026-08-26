@@ -53,6 +53,16 @@ test("name prompts do not submit while an IME is still composing text", () => {
   );
 });
 
+test("name prompts reset by remounting their owned draft on each open", () => {
+  assert.match(promptModal, /if \(!open\) return null/);
+  assert.match(promptModal, /<PromptModalContent/);
+  assert.match(promptModal, /const \[value, setValue\] = useState\(["']["']\)/);
+  assert.doesNotMatch(
+    promptModal,
+    /setValue\(["']["']\)[\s\S]*?\}, \[open\]\)/,
+  );
+});
+
 test("an inaccessible group route is not used as a message or member fetch scope", () => {
   assert.match(groupsPage, /isFetchedAfterMount: groupsFetchedAfterMount/);
   assert.match(groupsPage, /isRefetchError: groupsRefetchError/);

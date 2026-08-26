@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -52,8 +52,8 @@ const MAX_WIDTH_VW = 0.68;
 
 function calcInitialWidth(): number {
   const container =
-    (document.querySelector(".agent-chat-area") as HTMLElement | null) ||
-    (document.querySelector(".chat-container") as HTMLElement | null);
+    document.querySelector<HTMLElement>(".agent-chat-area") ||
+    document.querySelector<HTMLElement>(".chat-container");
   if (container)
     return Math.max(MIN_WIDTH, Math.floor(container.clientWidth / 2));
   return Math.max(MIN_WIDTH, Math.floor((window.innerWidth - 60) / 2));
@@ -112,12 +112,21 @@ export default function AgentSidePanel({
     onLiveUpdateRef.current = onLiveUpdate;
   });
 
-  const availableTabs: SidePanelTab[] = ["workspace"];
-  if (awareContent) availableTabs.push("aware");
-  if (liveState.browser) availableTabs.push("browser");
-  if (liveState.desktop) availableTabs.push("desktop");
-  if (liveState.code) availableTabs.push("code");
-  if (liveState.transfer) availableTabs.push("transfer");
+  const availableTabs = useMemo(() => {
+    const tabs: SidePanelTab[] = ["workspace"];
+    if (awareContent) tabs.push("aware");
+    if (liveState.browser) tabs.push("browser");
+    if (liveState.desktop) tabs.push("desktop");
+    if (liveState.code) tabs.push("code");
+    if (liveState.transfer) tabs.push("transfer");
+    return tabs;
+  }, [
+    awareContent,
+    liveState.browser,
+    liveState.code,
+    liveState.desktop,
+    liveState.transfer,
+  ]);
 
   useEffect(() => {
     const onResize = () => {
@@ -136,7 +145,7 @@ export default function AgentSidePanel({
   useEffect(() => {
     if (availableTabs.length > 0 && !availableTabs.includes(activeTab))
       onTabChange(availableTabs[0]);
-  }, [availableTabs.join("|"), activeTab]);
+  }, [activeTab, availableTabs, onTabChange]);
 
   const handleDragMouseDown = useCallback(
     (e: React.MouseEvent) => {

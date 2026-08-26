@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconRobot } from "@tabler/icons-react";
 import { groupApi } from "../../services/groupApi";
@@ -28,40 +28,13 @@ export default function GroupMemoryTab({
   const [agentRefId, setAgentRefId] = useState<string | undefined>(
     agents[0]?.participant_ref_id,
   );
+  const selectedAgentRefId = agents.some(
+    (agent) => agent.participant_ref_id === agentRefId,
+  )
+    ? agentRefId
+    : agents[0]?.participant_ref_id;
 
-  useEffect(() => {
-    if (!agentRefId && agents.length > 0)
-      setAgentRefId(agents[0].participant_ref_id);
-  }, [agents, agentRefId]);
-
-  const api = useMemo<FileBrowserApi>(() => {
-    const versioned = createVersionedFileAdapter({
-      read: () => groupApi.agentMemory(groupId, agentRefId!),
-      write: (_path, content, expectedVersionToken) =>
-        groupApi.saveAgentMemory(
-          groupId,
-          agentRefId!,
-          content,
-          expectedVersionToken,
-        ),
-      delete: (_path, expectedVersionToken) =>
-        groupApi.deleteAgentMemory(groupId, agentRefId!, expectedVersionToken),
-    });
-    return {
-      // Always surface memory.md, including before its first write. Reading it here captures
-      // the backend version for a direct delete from the file list.
-      list: async () => {
-        const file = await groupApi.agentMemory(groupId, agentRefId!);
-        versioned.remember("memory.md", file.version_token);
-        return [{ name: "memory.md", path: "memory.md", is_dir: false }];
-      },
-      read: versioned.read,
-      write: versioned.write,
-      delete: versioned.delete,
-    };
-  }, [groupId, agentRefId]);
-
-  if (agents.length === 0) {
+  if (agents.length === 0 || !selectedAgentRefId) {
     return (
       <div className="group-empty-hint">
         {t(
@@ -79,7 +52,7 @@ export default function GroupMemoryTab({
           <button
             key={agent.participant_id}
             type="button"
-            className={`group-memory-agent ${agent.participant_ref_id === agentRefId ? "active" : ""}`}
+            className={`group-memory-agent ${agent.participant_ref_id === selectedAgentRefId ? "active" : ""}`}
             onClick={() => setAgentRefId(agent.participant_ref_id)}
           >
             <IconRobot size={13} stroke={1.6} />
@@ -95,20 +68,59 @@ export default function GroupMemoryTab({
         )}
       </div>
 
-      {agentRefId && (
-        <FileBrowser
-          // Remount per agent so the viewer/edit state never leaks across the selector.
-          key={agentRefId}
-          api={api}
-          features={{
-            upload: false,
-            newFile: false,
-            newFolder: false,
-            edit: true,
-            delete: true,
-          }}
-        />
-      )}
+      <AgentMemoryBrowser
+        key={selectedAgentRefId}
+        groupId={groupId}
+        agentRefId={selectedAgentRefId}
+      />
     </>
+  );
+}
+
+function AgentMemoryBrowser({
+  groupId,
+  agentRefId,
+}: {
+  groupId: string;
+  agentRefId: string;
+}) {
+  const api = useMemo<FileBrowserApi>(() => {
+    const versioned = createVersionedFileAdapter({
+      read: () => groupApi.agentMemory(groupId, agentRefId),
+      write: (_path, content, expectedVersionToken) =>
+        groupApi.saveAgentMemory(
+          groupId,
+          agentRefId,
+          content,
+          expectedVersionToken,
+        ),
+      delete: (_path, expectedVersionToken) =>
+        groupApi.deleteAgentMemory(groupId, agentRefId, expectedVersionToken),
+    });
+    return {
+      // Always surface memory.md, including before its first write. Reading it here captures
+      // the backend version for a direct delete from the file list.
+      list: async () => {
+        const file = await groupApi.agentMemory(groupId, agentRefId);
+        versioned.remember("memory.md", file.version_token);
+        return [{ name: "memory.md", path: "memory.md", is_dir: false }];
+      },
+      read: versioned.read,
+      write: versioned.write,
+      delete: versioned.delete,
+    };
+  }, [agentRefId, groupId]);
+
+  return (
+    <FileBrowser
+      api={api}
+      features={{
+        upload: false,
+        newFile: false,
+        newFolder: false,
+        edit: true,
+        delete: true,
+      }}
+    />
   );
 }

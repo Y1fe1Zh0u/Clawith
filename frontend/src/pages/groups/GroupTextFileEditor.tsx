@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { caughtErrorMessage } from "../../services/apiError";
 import { useQuery } from "@tanstack/react-query";
@@ -32,10 +32,32 @@ export default function GroupTextFileEditor({
   onDelete,
   deleteLabel,
 }: GroupTextFileEditorProps) {
+  return (
+    <GroupTextFileEditorContent
+      key={JSON.stringify(queryKey)}
+      queryKey={queryKey}
+      note={note}
+      placeholder={placeholder}
+      load={load}
+      save={save}
+      onDelete={onDelete}
+      deleteLabel={deleteLabel}
+    />
+  );
+}
+
+function GroupTextFileEditorContent({
+  queryKey,
+  note,
+  placeholder,
+  load,
+  save,
+  onDelete,
+  deleteLabel,
+}: GroupTextFileEditorProps) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [draft, setDraft] = useState("");
-  const [dirty, setDirty] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
@@ -43,25 +65,15 @@ export default function GroupTextFileEditor({
     queryFn: load,
     retry: false,
   });
-
-  // Clear edits for the previous query before hydrating this editor. This effect must stay before
-  // the data effect: useQuery may synchronously return cached content when the tab remounts.
-  useEffect(() => {
-    setDraft("");
-    setDirty(false);
-  }, [JSON.stringify(queryKey)]);
-
-  // A fresh load only replaces the textarea when the user has no unsaved edits in it.
-  useEffect(() => {
-    if (data && !dirty) setDraft(data.content);
-  }, [data, dirty]);
+  const content = draft ?? data?.content ?? "";
+  const dirty = draft !== null;
 
   const commit = async () => {
     setBusy(true);
     try {
-      await save(draft, data?.version_token ?? null);
+      await save(content, data?.version_token ?? null);
       toast.success(t("groups.fileSaved", "已保存"));
-      setDirty(false);
+      setDraft(null);
       await refetch();
     } catch (error) {
       toast.error(
@@ -77,8 +89,7 @@ export default function GroupTextFileEditor({
     setBusy(true);
     try {
       await onDelete();
-      setDraft("");
-      setDirty(false);
+      setDraft(null);
       await refetch();
       toast.success(t("groups.fileDeleted", "已删除"));
     } catch (error) {
@@ -93,7 +104,7 @@ export default function GroupTextFileEditor({
   if (error) {
     return (
       <div className="group-empty-hint">
-        {(error as any)?.message ?? t("groups.fileLoadFailed", "读取失败")}
+        {caughtErrorMessage(error) ?? t("groups.fileLoadFailed", "读取失败")}
       </div>
     );
   }
@@ -103,11 +114,10 @@ export default function GroupTextFileEditor({
       {note && <div className="group-panel-note">{note}</div>}
       <textarea
         className="group-announcement-input"
-        value={draft}
+        value={content}
         disabled={isLoading || busy}
         onChange={(event) => {
           setDraft(event.target.value);
-          setDirty(true);
         }}
         placeholder={placeholder}
       />

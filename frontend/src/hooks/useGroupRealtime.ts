@@ -111,12 +111,14 @@ export function useGroupRealtime({
   const getLastCursorRef = useRef(getLastCursor);
   const onMessagesRef = useRef(onMessages);
   const onGroupActivityRef = useRef(onGroupActivity);
-  getLastCursorRef.current = getLastCursor;
-  onMessagesRef.current = onMessages;
-  onGroupActivityRef.current = onGroupActivity;
-
   const sessionIdRef = useRef(sessionId);
-  sessionIdRef.current = sessionId;
+
+  useEffect(() => {
+    getLastCursorRef.current = getLastCursor;
+    onMessagesRef.current = onMessages;
+    onGroupActivityRef.current = onGroupActivity;
+    sessionIdRef.current = sessionId;
+  }, [getLastCursor, onGroupActivity, onMessages, sessionId]);
 
   const wsFailuresRef = useRef(0);
   const inFlightRef = useRef(false);

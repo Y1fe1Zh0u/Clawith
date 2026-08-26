@@ -76,11 +76,6 @@ export default function MessageComposer({
   }, [members, query]);
 
   useEffect(() => {
-    setHighlighted(0);
-    if (mentionPopupRef.current) mentionPopupRef.current.scrollTop = 0;
-  }, [query?.text]);
-
-  useEffect(() => {
     const popup = mentionPopupRef.current;
     const option = mentionOptionRefs.current[highlighted];
     if (!popup || !option) return;
@@ -104,7 +99,12 @@ export default function MessageComposer({
   }, [value]);
 
   const syncQuery = (nextValue: string, caret: number) => {
-    setQuery(findMentionQuery(nextValue, caret));
+    const nextQuery = findMentionQuery(nextValue, caret);
+    if (nextQuery?.text !== query?.text) {
+      setHighlighted(0);
+      if (mentionPopupRef.current) mentionPopupRef.current.scrollTop = 0;
+    }
+    setQuery(nextQuery);
   };
 
   const applyMention = (member: GroupMember) => {
@@ -249,7 +249,10 @@ export default function MessageComposer({
               pendingEditRef.current = {
                 start: target.selectionStart ?? 0,
                 end: target.selectionEnd ?? 0,
-                inputType: (event.nativeEvent as InputEvent).inputType || "",
+                inputType:
+                  event.nativeEvent instanceof InputEvent
+                    ? event.nativeEvent.inputType
+                    : "",
               };
             }}
             onChange={(event) => {
@@ -267,11 +270,11 @@ export default function MessageComposer({
               syncQuery(nextValue, event.target.selectionStart ?? 0);
             }}
             onKeyUp={(event) => {
-              const target = event.target as HTMLTextAreaElement;
+              const target = event.currentTarget;
               syncQuery(target.value, target.selectionStart ?? 0);
             }}
             onClick={(event) => {
-              const target = event.target as HTMLTextAreaElement;
+              const target = event.currentTarget;
               syncQuery(target.value, target.selectionStart ?? 0);
             }}
             onKeyDown={onKeyDown}

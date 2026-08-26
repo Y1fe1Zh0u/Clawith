@@ -12,6 +12,8 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { agentApi, authApi, enterpriseApi, tenantApi } from "../services/api";
+import type { AgentCreateRequest } from "../services/apiContracts";
+import { caughtErrorMessage } from "../services/apiError";
 import { useDialog } from "./Dialog/DialogProvider";
 import LinearCopyButton from "./LinearCopyButton";
 import { validateAgentName } from "../utils/agentNameValidation";
@@ -19,12 +21,6 @@ import { buildOpenClawInstruction } from "../utils/openClawInstruction";
 
 type Mode = "native" | "openclaw";
 type Visibility = "company" | "only_me" | "custom";
-
-interface Model {
-  id: string;
-  label?: string;
-  enabled?: boolean;
-}
 
 interface CreatedAgent {
   id: string;
@@ -45,6 +41,24 @@ export default function CustomAgentModal({
   onClose,
   onDone,
 }: Props) {
+  if (!open) return null;
+
+  return (
+    <CustomAgentModalContent
+      initialMode={initialMode}
+      onClose={onClose}
+      onDone={onDone}
+    />
+  );
+}
+
+type CustomAgentModalContentProps = Omit<Props, "open">;
+
+function CustomAgentModalContent({
+  initialMode = "native",
+  onClose,
+  onDone,
+}: CustomAgentModalContentProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -62,25 +76,22 @@ export default function CustomAgentModal({
   const { data: myTenant } = useQuery({
     queryKey: ["tenant", "me"],
     queryFn: () => tenantApi.me(),
-    enabled: open,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: currentUser } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: authApi.me,
-    enabled: open,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: models = [] } = useQuery({
     queryKey: ["llm-models"],
     queryFn: enterpriseApi.llmModels,
-    enabled: open,
   });
 
   const enabledModels = useMemo(
-    () => (models as Model[]).filter((m) => m.enabled !== false),
+    () => models.filter((model) => model.enabled !== false),
     [models],
   );
 
@@ -96,42 +107,12 @@ export default function CustomAgentModal({
     (onDone || onClose)();
     navigate("/enterprise#llm");
   };
-
-  useEffect(() => {
-    if (!open) return;
-    setMode(initialMode);
-  }, [open, initialMode]);
-
-  useEffect(() => {
-    if (!open || modelId) return;
-    const preferred =
-      myTenant?.default_model_id &&
-      enabledModels.find((m) => m.id === myTenant.default_model_id)
-        ? myTenant.default_model_id
-        : enabledModels[0]?.id || "";
-    if (preferred) setModelId(preferred);
-  }, [open, modelId, myTenant?.default_model_id, enabledModels]);
-
-  useEffect(() => {
-    if (!open) {
-      setMode(initialMode);
-      setName("");
-      setRoleDescription("");
-      setVisibility("only_me");
-      setModelId("");
-      setCreatedExternal(null);
-    }
-  }, [open, initialMode]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !createAgent.isPending) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, onClose]);
+  const preferredModelId =
+    myTenant?.default_model_id &&
+    enabledModels.some((model) => model.id === myTenant.default_model_id)
+      ? myTenant.default_model_id
+      : enabledModels[0]?.id || "";
+  const selectedModelId = modelId || preferredModelId;
 
   const createAgent = useMutation({
     mutationFn: async ({ chatNow }: { chatNow: boolean }) => {
@@ -142,12 +123,12 @@ export default function CustomAgentModal({
       if (mode === "native" && enabledModels.length === 0) {
         throw new Error(t("customAgentModal.noModelError"));
       }
-      if (mode === "native" && !modelId) {
+      if (mode === "native" && !selectedModelId) {
         throw new Error(t("customAgentModal.modelRequired"));
       }
 
       const currentTenant = localStorage.getItem("current_tenant_id");
-      const payload: any = {
+      const payload: AgentCreateRequest = {
         name: trimmedName,
         agent_type: mode,
         role_description: roleDescription.trim() || undefined,
@@ -164,7 +145,7 @@ export default function CustomAgentModal({
       };
 
       if (mode === "native") {
-        payload.primary_model_id = modelId || undefined;
+        payload.primary_model_id = selectedModelId || undefined;
       }
 
       const agent = await agentApi.create(payload);
@@ -185,15 +166,21 @@ export default function CustomAgentModal({
       (onDone || onClose)();
       if (chatNow) navigate(`/agents/${agent.id}#chat`);
     },
-    onError: async (err: any) => {
+    onError: async (error: unknown) => {
       await dialog.alert(t("customAgentModal.creationFailed"), {
         type: "error",
-        details: String(err?.message || err),
+        details: caughtErrorMessage(error) ?? String(error),
       });
     },
   });
 
-  if (!open) return null;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !createAgent.isPending) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [createAgent.isPending, onClose]);
 
   const busy = createAgent.isPending;
   const nameError = validateAgentName(name);
@@ -429,7 +416,7 @@ export default function CustomAgentModal({
                     ) : (
                       <select
                         className="form-input"
-                        value={modelId}
+                        value={selectedModelId}
                         onChange={(e) => setModelId(e.target.value)}
                         disabled={busy}
                         style={{ width: "100%" }}
