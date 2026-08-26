@@ -1,17 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import { fetchAuth } from "../utils/fetchAuth";
-import type { JsonValue } from "../../../services/apiContracts";
-
-interface Approval {
-  id: string;
-  status: string;
-  action_type: string;
-  details: JsonValue;
-  created_at: string | null;
-  resolved_at: string | null;
-}
+import { fetchJson } from "../../../services/api";
+import { caughtErrorMessage } from "../../../services/apiError";
+import {
+  parseAgentApprovalList,
+  requestAgentApprovalResolution,
+} from "../agentApprovalData";
 
 export default function ApprovalsTab({
   agentId,
@@ -25,7 +20,10 @@ export default function ApprovalsTab({
   const isChinese = i18n.language?.startsWith("zh");
   const { data: approvals = [], refetch: refetchApprovals } = useQuery({
     queryKey: ["agent-approvals", agentId],
-    queryFn: () => fetchAuth<Approval[]>(`/agents/${agentId}/approvals`),
+    queryFn: () =>
+      fetchJson<unknown>(`/agents/${agentId}/approvals`).then(
+        parseAgentApprovalList,
+      ),
     enabled: !!agentId,
     refetchInterval: 15000,
   });
@@ -36,17 +34,14 @@ export default function ApprovalsTab({
       action,
     }: {
       approvalId: string;
-      action: string;
+      action: "approve" | "reject";
     }) => {
-      if (!canManage) return;
-      const token = localStorage.getItem("token");
-      return fetch(`/api/agents/${agentId}/approvals/${approvalId}/resolve`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ action }),
+      if (!canManage) throw new Error("Approval management is not allowed");
+      return requestAgentApprovalResolution({
+        agentId,
+        approvalId,
+        action,
+        request: (url, options) => fetchJson<unknown>(url, options),
       });
     },
     onSuccess: () => {
@@ -80,6 +75,11 @@ export default function ApprovalsTab({
 
   return (
     <div style={{ padding: "20px 24px" }}>
+      {resolveMut.error && (
+        <div role="alert" style={{ color: "var(--error)", marginBottom: 12 }}>
+          {caughtErrorMessage(resolveMut.error) || "Approval update failed"}
+        </div>
+      )}
       {pending.length > 0 && (
         <>
           <h4
@@ -127,7 +127,7 @@ export default function ApprovalsTab({
                     : ""}
                 </span>
               </div>
-              {approval.details && (
+              {approval.details !== null && approval.details !== undefined && (
                 <div
                   style={{
                     fontSize: "12px",
