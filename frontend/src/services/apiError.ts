@@ -125,6 +125,12 @@ export function caughtErrorMessage(error: unknown): string | undefined {
   return typeof error.message === "string" ? error.message : undefined;
 }
 
+export function caughtErrorStatus(error: unknown): number | undefined {
+  if (error instanceof AppError) return error.status;
+  if (!isRecord(error)) return undefined;
+  return typeof error.status === "number" ? error.status : undefined;
+}
+
 function parseBody(bodyText: string): unknown {
   const trimmed = bodyText.trim();
   if (!trimmed) return undefined;

@@ -6,6 +6,7 @@ import {
   ApiError,
   AppError,
   caughtErrorMessage,
+  caughtErrorStatus,
   normalizeUnknownError,
   parseHttpError,
   parseHttpErrorResponse,
@@ -24,6 +25,24 @@ test("caught error messages preserve auth-page fallback boundaries", () => {
   assert.equal(caughtErrorMessage({ detail: "not a message" }), undefined);
   assert.equal(caughtErrorMessage({ message: 503 }), undefined);
   assert.equal(caughtErrorMessage(null), undefined);
+});
+
+test("caught error status reads only numeric HTTP-style status fields", () => {
+  assert.equal(
+    caughtErrorStatus(
+      new AppError({
+        message: "missing",
+        code: "http_404",
+        status: 404,
+        source: "http",
+      }),
+    ),
+    404,
+  );
+  assert.equal(caughtErrorStatus({ status: 409 }), 409);
+  assert.equal(caughtErrorStatus({ status: "404" }), undefined);
+  assert.equal(caughtErrorStatus({ code: 404 }), undefined);
+  assert.equal(caughtErrorStatus(null), undefined);
 });
 
 test("canonical envelope wins and retains all HTTP diagnostic context", async () => {

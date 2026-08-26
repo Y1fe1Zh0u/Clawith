@@ -6,7 +6,7 @@ import MarkdownRenderer from "./MarkdownRenderer";
 import PromptModal from "./PromptModal";
 import { useDialog } from "./Dialog/DialogProvider";
 import { fileApi, uploadFileWithProgress } from "../services/api";
-import { caughtErrorMessage } from "../services/apiError";
+import { caughtErrorMessage, caughtErrorStatus } from "../services/apiError";
 
 export interface WorkspaceActivity {
   action: "write" | "edit" | "move" | "convert" | "delete";
@@ -563,12 +563,12 @@ export default function WorkspaceOperationPanel({
         await fileApi.revisions(agentId, activePath).catch(() => []),
       );
       setPreviewState("ready");
-    } catch (err: any) {
+    } catch (error) {
       setPreview(null);
       setContent("");
       setDraft("");
       setRevisions([]);
-      setPreviewState(err?.status === 404 ? "deleted" : "idle");
+      setPreviewState(caughtErrorStatus(error) === 404 ? "deleted" : "idle");
     }
   };
 
@@ -688,8 +688,8 @@ export default function WorkspaceOperationPanel({
     const pollForDeletion = async () => {
       try {
         await fileApi.preview(agentId, activePath);
-      } catch (err: any) {
-        if (cancelled || err?.status !== 404) return;
+      } catch (error) {
+        if (cancelled || caughtErrorStatus(error) !== 404) return;
         setEditing(false);
         onEditingChange?.(false);
         setPreview(null);
