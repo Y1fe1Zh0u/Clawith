@@ -8,6 +8,7 @@ import type { FileBrowserApi } from "../../../components/FileBrowser";
 import FileBrowser from "../../../components/FileBrowser";
 import { useToast } from "../../../components/Toast/ToastProvider";
 import { fileApi, skillApi } from "../../../services/api";
+import { caughtErrorMessage } from "../../../services/apiError";
 
 type SafeDisplayIcon = (
   icon?: string | null,
@@ -365,10 +366,10 @@ export default function SkillsTab(props: Props) {
                         queryClient.invalidateQueries({
                           queryKey: ["files", agentId, "skills"],
                         });
-                      } catch (err: any) {
+                      } catch (error) {
                         await dialog.alert(t("common.error.installFailed"), {
                           type: "error",
-                          details: String(err?.message || err),
+                          details: String(caughtErrorMessage(error) || error),
                         });
                       } finally {
                         setAgentClawhubInstalling(null);
@@ -491,10 +492,10 @@ export default function SkillsTab(props: Props) {
                       queryKey: ["files", agentId, "skills"],
                     });
                     setShowAgentUrlImport(false);
-                  } catch (err: any) {
+                  } catch (error) {
                     await dialog.alert(t("common.error.importFailed"), {
                       type: "error",
-                      details: String(err?.message || err),
+                      details: String(caughtErrorMessage(error) || error),
                     });
                   } finally {
                     setAgentUrlImporting(false);
@@ -701,10 +702,10 @@ export default function SkillsTab(props: Props) {
                             queryKey: ["files", agentId, "skills"],
                           });
                           setShowImportSkillModal(false);
-                        } catch (err: any) {
+                        } catch (error) {
                           await dialog.alert(t("common.error.importFailed"), {
                             type: "error",
-                            details: String(err?.message || err),
+                            details: String(caughtErrorMessage(error) || error),
                           });
                         } finally {
                           setImportingSkillId(null);
