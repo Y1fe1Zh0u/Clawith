@@ -9,7 +9,7 @@ import {
 } from "../../../utils/companyRegions";
 import { useAuthStore } from "../../../stores";
 import { fetchJson } from "../utils/fetchJson";
-import type { Tenant } from "../../../services/apiContracts";
+import { parseEnterpriseTenant } from "../utils/responseParsers";
 
 function firstCharacter(value: string): string | undefined {
   for (const character of value.trim()) return character;
@@ -192,7 +192,8 @@ export function CompanyLogoEditor() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<Tenant>(`/tenants/${tenantId}`)
+    fetchJson<unknown>(`/tenants/${tenantId}`)
+      .then(parseEnterpriseTenant)
       .then((d) => {
         if (d?.name) setName(d.name);
         setLogoUrl(d?.logo_url || "");
@@ -394,7 +395,8 @@ export function CompanyNameEditor() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<Tenant>(`/tenants/${tenantId}`)
+    fetchJson<unknown>(`/tenants/${tenantId}`)
+      .then(parseEnterpriseTenant)
       .then((d) => {
         if (d?.name) setName(d.name);
       })
@@ -405,7 +407,7 @@ export function CompanyNameEditor() {
     if (!tenantId || !name.trim()) return;
     setSaving(true);
     try {
-      await fetchJson(`/tenants/${tenantId}`, {
+      await fetchJson<unknown>(`/tenants/${tenantId}`, {
         method: "PUT",
         body: JSON.stringify({ name: name.trim() }),
       });
@@ -509,7 +511,8 @@ export function CompanyTimezoneEditor() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<Tenant>(`/tenants/${tenantId}`)
+    fetchJson<unknown>(`/tenants/${tenantId}`)
+      .then(parseEnterpriseTenant)
       .then((d) => {
         if (d?.timezone) setTimezone(d.timezone);
         if (d?.country_region) setCountryRegion(d.country_region);
@@ -528,7 +531,7 @@ export function CompanyTimezoneEditor() {
     setSaving(true);
     setError("");
     try {
-      await fetchJson(`/tenants/${tenantId}`, {
+      await fetchJson<unknown>(`/tenants/${tenantId}`, {
         method: "PUT",
         body: JSON.stringify({
           country_region: region.code,
@@ -839,7 +842,8 @@ export function A2AAsyncToggle() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<Tenant>(`/tenants/${tenantId}`)
+    fetchJson<unknown>(`/tenants/${tenantId}`)
+      .then(parseEnterpriseTenant)
       .then((d) => setEnabled(!!d?.a2a_async_enabled))
       .catch((error: unknown) =>
         setError(caughtErrorMessage(error) || "Failed to load A2A setting"),
@@ -853,7 +857,7 @@ export function A2AAsyncToggle() {
     setSaving(true);
     setError("");
     try {
-      await fetchJson(`/tenants/${tenantId}`, {
+      await fetchJson<unknown>(`/tenants/${tenantId}`, {
         method: "PUT",
         body: JSON.stringify({ a2a_async_enabled: next }),
       });

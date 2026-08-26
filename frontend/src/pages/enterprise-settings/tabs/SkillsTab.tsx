@@ -5,24 +5,12 @@ import type { FileBrowserApi } from "../../../components/FileBrowser";
 import { skillApi } from "../../../services/api";
 import { caughtErrorMessage } from "../../../services/apiError";
 import { fetchJson } from "../utils/fetchJson";
-
-interface ClawhubSearchResult {
-  slug: string;
-  displayName: string;
-  summary?: string | null;
-  score?: number | null;
-  version?: string | null;
-  updatedAt?: number | null;
-}
-
-interface UrlSkillPreview {
-  name: string;
-  description?: string;
-  tier: number;
-  files: Array<{ path: string; size: number }>;
-  total_size: number;
-  has_scripts: boolean;
-}
+import {
+  parseClawhubSearchResults,
+  parseUrlSkillPreview,
+  type ClawhubSearchResult,
+  type UrlSkillPreview,
+} from "../utils/responseParsers";
 
 const MASKED_TEXT_INPUT_STYLE: React.CSSProperties & {
   WebkitTextSecurity: string;
@@ -90,8 +78,10 @@ export default function SkillsTab() {
     setSearchResults([]);
     setHasSearched(true);
     try {
-      const results = await fetchJson<ClawhubSearchResult[]>(
-        `/skills/clawhub/search?q=${encodeURIComponent(searchQuery)}`,
+      const results = parseClawhubSearchResults(
+        await fetchJson<unknown>(
+          `/skills/clawhub/search?q=${encodeURIComponent(searchQuery)}`,
+        ),
       );
       setSearchResults(results);
     } catch (error) {
@@ -127,9 +117,11 @@ export default function SkillsTab() {
     setUrlPreviewing(true);
     setUrlPreview(null);
     try {
-      const preview = await fetchJson<UrlSkillPreview>(
-        "/skills/import-from-url/preview",
-        { method: "POST", body: JSON.stringify({ url: urlInput }) },
+      const preview = parseUrlSkillPreview(
+        await fetchJson<unknown>("/skills/import-from-url/preview", {
+          method: "POST",
+          body: JSON.stringify({ url: urlInput }),
+        }),
       );
       setUrlPreview(preview);
     } catch (error) {

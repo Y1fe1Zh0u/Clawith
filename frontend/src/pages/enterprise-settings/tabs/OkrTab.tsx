@@ -5,33 +5,13 @@ import type { TFunction } from "i18next";
 import { caughtErrorMessage } from "../../../services/apiError";
 import { useDialog } from "../../../components/Dialog/DialogContext";
 import { fetchJson } from "../utils/fetchJson";
-
-interface OkrSettings {
-  enabled: boolean;
-  first_enabled_at: string | null;
-  daily_report_enabled: boolean;
-  daily_report_time: string;
-  daily_report_skip_non_workdays: boolean;
-  weekly_report_enabled: boolean;
-  weekly_report_day: number;
-  period_frequency: "quarterly" | "monthly";
-  period_length_days: number | null;
-  period_frequency_locked: boolean;
-  okr_agent_id?: string | null;
-}
-
-interface TenantTimezone {
-  timezone: string;
-}
-
-interface DailyCollectionResult {
-  message?: string;
-}
-
-interface MembersWithoutOkrResult {
-  okr_agent_id?: string | null;
-  company_okr_exists?: boolean;
-}
+import {
+  parseDailyCollectionResult,
+  parseMembersWithoutOkr,
+  parseOkrSettings,
+  parseTenantTimezone,
+  type OkrSettings,
+} from "../utils/responseParsers";
 
 function responseErrorDetail(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || !("detail" in value)) {
@@ -72,16 +52,21 @@ export default function OkrTab({
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ["okr-settings", tenantId],
-    queryFn: () => fetchJson<OkrSettings>("/okr/settings"),
+    queryFn: () => fetchJson<unknown>("/okr/settings").then(parseOkrSettings),
   });
   const { data: tenantInfo } = useQuery({
     queryKey: ["tenant-timezone", tenantId],
-    queryFn: () => fetchJson<TenantTimezone>(`/tenants/${tenantId}`),
+    queryFn: () =>
+      fetchJson<unknown>(`/tenants/${tenantId}`).then(parseTenantTimezone),
     enabled: !!tenantId,
   });
   const updateSettings = useMutation({
-    mutationFn: (data: OkrSettings) =>
-      fetchJson("/okr/settings", { method: "PUT", body: JSON.stringify(data) }),
+    mutationFn: async (data: OkrSettings): Promise<void> => {
+      await fetchJson<unknown>("/okr/settings", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["okr-settings"] });
       setOkrSaveState("saved");
@@ -121,11 +106,10 @@ export default function OkrTab({
     setDailyTestState("running");
     setDailyTestMessage("");
     try {
-      const result = await fetchJson<DailyCollectionResult>(
-        "/okr/trigger-daily-collection",
-        {
+      const result = parseDailyCollectionResult(
+        await fetchJson<unknown>("/okr/trigger-daily-collection", {
           method: "POST",
-        },
+        }),
       );
       setDailyTestState("success");
       setDailyTestMessage(
@@ -148,7 +132,9 @@ export default function OkrTab({
   const { data: membersData } = useQuery({
     queryKey: ["okr-members-without-okr-settings", tenantId],
     queryFn: () =>
-      fetchJson<MembersWithoutOkrResult>("/okr/members-without-okr"),
+      fetchJson<unknown>("/okr/members-without-okr").then(
+        parseMembersWithoutOkr,
+      ),
     enabled: !!settings?.enabled,
     retry: false,
   });

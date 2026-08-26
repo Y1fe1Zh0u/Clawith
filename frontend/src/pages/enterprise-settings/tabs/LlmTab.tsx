@@ -8,43 +8,20 @@ import { useAuthStore } from "../../../stores";
 import { notifyModelCacheInvalidated } from "../../../services/modelCacheEvents";
 import { caughtErrorMessage } from "../../../services/apiError";
 import { fetchJson } from "../utils/fetchJson";
+import {
+  parseConnectivityTestResult,
+  parseLlmModels,
+  parseLlmProviders,
+  parseRuntimeModelSettings,
+  parseTenantDefaultModel,
+  type LLMModel,
+  type LLMProviderSpec,
+  type RuntimeModelSettings as ParsedRuntimeModelSettings,
+} from "../utils/responseParsers";
 
-interface LLMModel {
-  id: string;
-  provider: string;
-  model: string;
-  label: string;
-  base_url?: string;
-  api_key_masked?: string;
-  max_tokens_per_day?: number;
-  enabled: boolean;
-  supports_vision?: boolean;
-  supports_tool_calling?: boolean | null;
-  tool_calling_capability_source?: "probe" | "builtin_registry" | null;
-  tool_calling_checked_at?: string | null;
-  tool_calling_error?: string | null;
-  max_output_tokens?: number;
-  request_timeout?: number;
-  temperature?: number;
-  created_at: string;
-}
-
-interface LLMProviderSpec {
-  provider: string;
-  display_name: string;
-  protocol: string;
-  default_base_url?: string | null;
-  supports_tool_choice: boolean;
-  default_max_tokens: number;
-}
-
-interface RuntimeModelSettings {
-  tenant_id: string;
-  planning_model_id: string | null;
-  compact_model_id: string | null;
+interface RuntimeModelSettings extends ParsedRuntimeModelSettings {
   planning_source: "database" | "environment" | "unavailable";
   compact_source: "database" | "environment" | "unavailable";
-  candidates: Array<Pick<LLMModel, "id" | "label" | "provider" | "model">>;
 }
 
 interface RuntimeModelForm {
@@ -70,15 +47,6 @@ interface ConnectivityTestRequest {
   base_url?: string;
   api_key?: string;
   model_id?: string;
-}
-
-interface ConnectivityTestResult {
-  capability_recorded?: boolean;
-  connection_success: boolean;
-  tool_calling_supported?: boolean | null;
-  tool_calling_error?: string | null;
-  latency_ms?: number;
-  error?: string | null;
 }
 
 interface TenantDefaultModel {
@@ -247,13 +215,14 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
   const { data: models = [] } = useQuery({
     queryKey: ["llm-models", selectedTenantId],
     queryFn: () =>
-      fetchJson<LLMModel[]>(
+      fetchJson<unknown>(
         `/enterprise/llm-models${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
-      ),
+      ).then(parseLlmModels),
   });
   const { data: providerSpecs = [] } = useQuery({
     queryKey: ["llm-provider-specs"],
-    queryFn: () => fetchJson<LLMProviderSpec[]>("/enterprise/llm-providers"),
+    queryFn: () =>
+      fetchJson<unknown>("/enterprise/llm-providers").then(parseLlmProviders),
   });
   const providerOptions =
     providerSpecs.length > 0 ? providerSpecs : FALLBACK_LLM_PROVIDERS;
@@ -264,7 +233,10 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
   const runtimeModelSettingsUrl = `/enterprise/runtime-model-settings${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`;
   const { data: runtimeModelSettings } = useQuery({
     queryKey: ["runtime-model-settings", selectedTenantId],
-    queryFn: () => fetchJson<RuntimeModelSettings>(runtimeModelSettingsUrl),
+    queryFn: (): Promise<RuntimeModelSettings> =>
+      fetchJson<unknown>(runtimeModelSettingsUrl).then(
+        parseRuntimeModelSettings,
+      ),
     enabled: canManageRuntimeModels,
   });
   const runtimeModelForm =
@@ -277,10 +249,10 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
       : { planning_model_id: "", compact_model_id: "" });
   const saveRuntimeModelSettings = useMutation({
     mutationFn: () =>
-      fetchJson<RuntimeModelSettings>(runtimeModelSettingsUrl, {
+      fetchJson<unknown>(runtimeModelSettingsUrl, {
         method: "PUT",
         body: JSON.stringify(runtimeModelForm),
-      }),
+      }).then(parseRuntimeModelSettings),
     onSuccess: (data) => {
       qc.setQueryData(["runtime-model-settings", selectedTenantId], data);
       setRuntimeModelDraft(null);
@@ -299,11 +271,12 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
   });
 
   const addModel = useMutation({
-    mutationFn: (data: LLMModelWrite) =>
-      fetchJson(
+    mutationFn: async (data: LLMModelWrite): Promise<void> => {
+      await fetchJson<unknown>(
         `/enterprise/llm-models${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
         { method: "POST", body: JSON.stringify(data) },
-      ),
+      );
+    },
     onSuccess: () => {
       invalidateModelCaches();
       setShowAddModel(false);
@@ -311,11 +284,18 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     },
   });
   const updateModel = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: LLMModelWrite }) =>
-      fetchJson(`/enterprise/llm-models/${id}`, {
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: LLMModelWrite;
+    }): Promise<void> => {
+      await fetchJson<unknown>(`/enterprise/llm-models/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
-      }),
+      });
+    },
     onSuccess: () => {
       invalidateModelCaches();
       setShowAddModel(false);
@@ -326,18 +306,22 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     {
       queryKey: ["tenant-default-model", selectedTenantId],
       queryFn: () =>
-        fetchJson<TenantDefaultModel>(
+        fetchJson<unknown>(
           !selectedTenantId || selectedTenantId === currentUser?.tenant_id
             ? "/tenants/me"
             : `/tenants/${selectedTenantId}`,
-        ),
+        ).then(parseTenantDefaultModel),
     },
   );
   const setDefaultModel = useMutation({
-    mutationFn: (modelId: string) =>
-      fetchJson(`/enterprise/llm-models/${modelId}/set-default`, {
-        method: "POST",
-      }),
+    mutationFn: async (modelId: string): Promise<void> => {
+      await fetchJson<unknown>(
+        `/enterprise/llm-models/${modelId}/set-default`,
+        {
+          method: "POST",
+        },
+      );
+    },
     onSuccess: (_data, modelId) => {
       qc.setQueryData(
         ["tenant-default-model", selectedTenantId],
@@ -368,10 +352,11 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     },
   });
   const deleteModel = useMutation({
-    mutationFn: (id: string) =>
-      fetchJson<void>(`/enterprise/llm-models/${id}`, {
+    mutationFn: async (id: string): Promise<void> => {
+      await fetchJson<unknown>(`/enterprise/llm-models/${id}`, {
         method: "DELETE",
-      }),
+      });
+    },
     onSuccess: () => {
       invalidateModelCaches();
       toast.success(t("enterprise.llm.deleteDone", "Model disabled"));
@@ -446,7 +431,7 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
         },
         body: JSON.stringify(testData),
       });
-      const result: ConnectivityTestResult = await res.json();
+      const result = parseConnectivityTestResult(await res.json());
       if (result.capability_recorded) invalidateModelCaches();
       if (result.connection_success && result.tool_calling_supported === true) {
         if (btn) {

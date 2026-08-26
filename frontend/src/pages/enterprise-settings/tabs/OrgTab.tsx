@@ -8,28 +8,18 @@ import { useToast } from "../../../components/Toast/ToastContext";
 import LinearCopyButton from "../../../components/LinearCopyButton";
 import { IconSettings } from "@tabler/icons-react";
 import { fetchJson } from "../utils/fetchJson";
-import type { OrgDepartmentItem } from "../../../services/api";
 import type { Tenant } from "../../../services/apiContracts";
-
-interface IdentityProviderConfig {
-  app_id?: string;
-  app_key?: string;
-  app_secret?: string;
-  client_id?: string;
-  client_secret?: string;
-  corp_id?: string;
-  secret?: string;
-  agent_id?: string;
-  bot_id?: string;
-  bot_secret?: string;
-  verify_token?: string;
-  verify_aes_key?: string;
-  authorize_url?: string;
-  token_url?: string;
-  user_info_url?: string;
-  scope?: string;
-  google_admin_authorized_email?: string;
-}
+import {
+  parseAuthorizationUrl,
+  parseIdentityProvider,
+  parseIdentityProviders,
+  parseOrgDepartments,
+  parseOrgMembers,
+  parseOrgSyncResponse,
+  type IdentityProvider,
+  type IdentityProviderConfig,
+  type OrgDepartment,
+} from "../utils/responseParsers";
 
 interface IdentityProviderForm {
   provider_type: string;
@@ -41,22 +31,6 @@ interface IdentityProviderForm {
   token_url: string;
   user_info_url: string;
   scope: string;
-}
-
-interface IdentityProvider extends IdentityProviderForm {
-  id: string;
-  sso_domain?: string | null;
-  sso_login_enabled?: boolean;
-  last_synced_at?: string | null;
-}
-
-interface OrgMember {
-  id: string;
-  name: string;
-  provider_type?: string | null;
-  title?: string | null;
-  department_path?: string | null;
-  department_id?: string | null;
 }
 
 interface OrgSyncResult {
@@ -96,7 +70,7 @@ function DeptTree({
   onSelect,
   level,
 }: {
-  departments: OrgDepartmentItem[];
+  departments: OrgDepartment[];
   parentId: string | null;
   selectedDept: string | null;
   onSelect: (id: string | null) => void;
@@ -207,12 +181,14 @@ function SsoChannelSection({
     setToggling(true);
     setSsoError("");
     try {
-      const result = await fetchJson<IdentityProvider>(
-        `/enterprise/identity-providers/${existingProvider.id}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ sso_login_enabled: newVal }),
-        },
+      const result = parseIdentityProvider(
+        await fetchJson<unknown>(
+          `/enterprise/identity-providers/${existingProvider.id}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ sso_login_enabled: newVal }),
+          },
+        ),
       );
       if (result.sso_domain) setLiveDomainOverride(result.sso_domain);
       qc.invalidateQueries({ queryKey: ["identity-providers"] });
@@ -507,9 +483,9 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
   const { data: providers = [] } = useQuery({
     queryKey: ["identity-providers", currentTenantId],
     queryFn: () =>
-      fetchJson<IdentityProvider[]>(
+      fetchJson<unknown>(
         `/enterprise/identity-providers${currentTenantId ? `?tenant_id=${currentTenantId}` : ""}`,
-      ),
+      ).then(parseIdentityProviders),
   });
 
   const { data: departmentsData = { items: [], total_member: 0 } } = useQuery({
@@ -518,8 +494,8 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
       const params = new URLSearchParams();
       if (currentTenantId) params.set("tenant_id", currentTenantId);
       if (editingId) params.set("provider_id", editingId);
-      return fetchJson<{ items: OrgDepartmentItem[]; total_member: number }>(
-        `/enterprise/org/departments?${params}`,
+      return fetchJson<unknown>(`/enterprise/org/departments?${params}`).then(
+        parseOrgDepartments,
       );
     },
     enabled: !!editingId,
@@ -539,22 +515,25 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
       if (memberSearch) params.set("search", memberSearch);
       if (currentTenantId) params.set("tenant_id", currentTenantId);
       if (editingId) params.set("provider_id", editingId);
-      return fetchJson<OrgMember[]>(`/enterprise/org/members?${params}`);
+      return fetchJson<unknown>(`/enterprise/org/members?${params}`).then(
+        parseOrgMembers,
+      );
     },
     enabled: !!editingId,
   });
 
   // Mutations
   const addProvider = useMutation({
-    mutationFn: (data: IdentityProviderForm) => {
+    mutationFn: async (data: IdentityProviderForm): Promise<void> => {
       const payload = { ...data, tenant_id: currentTenantId, is_active: true };
       if (data.provider_type === "oauth2" && useOAuth2Form) {
-        return fetchJson("/enterprise/identity-providers/oauth2", {
+        await fetchJson<unknown>("/enterprise/identity-providers/oauth2", {
           method: "POST",
           body: JSON.stringify(payload),
         });
+        return;
       }
-      return fetchJson("/enterprise/identity-providers", {
+      await fetchJson<unknown>("/enterprise/identity-providers", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -570,14 +549,24 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
   });
 
   const updateProvider = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: IdentityProviderForm }) => {
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: IdentityProviderForm;
+    }): Promise<void> => {
       if (data.provider_type === "oauth2" && useOAuth2Form) {
-        return fetchJson(`/enterprise/identity-providers/${id}/oauth2`, {
-          method: "PATCH",
-          body: JSON.stringify(data),
-        });
+        await fetchJson<unknown>(
+          `/enterprise/identity-providers/${id}/oauth2`,
+          {
+            method: "PATCH",
+            body: JSON.stringify(data),
+          },
+        );
+        return;
       }
-      return fetchJson(`/enterprise/identity-providers/${id}`, {
+      await fetchJson<unknown>(`/enterprise/identity-providers/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
       });
@@ -593,8 +582,11 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
   });
 
   const deleteProvider = useMutation({
-    mutationFn: (id: string) =>
-      fetchJson(`/enterprise/identity-providers/${id}`, { method: "DELETE" }),
+    mutationFn: async (id: string): Promise<void> => {
+      await fetchJson<unknown>(`/enterprise/identity-providers/${id}`, {
+        method: "DELETE",
+      });
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["identity-providers"] }),
   });
 
@@ -602,9 +594,11 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
     setSyncing(providerId);
     setSyncResult(null);
     try {
-      const result = await fetchJson<Omit<OrgSyncResult, "providerId">>(
-        `/enterprise/org/sync?provider_id=${providerId}`,
-        { method: "POST" },
+      const result = parseOrgSyncResponse(
+        await fetchJson<unknown>(
+          `/enterprise/org/sync?provider_id=${providerId}`,
+          { method: "POST" },
+        ),
       );
       setSyncResult({ ...result, providerId });
       // Force refetch to ensure UI updates after sync
@@ -637,16 +631,18 @@ export default function OrgTab({ tenant }: { tenant?: Tenant }) {
   };
 
   const handleGoogleAdminAuthorize = async (providerId: string) => {
-    const res = await fetchJson<{ authorization_url: string }>(
-      `/enterprise/identity-providers/${providerId}/google-workspace-sync/authorize-url`,
+    const authorizationUrl = parseAuthorizationUrl(
+      await fetchJson<unknown>(
+        `/enterprise/identity-providers/${providerId}/google-workspace-sync/authorize-url`,
+      ),
     );
     const popup = window.open(
-      res.authorization_url,
+      authorizationUrl,
       "google-workspace-sync",
       "width=640,height=760",
     );
     if (!popup) {
-      window.location.assign(res.authorization_url);
+      window.location.assign(authorizationUrl);
       return;
     }
 
