@@ -18,7 +18,15 @@ import { useTranslation } from "react-i18next";
 import { caughtErrorMessage } from "../services/apiError";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../stores";
-import { agentApi, tenantApi, authApi, onboardingApi } from "../services/api";
+import {
+  agentApi,
+  tenantApi,
+  authApi,
+  onboardingApi,
+  fetchJson,
+} from "../services/api";
+import type { Agent, User } from "../types";
+import type { TenantChoice } from "../services/apiContracts";
 import { useGroupUnread } from "../hooks/useGroupUnread";
 import { useToast } from "../components/Toast/ToastProvider";
 
@@ -77,17 +85,19 @@ function resolveUiLangCode(lang: string | undefined): string {
   return "en";
 }
 
-const fetchJson = async <T,>(url: string): Promise<T> => {
-  const token = localStorage.getItem("token");
-  const res = await fetch(`/api${url}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) return [] as T;
-  return res.json();
-};
+interface NotificationItem {
+  id: string;
+  type: string;
+  title: string;
+  body?: string;
+  sender_name?: string;
+  created_at?: string;
+  is_read: boolean;
+  link?: string;
+}
 
 /* Compute display badge status for an agent */
-const getAgentBadgeStatus = (agent: any): string | null => {
+const getAgentBadgeStatus = (agent: Agent): string | null => {
   if (agent.status === "error") return "error";
   if (agent.status === "creating") return "creating";
   // OpenClaw disconnected detection: 60 min timeout
@@ -117,7 +127,7 @@ function AccountSettingsModal({
   onClose,
   isChinese,
 }: {
-  user: any;
+  user: User;
   onClose: () => void;
   isChinese: boolean;
 }) {
@@ -143,7 +153,8 @@ function AccountSettingsModal({
     setSaving(true);
     try {
       const token = localStorage.getItem("token");
-      const body: any = {};
+      const body: Partial<Pick<User, "username" | "email" | "display_name">> =
+        {};
       if (username !== user?.username) body.username = username;
       if (email !== user?.email) body.email = email;
       if (displayName !== user?.display_name) body.display_name = displayName;
@@ -699,7 +710,6 @@ function CompanyTourOverlay({
   }, [current]);
 
   useLayoutEffect(() => {
-    updateTourPosition();
     const raf = window.requestAnimationFrame(updateTourPosition);
     window.addEventListener("resize", updateTourPosition);
     window.addEventListener("scroll", updateTourPosition, true);
@@ -790,11 +800,11 @@ export default function Layout() {
   const activeAgentId =
     activeAgentNestedMatch?.params.id || activeAgentRootMatch?.params.id;
   const canAccessPlatformSettings =
-    user?.role === "platform_admin" || !!(user as any)?.is_platform_admin;
+    user?.role === "platform_admin" || !!user?.is_platform_admin;
   const canAccessCompanySettings =
     user?.role === "platform_admin" ||
     user?.role === "org_admin" ||
-    !!(user as any)?.is_platform_admin;
+    !!user?.is_platform_admin;
   const routeParams = new URLSearchParams(location.search);
   const showCompanyTour = routeParams.get("tour") === "company";
   const tourAssistantId = routeParams.get("assistantId") || "";
@@ -812,9 +822,8 @@ export default function Layout() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showTalentMarket, setShowTalentMarket] = useState(false);
   const [notifCategory, setNotifCategory] = useState<string>("all");
-  const [selectedNotification, setSelectedNotification] = useState<any | null>(
-    null,
-  );
+  const [selectedNotification, setSelectedNotification] =
+    useState<NotificationItem | null>(null);
   const [showTenantMenu, setShowTenantMenu] = useState(false);
   const [showTenantSetupModal, setShowTenantSetupModal] = useState(false);
   const [tenantSearch, setTenantSearch] = useState("");
@@ -838,7 +847,7 @@ export default function Layout() {
       const res = await fetchJson<{ unread_count: number }>(
         "/notifications/unread-count",
       );
-      return (res as any)?.unread_count || 0;
+      return res.unread_count || 0;
     },
     refetchInterval: 30000,
     enabled: !!user,
@@ -846,7 +855,7 @@ export default function Layout() {
   const { data: notifications = [] } = useQuery({
     queryKey: ["notifications", notifCategory],
     queryFn: () =>
-      fetchJson<any[]>(
+      fetchJson<NotificationItem[]>(
         `/notifications?limit=50${notifCategory !== "all" ? `&category=${notifCategory}` : ""}`,
       ),
     enabled: !!user && showNotifications,
@@ -875,50 +884,30 @@ export default function Layout() {
   // Tenant switching
   const { data: myTenants = [] } = useQuery({
     queryKey: ["my-tenants"],
-    queryFn: async () => {
-      const token = localStorage.getItem("token");
-      const res = await fetch("/api/auth/my-tenants", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) return [];
-      return res.json();
-    },
+    queryFn: (): Promise<TenantChoice[]> => authApi.getMyTenants(),
     enabled: !!user,
   });
 
   const handleSwitchTenant = async (tenantId: string) => {
-    const token = localStorage.getItem("token");
-    const res = await fetch("/api/auth/switch-tenant", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ tenant_id: tenantId }),
-    });
-    if (!res.ok) {
-      const err = await res
-        .json()
-        .catch(() => ({ detail: "Failed to switch tenant" }));
-      toast.error(t("common.error.companySwitchFailed"), {
-        details: String(err.detail || `HTTP ${res.status}`),
-      });
-      return;
-    }
-    const data = await res.json();
-    if (data.redirect_url) {
+    try {
+      const data = await authApi.switchTenant(tenantId);
       localStorage.setItem("token", data.access_token);
-      const targetUrl = new URL(data.redirect_url, window.location.origin);
-      if (targetUrl.hostname === window.location.hostname) {
-        targetUrl.protocol = window.location.protocol;
-        targetUrl.port = window.location.port;
+      if (data.redirect_url) {
+        const targetUrl = new URL(data.redirect_url, window.location.origin);
+        const targetOrigin =
+          targetUrl.hostname === window.location.hostname
+            ? window.location.origin
+            : targetUrl.origin;
+        window.location.assign(
+          new URL(`/${targetUrl.search}`, targetOrigin).toString(),
+        );
+      } else {
+        window.location.assign("/");
       }
-      targetUrl.pathname = "/";
-      targetUrl.hash = "";
-      window.location.href = targetUrl.toString();
-    } else if (data.access_token) {
-      localStorage.setItem("token", data.access_token);
-      window.location.href = "/";
+    } catch (error) {
+      toast.error(t("common.error.companySwitchFailed"), {
+        details: caughtErrorMessage(error) || "Failed to switch tenant",
+      });
     }
   };
 
@@ -936,7 +925,7 @@ export default function Layout() {
     setTenantFormError("");
     tenantApi
       .registrationConfig()
-      .then((d: any) => {
+      .then((d) => {
         setAllowSelfCreate(d.allow_self_create_company);
       })
       .catch(() => {});
@@ -998,7 +987,7 @@ export default function Layout() {
 
   // Theme
   const [theme, setTheme] = useState<"dark" | "light">(() => {
-    return (localStorage.getItem("theme") as "dark" | "light") || "light";
+    return localStorage.getItem("theme") === "dark" ? "dark" : "light";
   });
 
   useEffect(() => {
@@ -1022,7 +1011,12 @@ export default function Layout() {
   const [pinnedAgents, setPinnedAgents] = useState<Set<string>>(() => {
     try {
       const stored = localStorage.getItem("pinned_agents");
-      return stored ? new Set(JSON.parse(stored)) : new Set();
+      if (!stored) return new Set();
+      const parsed: unknown = JSON.parse(stored);
+      return Array.isArray(parsed) &&
+        parsed.every((value) => typeof value === "string")
+        ? new Set(parsed)
+        : new Set();
     } catch {
       return new Set();
     }
@@ -1040,29 +1034,23 @@ export default function Layout() {
   // Use user's own tenant_id directly (no switching)
   const currentTenant = user?.tenant_id || "";
   const currentTenantName = useMemo(() => {
-    const tenant = (myTenants as any[]).find(
-      (item: any) => item.tenant_id === currentTenant,
-    );
+    const tenant = myTenants.find((item) => item.tenant_id === currentTenant);
     return tenant?.tenant_name || (isChinese ? "当前公司" : "Current Company");
   }, [currentTenant, isChinese, myTenants]);
   const currentTenantLogoUrl = useMemo(() => {
-    const tenant = (myTenants as any[]).find(
-      (item: any) => item.tenant_id === currentTenant,
-    );
+    const tenant = myTenants.find((item) => item.tenant_id === currentTenant);
     return tenant?.logo_url || "";
   }, [currentTenant, myTenants]);
   const currentTenantInitial =
-    (
-      Array.from(currentTenantName.trim())[0] as string | undefined
-    )?.toUpperCase() || "C";
+    Array.from(currentTenantName.trim())[0]?.toUpperCase() || "C";
   const currentTenantAvatarTone = useMemo(
     () => getWorkspaceAvatarTone(currentTenantName),
     [currentTenantName],
   );
   const filteredTenants = useMemo(() => {
     const query = tenantSearch.trim().toLowerCase();
-    if (!query) return myTenants as any[];
-    return (myTenants as any[]).filter((tenant: any) =>
+    if (!query) return myTenants;
+    return myTenants.filter((tenant) =>
       (tenant.tenant_name || "").toLowerCase().includes(query),
     );
   }, [myTenants, tenantSearch]);
@@ -1080,23 +1068,23 @@ export default function Layout() {
     refetchInterval: 30000,
   });
 
-  const openAgentDrawer = useCallback(() => {
+  const openAgentDrawer = () => {
     if (!isSidebarCollapsed) return;
     if (agentDrawerCloseTimerRef.current) {
       clearTimeout(agentDrawerCloseTimerRef.current);
       agentDrawerCloseTimerRef.current = null;
     }
     setAgentDrawerOpen(true);
-  }, [isSidebarCollapsed]);
+  };
 
-  const scheduleCloseAgentDrawer = useCallback(() => {
+  const scheduleCloseAgentDrawer = () => {
     if (agentDrawerCloseTimerRef.current)
       clearTimeout(agentDrawerCloseTimerRef.current);
     agentDrawerCloseTimerRef.current = setTimeout(() => {
       setAgentDrawerOpen(false);
       agentDrawerCloseTimerRef.current = null;
     }, 160);
-  }, []);
+  };
 
   const handleLogout = () => {
     logout();
@@ -1126,16 +1114,6 @@ export default function Layout() {
     }, 200);
   }, []);
 
-  useEffect(() => {
-    if (!showAccountMenu) {
-      if (langHoverCloseTimerRef.current) {
-        clearTimeout(langHoverCloseTimerRef.current);
-        langHoverCloseTimerRef.current = null;
-      }
-      setShowLanguageSubmenu(false);
-    }
-  }, [showAccountMenu]);
-
   useEffect(
     () => () => {
       if (langHoverCloseTimerRef.current)
@@ -1145,10 +1123,6 @@ export default function Layout() {
     },
     [],
   );
-
-  useEffect(() => {
-    if (!isSidebarCollapsed) setAgentDrawerOpen(false);
-  }, [isSidebarCollapsed]);
 
   const updateLangSubmenuPosition = useCallback(() => {
     const el = accountDropdownRef.current;
@@ -1200,12 +1174,13 @@ export default function Layout() {
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (accountMenuRef.current?.contains(t)) return;
-      if (langSubmenuPortalRef.current?.contains(t)) return;
-      if (tenantSwitcherRef.current?.contains(t)) return;
-      if (tenantMenuPortalRef.current?.contains(t)) return;
+      if (!(e.target instanceof Node)) return;
+      if (accountMenuRef.current?.contains(e.target)) return;
+      if (langSubmenuPortalRef.current?.contains(e.target)) return;
+      if (tenantSwitcherRef.current?.contains(e.target)) return;
+      if (tenantMenuPortalRef.current?.contains(e.target)) return;
       setShowAccountMenu(false);
+      setShowLanguageSubmenu(false);
       setShowTenantMenu(false);
     };
     if (showAccountMenu || showTenantMenu)
@@ -1257,7 +1232,7 @@ export default function Layout() {
         <div className="tenant-switcher-label">
           {isChinese ? "切换公司" : "Switch company"}
         </div>
-        {(myTenants as any[]).length > 8 && (
+        {myTenants.length > 8 && (
           <div className="tenant-switcher-search">
             <IconSearch size={14} stroke={1.7} />
             <input
@@ -1277,7 +1252,7 @@ export default function Layout() {
           </div>
         )}
         <div className="tenant-switcher-list">
-          {filteredTenants.map((tenant: any) => (
+          {filteredTenants.map((tenant) => (
             <button
               key={tenant.tenant_id}
               type="button"
@@ -1337,14 +1312,14 @@ export default function Layout() {
 
   const q = sidebarSearch.trim().toLowerCase();
   const sortedAgents = [...agents]
-    .filter((a: any) => {
+    .filter((a) => {
       if (!q) return true;
       return (
         (a.name || "").toLowerCase().includes(q) ||
         (a.role_description || "").toLowerCase().includes(q)
       );
     })
-    .sort((a: any, b: any) => {
+    .sort((a, b) => {
       const ap = pinnedAgents.has(a.id) ? 1 : 0;
       const bp = pinnedAgents.has(b.id) ? 1 : 0;
       if (ap !== bp) return bp - ap;
@@ -1381,11 +1356,9 @@ export default function Layout() {
       </div>
     );
 
-  const renderAgent = (agent: any, options?: { drawer?: boolean }) => {
+  const renderAgent = (agent: Agent, options?: { drawer?: boolean }) => {
     const badge = getAgentBadgeStatus(agent);
-    const avatarChar = (
-      (Array.from(agent.name || "?")[0] as string) || "?"
-    ).toUpperCase();
+    const avatarChar = (Array.from(agent.name || "?")[0] || "?").toUpperCase();
     const unreadCount = Number(agent.unread_count || 0);
     const showPin = !isSidebarCollapsed || options?.drawer;
     return (
@@ -1702,7 +1675,7 @@ export default function Layout() {
                 title={isChinese ? "通知" : "Notifications"}
               >
                 {SidebarIcons.bell}
-                {(unreadCount as number) > 0 && (
+                {unreadCount > 0 && (
                   <span
                     style={{
                       position: "absolute",
@@ -1723,13 +1696,16 @@ export default function Layout() {
                       lineHeight: 1,
                     }}
                   >
-                    {(unreadCount as number) > 99 ? "99+" : unreadCount}
+                    {unreadCount > 99 ? "99+" : unreadCount}
                   </span>
                 )}
               </button>
               <button
                 className="btn btn-ghost sidebar-collapse-btn"
-                onClick={toggleSidebar}
+                onClick={() => {
+                  if (isSidebarCollapsed) setAgentDrawerOpen(false);
+                  toggleSidebar();
+                }}
                 style={{
                   padding: "4px 8px",
                   display: "flex",
@@ -1781,6 +1757,7 @@ export default function Layout() {
                       onClick={() => {
                         setShowAccountSettings(true);
                         setShowAccountMenu(false);
+                        setShowLanguageSubmenu(false);
                       }}
                     >
                       <IconUser size={15} stroke={1.5} />
@@ -1792,6 +1769,7 @@ export default function Layout() {
                         onClick={() => {
                           navigate("/admin/platform-settings");
                           setShowAccountMenu(false);
+                          setShowLanguageSubmenu(false);
                         }}
                       >
                         <IconSettings size={15} stroke={1.5} />
@@ -1812,6 +1790,7 @@ export default function Layout() {
                       onClick={() => {
                         handleLogout();
                         setShowAccountMenu(false);
+                        setShowLanguageSubmenu(false);
                       }}
                     >
                       <IconLogout size={15} stroke={1.5} />
@@ -1825,7 +1804,10 @@ export default function Layout() {
                 createPortal(langSubmenuContent, document.body)}
               <div
                 className="sidebar-account-row"
-                onClick={() => setShowAccountMenu((v) => !v)}
+                onClick={() => {
+                  if (showAccountMenu) setShowLanguageSubmenu(false);
+                  setShowAccountMenu(!showAccountMenu);
+                }}
               >
                 <div
                   style={{
@@ -2041,7 +2023,7 @@ export default function Layout() {
                 >
                   {isChinese ? "通知" : "Notifications"}
                 </h3>
-                {(unreadCount as number) > 0 && (
+                {unreadCount > 0 && (
                   <button
                     className="btn btn-ghost"
                     onClick={markAllRead}
@@ -2106,7 +2088,7 @@ export default function Layout() {
               </div>
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-              {(notifications as any[]).length === 0 && (
+              {notifications.length === 0 && (
                 <div
                   style={{
                     textAlign: "center",
@@ -2118,7 +2100,7 @@ export default function Layout() {
                   {isChinese ? "暂无通知" : "No notifications"}
                 </div>
               )}
-              {(notifications as any[]).map((n: any) => (
+              {notifications.map((n) => (
                 <div
                   key={n.id}
                   onClick={() => {
@@ -2314,7 +2296,7 @@ export default function Layout() {
         />
       </main>
 
-      {showAccountSettings && (
+      {showAccountSettings && user && (
         <AccountSettingsModal
           user={user}
           onClose={() => setShowAccountSettings(false)}

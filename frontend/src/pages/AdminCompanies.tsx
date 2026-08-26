@@ -7,6 +7,7 @@ import { IconFilter, IconShieldCheck } from "@tabler/icons-react";
 import PlatformDashboard from "./PlatformDashboard";
 import LinearCopyButton from "../components/LinearCopyButton";
 import { useDialog } from "../components/Dialog/DialogProvider";
+import type { CompanyStats, PlatformSettings } from "../services/apiContracts";
 // Format large token numbers with K/M/B suffixes
 function formatTokens(n: number | null | undefined): string {
   if (n == null) return "-";
@@ -40,6 +41,104 @@ type SortDir = "asc" | "desc";
 
 const PAGE_SIZE = 15;
 
+type SocialProviderType = "google" | "github";
+
+interface NotificationBarValue {
+  enabled: boolean;
+  text: string;
+}
+
+interface SystemEmailConfig {
+  SYSTEM_EMAIL_ENABLED: boolean;
+  SYSTEM_EMAIL_FROM_ADDRESS: string;
+  SYSTEM_EMAIL_FROM_NAME: string;
+  SYSTEM_SMTP_HOST: string;
+  SYSTEM_SMTP_PORT: number;
+  SYSTEM_SMTP_USERNAME: string;
+  SYSTEM_SMTP_PASSWORD: string;
+  SYSTEM_SMTP_SSL: boolean;
+  SYSTEM_SMTP_TIMEOUT_SECONDS: number;
+}
+
+interface SystemSettingResponse<T> {
+  value?: T;
+  updated_at?: string | null;
+}
+
+interface EmailTemplate {
+  subject: string;
+  body: string;
+}
+
+interface EmailTemplatesResponse {
+  templates?: Record<string, EmailTemplate>;
+  variables?: Record<string, string[]>;
+  defaults?: Record<string, EmailTemplate>;
+}
+
+interface OAuthProviderConfig {
+  client_id?: string;
+  app_id?: string;
+  client_secret?: string;
+  app_secret?: string;
+  scope?: string;
+}
+
+interface IdentityProviderResponse {
+  id: string;
+  provider_type: string;
+  name?: string;
+  is_active?: boolean;
+  config?: OAuthProviderConfig;
+}
+
+interface OAuthProvider {
+  id?: string;
+  provider_type: SocialProviderType;
+  name: string;
+  is_active: boolean;
+  config?: OAuthProviderConfig;
+  client_id: string;
+  client_secret: string;
+  scope: string;
+}
+
+const SOCIAL_PROVIDER_META = {
+  google: {
+    name: "Google",
+    scope: "openid profile email",
+    authorizeLabel: "Authorized redirect URI",
+  },
+  github: {
+    name: "GitHub",
+    scope: "read:user user:email",
+    authorizeLabel: "Authorization callback URL",
+  },
+} as const;
+
+function isSocialProviderType(value: string): value is SocialProviderType {
+  return value === "google" || value === "github";
+}
+
+function companySortValue(
+  company: CompanyStats,
+  key: SortKey,
+): string | number {
+  switch (key) {
+    case "name":
+      return company.name.toLowerCase();
+    case "org_admin_email":
+      return (company.org_admin_email ?? "").toLowerCase();
+    case "created_at":
+      return company.created_at ? new Date(company.created_at).getTime() : 0;
+    case "sso_enabled":
+    case "is_active":
+      return company[key] ? 1 : 0;
+    default:
+      return company[key];
+  }
+}
+
 // Platform Admin — Platform Settings page with tabs
 export default function AdminCompanies() {
   const { t } = useTranslation();
@@ -49,7 +148,7 @@ export default function AdminCompanies() {
   >("dashboard");
 
   const canAccessPlatformSettings =
-    user?.role === "platform_admin" || !!(user as any)?.is_platform_admin;
+    user?.role === "platform_admin" || !!user?.is_platform_admin;
 
   // Guard: platform admins keep access across tenant contexts.
   if (!canAccessPlatformSettings) {
@@ -128,21 +227,9 @@ export default function AdminCompanies() {
 // ─── Platform Tab ──────────────────────────────────
 function PlatformTab() {
   const { t } = useTranslation();
-  const socialProviderMeta = {
-    google: {
-      name: "Google",
-      scope: "openid profile email",
-      authorizeLabel: "Authorized redirect URI",
-    },
-    github: {
-      name: "GitHub",
-      scope: "read:user user:email",
-      authorizeLabel: "Authorization callback URL",
-    },
-  } as const;
 
   // Platform settings toggles
-  const [settings, setSettings] = useState<any>({});
+  const [settings, setSettings] = useState<Partial<PlatformSettings>>({});
   const [settingsLoading, setSettingsLoading] = useState(false);
 
   // Notification bar
@@ -152,17 +239,19 @@ function PlatformTab() {
   const [nbSaved, setNbSaved] = useState(false);
 
   // System email configuration
-  const [systemEmailConfig, setSystemEmailConfig] = useState({
-    SYSTEM_EMAIL_ENABLED: false,
-    SYSTEM_EMAIL_FROM_ADDRESS: "",
-    SYSTEM_EMAIL_FROM_NAME: "Clawith",
-    SYSTEM_SMTP_HOST: "",
-    SYSTEM_SMTP_PORT: 465,
-    SYSTEM_SMTP_USERNAME: "",
-    SYSTEM_SMTP_PASSWORD: "",
-    SYSTEM_SMTP_SSL: true,
-    SYSTEM_SMTP_TIMEOUT_SECONDS: 15,
-  });
+  const [systemEmailConfig, setSystemEmailConfig] = useState<SystemEmailConfig>(
+    {
+      SYSTEM_EMAIL_ENABLED: false,
+      SYSTEM_EMAIL_FROM_ADDRESS: "",
+      SYSTEM_EMAIL_FROM_NAME: "Clawith",
+      SYSTEM_SMTP_HOST: "",
+      SYSTEM_SMTP_PORT: 465,
+      SYSTEM_SMTP_USERNAME: "",
+      SYSTEM_SMTP_PASSWORD: "",
+      SYSTEM_SMTP_SSL: true,
+      SYSTEM_SMTP_TIMEOUT_SECONDS: 15,
+    },
+  );
   const [emailConfigSaving, setEmailConfigSaving] = useState(false);
   const [emailConfigSaved, setEmailConfigSaved] = useState(false);
 
@@ -177,7 +266,7 @@ function PlatformTab() {
 
   // Email templates
   const [emailTemplates, setEmailTemplates] = useState<
-    Record<string, { subject: string; body: string }>
+    Record<string, EmailTemplate>
   >({
     email_verification: { subject: "", body: "" },
     password_reset: { subject: "", body: "" },
@@ -187,13 +276,17 @@ function PlatformTab() {
     Record<string, string[]>
   >({});
   const [emailTemplateDefaults, setEmailTemplateDefaults] = useState<
-    Record<string, { subject: string; body: string }>
+    Record<string, EmailTemplate>
   >({});
   const [templatesSaving, setTemplatesSaving] = useState(false);
   const [templatesSaved, setTemplatesSaved] = useState(false);
   const [expandedTemplate, setExpandedTemplate] = useState<string | null>(null);
-  const [oauthProviders, setOauthProviders] = useState<Record<string, any>>({});
-  const [oauthSaving, setOauthSaving] = useState<Record<string, boolean>>({});
+  const [oauthProviders, setOauthProviders] = useState<
+    Partial<Record<SocialProviderType, OAuthProvider>>
+  >({});
+  const [oauthSaving, setOauthSaving] = useState<
+    Partial<Record<SocialProviderType, boolean>>
+  >({});
 
   // Toast
   const [toast, setToast] = useState<{
@@ -212,14 +305,9 @@ function PlatformTab() {
       .then(setSettings)
       .catch(() => {});
     // Load notification bar
-    const token = localStorage.getItem("token");
-    fetch("/api/enterprise/system-settings/notification_bar", {
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-      .then((r) => r.json())
+    fetchJson<SystemSettingResponse<NotificationBarValue>>(
+      "/enterprise/system-settings/notification_bar",
+    )
       .then((d) => {
         if (d?.value) {
           setNbEnabled(!!d.value.enabled);
@@ -229,7 +317,9 @@ function PlatformTab() {
       .catch(() => {});
 
     // Load System Email
-    fetchJson<any>("/enterprise/system-settings/system_email_platform")
+    fetchJson<SystemSettingResponse<SystemEmailConfig>>(
+      "/enterprise/system-settings/system_email_platform",
+    )
       .then((d) => {
         if (d?.value) {
           setSystemEmailConfig({
@@ -258,7 +348,7 @@ function PlatformTab() {
       .catch(() => {});
 
     // Load email templates
-    fetchJson<any>("/enterprise/email-templates")
+    fetchJson<EmailTemplatesResponse>("/enterprise/email-templates")
       .then((d) => {
         if (d.templates) setEmailTemplates(d.templates);
         if (d.variables) setEmailTemplateVars(d.variables);
@@ -266,64 +356,58 @@ function PlatformTab() {
       })
       .catch(() => {});
 
-    fetchJson<any[]>("/enterprise/identity-providers?global_only=true")
+    fetchJson<IdentityProviderResponse[]>(
+      "/enterprise/identity-providers?global_only=true",
+    )
       .then((items) => {
-        const mapped = items.reduce(
-          (acc, item) => {
-            if (
-              item.provider_type === "google" ||
-              item.provider_type === "github"
-            ) {
-              acc[item.provider_type] = {
-                id: item.id,
-                provider_type: item.provider_type,
-                name:
-                  item.name ||
-                  socialProviderMeta[item.provider_type as "google" | "github"]
-                    .name,
-                is_active: !!item.is_active,
-                config: item.config || {},
-                client_id: item.config?.client_id || item.config?.app_id || "",
-                client_secret:
-                  item.config?.client_secret || item.config?.app_secret || "",
-                scope:
-                  item.config?.scope ||
-                  socialProviderMeta[item.provider_type as "google" | "github"]
-                    .scope,
-              };
-            }
-            return acc;
-          },
-          {} as Record<string, any>,
-        );
+        const mapped: Partial<Record<SocialProviderType, OAuthProvider>> = {};
+        items.forEach((item) => {
+          if (!isSocialProviderType(item.provider_type)) return;
+          mapped[item.provider_type] = {
+            id: item.id,
+            provider_type: item.provider_type,
+            name: item.name || SOCIAL_PROVIDER_META[item.provider_type].name,
+            is_active: !!item.is_active,
+            config: item.config || {},
+            client_id: item.config?.client_id || item.config?.app_id || "",
+            client_secret:
+              item.config?.client_secret || item.config?.app_secret || "",
+            scope:
+              item.config?.scope ||
+              SOCIAL_PROVIDER_META[item.provider_type].scope,
+          };
+        });
 
         setOauthProviders({
           google: mapped.google || {
             provider_type: "google",
-            name: socialProviderMeta.google.name,
+            name: SOCIAL_PROVIDER_META.google.name,
             is_active: false,
             client_id: "",
             client_secret: "",
-            scope: socialProviderMeta.google.scope,
+            scope: SOCIAL_PROVIDER_META.google.scope,
           },
           github: mapped.github || {
             provider_type: "github",
-            name: socialProviderMeta.github.name,
+            name: SOCIAL_PROVIDER_META.github.name,
             is_active: false,
             client_id: "",
             client_secret: "",
-            scope: socialProviderMeta.github.scope,
+            scope: SOCIAL_PROVIDER_META.github.scope,
           },
         });
       })
       .catch(() => {});
   }, []);
 
-  const handleToggleSetting = async (key: string, value: boolean) => {
+  const handleToggleSetting = async (
+    key: keyof PlatformSettings,
+    value: boolean,
+  ) => {
     setSettingsLoading(true);
     try {
       await adminApi.updatePlatformSettings({ [key]: value });
-      setSettings((s: any) => ({ ...s, [key]: value }));
+      setSettings((current) => ({ ...current, [key]: value }));
       showToast("Setting updated");
     } catch (error) {
       showToast(caughtErrorMessage(error) || "Failed", "error");
@@ -337,15 +421,14 @@ function PlatformTab() {
   ) => {
     setNbSaving(true);
     try {
-      const payload = await fetchJson<any>(
-        "/enterprise/system-settings/notification_bar",
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            value: { enabled: nextEnabled, text: nextText },
-          }),
-        },
-      );
+      const payload = await fetchJson<
+        SystemSettingResponse<NotificationBarValue>
+      >("/enterprise/system-settings/notification_bar", {
+        method: "PUT",
+        body: JSON.stringify({
+          value: { enabled: nextEnabled, text: nextText },
+        }),
+      });
       setNbEnabled(nextEnabled);
       setNbText(nextText);
       window.dispatchEvent(
@@ -452,24 +535,8 @@ function PlatformTab() {
     }
   };
 
-  const insertVariable = (
-    scenarioKey: string,
-    field: "subject" | "body",
-    varName: string,
-  ) => {
-    const placeholder = `{{${varName}}}`;
-    // Append placeholder to end of the field
-    setEmailTemplates((prev) => ({
-      ...prev,
-      [scenarioKey]: {
-        ...prev[scenarioKey],
-        [field]: (prev[scenarioKey]?.[field] || "") + placeholder,
-      },
-    }));
-  };
-
   const setOauthField = (
-    providerType: "google" | "github",
+    providerType: SocialProviderType,
     key: string,
     value: string | boolean,
   ) => {
@@ -482,11 +549,11 @@ function PlatformTab() {
     }));
   };
 
-  const saveOauthProvider = async (providerType: "google" | "github") => {
+  const saveOauthProvider = async (providerType: SocialProviderType) => {
     const provider = oauthProviders[providerType];
     if (!provider?.client_id?.trim() || !provider?.client_secret?.trim()) {
       showToast(
-        `${socialProviderMeta[providerType].name} Client ID and Client Secret are required`,
+        `${SOCIAL_PROVIDER_META[providerType].name} Client ID and Client Secret are required`,
         "error",
       );
       return;
@@ -495,20 +562,21 @@ function PlatformTab() {
     setOauthSaving((prev) => ({ ...prev, [providerType]: true }));
     const payload = {
       provider_type: providerType,
-      name: socialProviderMeta[providerType].name,
+      name: SOCIAL_PROVIDER_META[providerType].name,
       is_active: !!provider.is_active,
       config: {
         app_id: provider.client_id.trim(),
         client_id: provider.client_id.trim(),
         app_secret: provider.client_secret.trim(),
         client_secret: provider.client_secret.trim(),
-        scope: provider.scope?.trim() || socialProviderMeta[providerType].scope,
+        scope:
+          provider.scope?.trim() || SOCIAL_PROVIDER_META[providerType].scope,
       },
     };
 
     try {
       const result = provider.id
-        ? await fetchJson<any>(
+        ? await fetchJson<IdentityProviderResponse>(
             `/enterprise/identity-providers/${provider.id}`,
             {
               method: "PUT",
@@ -519,10 +587,13 @@ function PlatformTab() {
               }),
             },
           )
-        : await fetchJson<any>("/enterprise/identity-providers", {
-            method: "POST",
-            body: JSON.stringify(payload),
-          });
+        : await fetchJson<IdentityProviderResponse>(
+            "/enterprise/identity-providers",
+            {
+              method: "POST",
+              body: JSON.stringify(payload),
+            },
+          );
 
       setOauthProviders((prev) => ({
         ...prev,
@@ -532,11 +603,11 @@ function PlatformTab() {
           is_active: !!result.is_active,
         },
       }));
-      showToast(`${socialProviderMeta[providerType].name} OAuth saved`);
+      showToast(`${SOCIAL_PROVIDER_META[providerType].name} OAuth saved`);
     } catch (error) {
       showToast(
         caughtErrorMessage(error) ||
-          `Failed to save ${socialProviderMeta[providerType].name} OAuth`,
+          `Failed to save ${SOCIAL_PROVIDER_META[providerType].name} OAuth`,
         "error",
       );
     } finally {
@@ -598,30 +669,36 @@ function PlatformTab() {
       {/* Allow self-create company and SSO redirect toggle */}
       <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          {[
-            {
-              key: "allow_self_create_company",
-              label: t(
-                "admin.allowSelfCreate",
-                "Allow users to create their own companies",
-              ),
-              desc: t(
-                "admin.allowSelfCreateDesc",
-                "When disabled, only platform admins can create companies.",
-              ),
-            },
-            {
-              key: "sso_custom_domain_redirect_enabled",
-              label: t(
-                "admin.ssoCustomDomainRedirect",
-                "Enable tenant SSO custom domain redirect",
-              ),
-              desc: t(
-                "admin.ssoCustomDomainRedirectDesc",
-                "When disabled, all tenants will be blocked from using custom domains or dedicated links to redirect to SSO providers.",
-              ),
-            },
-          ].map((s) => (
+          {(
+            [
+              {
+                key: "allow_self_create_company",
+                label: t(
+                  "admin.allowSelfCreate",
+                  "Allow users to create their own companies",
+                ),
+                desc: t(
+                  "admin.allowSelfCreateDesc",
+                  "When disabled, only platform admins can create companies.",
+                ),
+              },
+              {
+                key: "sso_custom_domain_redirect_enabled",
+                label: t(
+                  "admin.ssoCustomDomainRedirect",
+                  "Enable tenant SSO custom domain redirect",
+                ),
+                desc: t(
+                  "admin.ssoCustomDomainRedirectDesc",
+                  "When disabled, all tenants will be blocked from using custom domains or dedicated links to redirect to SSO providers.",
+                ),
+              },
+            ] satisfies {
+              key: keyof PlatformSettings;
+              label: string;
+              desc: string;
+            }[]
+          ).map((s) => (
             <div
               key={s.key}
               style={{
@@ -692,7 +769,7 @@ function PlatformTab() {
         >
           {(["google", "github"] as const).map((providerType) => {
             const provider = oauthProviders[providerType];
-            const meta = socialProviderMeta[providerType];
+            const meta = SOCIAL_PROVIDER_META[providerType];
             const callbackUrl = `${window.location.origin}/oauth/callback/${providerType}`;
             return (
               <div
@@ -1637,7 +1714,7 @@ function PlatformTab() {
 function CompaniesTab() {
   const { t } = useTranslation();
   const dialog = useDialog();
-  const [companies, setCompanies] = useState<any[]>([]);
+  const [companies, setCompanies] = useState<CompanyStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -1656,7 +1733,8 @@ function CompaniesTab() {
     const handleClick = (e: MouseEvent) => {
       if (
         statusDropdownRef.current &&
-        !statusDropdownRef.current.contains(e.target as Node)
+        e.target instanceof Node &&
+        !statusDropdownRef.current.contains(e.target)
       ) {
         setShowStatusDropdown(false);
       }
@@ -1697,7 +1775,21 @@ function CompaniesTab() {
   };
 
   useEffect(() => {
-    loadCompanies();
+    let active = true;
+    adminApi
+      .listCompanies()
+      .then((data) => {
+        if (active) setCompanies(data);
+      })
+      .catch((loadError: unknown) => {
+        if (active) setError(caughtErrorMessage(loadError) ?? "");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Sorting logic
@@ -1717,16 +1809,8 @@ function CompaniesTab() {
     else if (statusFilter === "disabled")
       list = list.filter((c) => !c.is_active);
     list.sort((a, b) => {
-      let av = a[sortKey],
-        bv = b[sortKey];
-      if (sortKey === "name" || sortKey === "org_admin_email") {
-        av = (av || "").toLowerCase();
-        bv = (bv || "").toLowerCase();
-      }
-      if (sortKey === "created_at") {
-        av = av ? new Date(av).getTime() : 0;
-        bv = bv ? new Date(bv).getTime() : 0;
-      }
+      const av = companySortValue(a, sortKey);
+      const bv = companySortValue(b, sortKey);
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
@@ -2235,7 +2319,7 @@ function CompaniesTab() {
           )}
 
           {!loading &&
-            paged.map((c: any) => (
+            paged.map((c) => (
               <div
                 key={c.id}
                 style={{
@@ -2438,208 +2522,6 @@ function CompaniesTab() {
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Edit Company Modal ───────────────────────────────
-function EditCompanyModal({
-  company,
-  onClose,
-  onUpdated,
-}: {
-  company: any;
-  onClose: () => void;
-  onUpdated: () => void;
-}) {
-  const { t } = useTranslation();
-  const [ssoEnabled, setSsoEnabled] = useState(!!company.sso_enabled);
-  const [ssoDomain, setSsoDomain] = useState(company.sso_domain || "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError("");
-    try {
-      await adminApi.updateCompany(company.id, {
-        sso_enabled: ssoEnabled,
-        sso_domain: ssoDomain.trim() || null,
-      });
-      onUpdated();
-      onClose();
-    } catch (error) {
-      setError(caughtErrorMessage(error) || "Failed to update");
-    }
-    setSaving(false);
-  };
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        zIndex: 10001,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backdropFilter: "blur(4px)",
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="card"
-        style={{
-          padding: "24px",
-          maxWidth: "440px",
-          width: "90%",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "12px",
-          }}
-        >
-          <h2 style={{ fontSize: "16px", fontWeight: 600 }}>
-            {t("admin.editCompany", "Edit Company")}: {company.name}
-          </h2>
-          <button
-            onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              color: "var(--text-tertiary)",
-            }}
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-
-        <h3
-          style={{
-            fontSize: "13px",
-            fontWeight: 600,
-            marginBottom: "8px",
-            color: "var(--text-secondary)",
-          }}
-        >
-          {t("admin.ssoConfigTitle", "SSO & Domain Configuration")}
-        </h3>
-        <p
-          style={{
-            fontSize: "11px",
-            color: "var(--text-tertiary)",
-            marginBottom: "16px",
-            lineHeight: "1.4",
-          }}
-        >
-          {t(
-            "admin.ssoConfigDesc",
-            "Configure SSO and custom domain for this company.",
-          )}
-        </p>
-
-        <div
-          style={{
-            marginBottom: "16px",
-            background: "var(--bg-secondary)",
-            padding: "12px",
-            borderRadius: "8px",
-            border: "1px solid var(--border-subtle)",
-          }}
-        >
-          <div style={{ marginBottom: "12px" }}>
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                cursor: "pointer",
-                fontSize: "13px",
-                fontWeight: 500,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={ssoEnabled}
-                onChange={(e) => setSsoEnabled(e.target.checked)}
-                style={{ width: "16px", height: "16px", cursor: "pointer" }}
-              />
-              {t("admin.ssoEnabled", "Enable SSO")}
-            </label>
-          </div>
-
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "4px" }}
-            >
-              {t("admin.ssoDomain", "Custom Access Domain")}
-            </label>
-            <input
-              className="form-input"
-              value={ssoDomain}
-              onChange={(e) => setSsoDomain(e.target.value)}
-              placeholder={t(
-                "admin.ssoDomainPlaceholder",
-                "e.g. acme.clawith.com",
-              )}
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-        </div>
-
-        {error && (
-          <div
-            style={{
-              color: "var(--error)",
-              fontSize: "12px",
-              marginBottom: "16px",
-              textAlign: "center",
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: "8px" }}>
-          <button
-            className="btn btn-secondary"
-            style={{ flex: 1 }}
-            onClick={onClose}
-            disabled={saving}
-          >
-            {t("common.cancel", "Cancel")}
-          </button>
-          <button
-            className="btn btn-primary"
-            style={{ flex: 1 }}
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saving ? t("common.loading") : t("common.save", "Save")}
-          </button>
-        </div>
       </div>
     </div>
   );

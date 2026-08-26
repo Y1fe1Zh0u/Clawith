@@ -38,6 +38,149 @@ import {
   IconTools,
   IconUser,
 } from "@tabler/icons-react";
+import type { JsonValue, Tenant } from "../services/apiContracts";
+
+type TabKey =
+  | "llm"
+  | "org"
+  | "info"
+  | "approvals"
+  | "audit"
+  | "tools"
+  | "skills"
+  | "quotas"
+  | "users"
+  | "invites"
+  | "okr";
+
+const VALID_TABS: TabKey[] = [
+  "info",
+  "llm",
+  "tools",
+  "skills",
+  "okr",
+  "invites",
+  "quotas",
+  "users",
+  "org",
+  "approvals",
+  "audit",
+];
+
+type ToolConfig = Record<string, JsonValue>;
+
+interface ToolConfigOption {
+  value: string;
+  label: string;
+}
+
+interface ToolConfigField {
+  key: string;
+  label: string;
+  type: "checkbox" | "select" | "number" | "textarea" | "password" | "text";
+  default?: JsonValue;
+  placeholder?: string;
+  options?: ToolConfigOption[];
+  min?: number;
+  max?: number;
+  advanced?: boolean;
+  depends_on?: Record<string, JsonValue[]>;
+}
+
+interface EnterpriseTool {
+  id: string;
+  name: string;
+  display_name?: string;
+  description?: string;
+  category?: string;
+  type?: string;
+  enabled: boolean;
+  is_default: boolean;
+  config?: ToolConfig | null;
+  config_schema?: { fields?: ToolConfigField[] };
+  inputSchema?: JsonValue;
+  mcp_server_name?: string;
+  mcp_server_url?: string;
+  agent_tool_id?: string;
+  configured?: boolean;
+  installed_at?: string;
+  installed_by_agent_name?: string;
+  tool_display_name?: string;
+}
+
+interface McpTestResult {
+  ok: boolean;
+  error?: string;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    inputSchema?: JsonValue;
+  }>;
+}
+
+interface Approval {
+  id: string;
+  action_type: string;
+  agent_name?: string;
+  agent_id: string;
+  created_at: string;
+  status: "pending" | "approved" | "rejected";
+}
+
+interface AuditLog {
+  id: string;
+  action: string;
+  created_at: string;
+  actor_name?: string;
+  actor_type?: string;
+  resource_type?: string;
+  resource_id?: string;
+  agent_id?: string;
+  details?: Record<string, JsonValue> | null;
+}
+
+interface EnterpriseStats {
+  total_users: number;
+  running_agents: number;
+  total_agents: number;
+  pending_approvals: number;
+}
+
+interface TenantQuotas {
+  default_message_limit: number;
+  default_message_period: string;
+  default_max_agents: number;
+  default_agent_ttl_hours: number;
+  default_max_llm_calls_per_day: number;
+  min_heartbeat_interval_minutes: number;
+  default_max_triggers: number;
+  min_poll_interval_floor: number;
+  max_webhook_rate_ceiling: number;
+}
+
+interface CompanyIntroSetting {
+  value?: { content?: string };
+}
+
+interface TenantDeleteResponse {
+  fallback_tenant_id: string;
+}
+
+function getTabFromHash(): TabKey {
+  const hash = window.location.hash.replace("#", "");
+  return VALID_TABS.find((tab) => tab === hash) ?? "info";
+}
+
+function formControlValue(
+  value: JsonValue | undefined,
+): string | number | readonly string[] {
+  if (value == null) return "";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string" || typeof value === "number") return value;
+  if (Array.isArray(value) && value.every((item) => typeof item === "string"))
+    return value;
+  return JSON.stringify(value);
+}
 // ─── Theme Color Picker ────────────────────────────
 function ThemeColorPicker() {
   const { t } = useTranslation();
@@ -147,35 +290,6 @@ export default function EnterpriseSettings() {
   const dialog = useDialog();
   const toast = useToast();
   const qc = useQueryClient();
-  type TabKey =
-    | "llm"
-    | "org"
-    | "info"
-    | "approvals"
-    | "audit"
-    | "tools"
-    | "skills"
-    | "quotas"
-    | "users"
-    | "invites"
-    | "okr";
-  const VALID_TABS: TabKey[] = [
-    "info",
-    "llm",
-    "tools",
-    "skills",
-    "okr",
-    "invites",
-    "quotas",
-    "users",
-    "org",
-    "approvals",
-    "audit",
-  ];
-  const getTabFromHash = (): TabKey => {
-    const hash = window.location.hash.replace("#", "") as TabKey;
-    return VALID_TABS.includes(hash) ? hash : "info";
-  };
   const [activeTab, setActiveTab] = useState<TabKey>(getTabFromHash);
   // Sync hash ↔ activeTab: hashchange navigation (back/forward) updates state
   useEffect(() => {
@@ -199,7 +313,7 @@ export default function EnterpriseSettings() {
   }, []);
 
   // Tenant quota defaults
-  const [quotaForm, setQuotaForm] = useState({
+  const [quotaForm, setQuotaForm] = useState<TenantQuotas>({
     default_message_limit: 50,
     default_message_period: "permanent",
     default_max_agents: 2,
@@ -214,7 +328,7 @@ export default function EnterpriseSettings() {
   const [quotaSaved, setQuotaSaved] = useState(false);
   useEffect(() => {
     if (activeTab === "quotas") {
-      fetchJson<any>("/enterprise/tenant-quotas")
+      fetchJson<Partial<TenantQuotas>>("/enterprise/tenant-quotas")
         .then((d) => {
           if (d && Object.keys(d).length) setQuotaForm((f) => ({ ...f, ...d }));
         })
@@ -237,7 +351,10 @@ export default function EnterpriseSettings() {
     }
     setQuotaSaving(false);
   };
-  const [companyIntro, setCompanyIntro] = useState("");
+  const [companyIntroDraft, setCompanyIntroDraft] = useState({
+    tenantId: "",
+    content: "",
+  });
   const [companyIntroSaving, setCompanyIntroSaving] = useState(false);
   const [companyIntroSaved, setCompanyIntroSaved] = useState(false);
 
@@ -245,20 +362,29 @@ export default function EnterpriseSettings() {
   const companyIntroKey = selectedTenantId
     ? `company_intro_${selectedTenantId}`
     : "company_intro";
+  const companyIntro =
+    companyIntroDraft.tenantId === selectedTenantId
+      ? companyIntroDraft.content
+      : "";
 
   // Load Company Intro (tenant-scoped only, no fallback to global)
   useEffect(() => {
-    setCompanyIntro("");
     if (!selectedTenantId) return;
+    let active = true;
     const tenantKey = `company_intro_${selectedTenantId}`;
-    fetchJson<any>(`/enterprise/system-settings/${tenantKey}`)
+    fetchJson<CompanyIntroSetting>(`/enterprise/system-settings/${tenantKey}`)
       .then((d) => {
-        if (d?.value?.content) {
-          setCompanyIntro(d.value.content);
-        }
+        if (!active) return;
+        setCompanyIntroDraft({
+          tenantId: selectedTenantId,
+          content: d.value?.content ?? "",
+        });
         // No fallback — each company starts empty with placeholder watermark
       })
       .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [selectedTenantId]);
 
   const saveCompanyIntro = async () => {
@@ -279,12 +405,7 @@ export default function EnterpriseSettings() {
     "all" | "background" | "actions"
   >("all");
   const [infoRefresh, setInfoRefresh] = useState(0);
-  const [kbToast, setKbToast] = useState<{
-    message: string;
-    type: "success" | "error";
-  } | null>(null);
-
-  const [allTools, setAllTools] = useState<any[]>([]);
+  const [allTools, setAllTools] = useState<EnterpriseTool[]>([]);
   const [showAddMCP, setShowAddMCP] = useState(false);
   const [mcpForm, setMcpForm] = useState({
     server_url: "",
@@ -292,7 +413,9 @@ export default function EnterpriseSettings() {
     api_key: "",
   });
   const [mcpRawInput, setMcpRawInput] = useState("");
-  const [mcpTestResult, setMcpTestResult] = useState<any>(null);
+  const [mcpTestResult, setMcpTestResult] = useState<McpTestResult | null>(
+    null,
+  );
   const [mcpTesting, setMcpTesting] = useState(false);
   // Edit Server modal state — null when closed, otherwise the server to edit
   const [editingMcpServer, setEditingMcpServer] = useState<{
@@ -302,7 +425,7 @@ export default function EnterpriseSettings() {
   } | null>(null);
   const [mcpServerSaving, setMcpServerSaving] = useState(false);
   const [editingToolId, setEditingToolId] = useState<string | null>(null);
-  const [editingConfig, setEditingConfig] = useState<Record<string, any>>({});
+  const [editingConfig, setEditingConfig] = useState<ToolConfig>({});
   const [showAdvancedToolConfig, setShowAdvancedToolConfig] = useState(false);
 
   const [configCategory, setConfigCategory] = useState<string | null>(null);
@@ -310,7 +433,7 @@ export default function EnterpriseSettings() {
   // Category-level config schemas: tools sharing the same key have config on category header
   const GLOBAL_CATEGORY_CONFIG_SCHEMAS: Record<
     string,
-    { title: string; fields: any[] }
+    { title: string; fields: ToolConfigField[] }
   > = {
     agentbay: {
       title: "AgentBay Settings",
@@ -339,8 +462,8 @@ export default function EnterpriseSettings() {
   };
 
   const applyConfigDefaults = (
-    fields: any[] = [],
-    config: Record<string, any> = {},
+    fields: ToolConfigField[] = [],
+    config: ToolConfig = {},
   ) => {
     const next = { ...config };
     for (const field of fields) {
@@ -412,16 +535,19 @@ export default function EnterpriseSettings() {
         return <IconTools size={size} stroke={1.8} style={style} />;
     }
   };
-  const mcpToolGroupKey = (tool: any) => {
+  const mcpToolGroupKey = (tool: EnterpriseTool) => {
     const serverName = String(tool.mcp_server_name || "").trim();
     return tool.type === "mcp" && serverName
       ? `mcp:${serverName.toLowerCase()}`
       : tool.category || "general";
   };
-  const getToolGroupMeta = (groupKey: string, toolsInGroup: any[]) => {
+  const getToolGroupMeta = (
+    groupKey: string,
+    toolsInGroup: EnterpriseTool[],
+  ) => {
     const first =
       toolsInGroup.find(
-        (tool: any) => tool.type === "mcp" && tool.mcp_server_name,
+        (tool) => tool.type === "mcp" && tool.mcp_server_name,
       ) || toolsInGroup[0];
     if (groupKey.startsWith("mcp:") && first?.mcp_server_name) {
       return {
@@ -467,7 +593,9 @@ export default function EnterpriseSettings() {
   const [toolsView, setToolsView] = useState<"global" | "agent-installed">(
     "global",
   );
-  const [agentInstalledTools, setAgentInstalledTools] = useState<any[]>([]);
+  const [agentInstalledTools, setAgentInstalledTools] = useState<
+    EnterpriseTool[]
+  >([]);
   const [toolSearch, setToolSearch] = useState("");
   const [toolStatusFilter, setToolStatusFilter] = useState<
     "all" | "enabled" | "disabled" | "default" | "configured"
@@ -477,7 +605,7 @@ export default function EnterpriseSettings() {
   >(() => new Set());
   const [expandedAgentInstalledGroups, setExpandedAgentInstalledGroups] =
     useState<Set<string>>(() => new Set());
-  const hasMeaningfulConfigValue = (value: any): boolean => {
+  const hasMeaningfulConfigValue = (value: unknown): boolean => {
     if (value == null) return false;
     if (typeof value === "string") return value.trim().length > 0;
     if (typeof value === "number") return Number.isFinite(value);
@@ -487,15 +615,13 @@ export default function EnterpriseSettings() {
       return Object.values(value).some(hasMeaningfulConfigValue);
     return false;
   };
-  const hasMeaningfulConfig = (
-    config?: Record<string, any> | null,
-  ): boolean => {
+  const hasMeaningfulConfig = (config?: ToolConfig | null): boolean => {
     if (!config) return false;
     return Object.values(config).some(hasMeaningfulConfigValue);
   };
   const loadAllTools = async () => {
     const tid = selectedTenantId;
-    const data = await fetchJson<any[]>(
+    const data = await fetchJson<EnterpriseTool[]>(
       `/tools${tid ? `?tenant_id=${tid}` : ""}`,
     );
     setAllTools(data);
@@ -503,7 +629,7 @@ export default function EnterpriseSettings() {
   const loadAgentInstalledTools = async () => {
     try {
       const tid = selectedTenantId;
-      const data = await fetchJson<any[]>(
+      const data = await fetchJson<EnterpriseTool[]>(
         `/tools/agent-installed${tid ? `?tenant_id=${tid}` : ""}`,
       );
       setAgentInstalledTools(data);
@@ -516,64 +642,33 @@ export default function EnterpriseSettings() {
     }
   };
   useEffect(() => {
-    if (activeTab === "tools") {
-      loadAllTools();
-      loadAgentInstalledTools();
-    }
-  }, [activeTab, selectedTenantId]);
-
-  // ─── Jina API Key
-  const [jinaKey, setJinaKey] = useState("");
-  const [jinaKeySaved, setJinaKeySaved] = useState(false);
-  const [jinaKeySaving, setJinaKeySaving] = useState(false);
-  const [jinaKeyMasked, setJinaKeyMasked] = useState(""); // stored key from DB
-  useEffect(() => {
     if (activeTab !== "tools") return;
-    const token = localStorage.getItem("token");
-    fetch("/api/enterprise/system-settings/jina_api_key", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.value?.api_key)
-          setJinaKeyMasked(d.value.api_key.slice(0, 8) + "••••••••");
+    let active = true;
+    const tid = selectedTenantId;
+    fetchJson<EnterpriseTool[]>(`/tools${tid ? `?tenant_id=${tid}` : ""}`)
+      .then((tools) => {
+        if (active) setAllTools(tools);
       })
-      .catch(() => {});
-  }, [activeTab]);
-  const saveJinaKey = async () => {
-    setJinaKeySaving(true);
-    const token = localStorage.getItem("token");
-    await fetch("/api/enterprise/system-settings/jina_api_key", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ value: { api_key: jinaKey } }),
-    });
-    setJinaKeyMasked(jinaKey.slice(0, 8) + "••••••••");
-    setJinaKey("");
-    setJinaKeySaving(false);
-    setJinaKeySaved(true);
-    setTimeout(() => setJinaKeySaved(false), 2000);
-  };
-  const clearJinaKey = async () => {
-    const token = localStorage.getItem("token");
-    await fetch("/api/enterprise/system-settings/jina_api_key", {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ value: {} }),
-    });
-    setJinaKeyMasked("");
-    setJinaKey("");
-  };
+      .catch(() => {
+        if (active) setAllTools([]);
+      });
+    fetchJson<EnterpriseTool[]>(
+      `/tools/agent-installed${tid ? `?tenant_id=${tid}` : ""}`,
+    )
+      .then((tools) => {
+        if (active) setAgentInstalledTools(tools);
+      })
+      .catch(() => {
+        if (active) setAgentInstalledTools([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeTab, selectedTenantId]);
 
   const { data: currentTenant } = useQuery({
     queryKey: ["tenant", selectedTenantId],
-    queryFn: () => fetchJson<any>(`/tenants/${selectedTenantId}`),
+    queryFn: () => fetchJson<Tenant>(`/tenants/${selectedTenantId}`),
     enabled: !!selectedTenantId,
   });
 
@@ -581,7 +676,7 @@ export default function EnterpriseSettings() {
   const { data: stats } = useQuery({
     queryKey: ["enterprise-stats", selectedTenantId],
     queryFn: () =>
-      fetchJson<any>(
+      fetchJson<EnterpriseStats>(
         `/enterprise/stats${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
       ),
   });
@@ -590,7 +685,7 @@ export default function EnterpriseSettings() {
   const { data: approvals = [] } = useQuery({
     queryKey: ["approvals", selectedTenantId],
     queryFn: () =>
-      fetchJson<any[]>(
+      fetchJson<Approval[]>(
         `/enterprise/approvals${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
       ),
     enabled: activeTab === "approvals",
@@ -621,12 +716,12 @@ export default function EnterpriseSettings() {
   const { data: auditLogs = [] } = useQuery({
     queryKey: ["audit-logs", selectedTenantId],
     queryFn: () =>
-      fetchJson<any[]>(
+      fetchJson<AuditLog[]>(
         `/enterprise/audit-logs?limit=200${selectedTenantId ? `&tenant_id=${selectedTenantId}` : ""}`,
       ),
     enabled: activeTab === "audit",
   });
-  const filteredAuditLogs = auditLogs.filter((log: any) => {
+  const filteredAuditLogs = auditLogs.filter((log) => {
     if (auditFilter === "background") return BG_ACTIONS.includes(log.action);
     if (auditFilter === "actions") return !BG_ACTIONS.includes(log.action);
     return true;
@@ -708,7 +803,7 @@ export default function EnterpriseSettings() {
         {/* ── Approvals ── */}
         {activeTab === "approvals" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {approvals.map((a: any) => (
+            {approvals.map((a) => (
               <div
                 key={a.id}
                 className="card"
@@ -790,7 +885,7 @@ export default function EnterpriseSettings() {
               ).map(([key, label]) => (
                 <button
                   key={key}
-                  onClick={() => setAuditFilter(key as any)}
+                  onClick={() => setAuditFilter(key)}
                   style={{
                     padding: "4px 14px",
                     borderRadius: "12px",
@@ -827,7 +922,7 @@ export default function EnterpriseSettings() {
               </span>
             </div>
             {/* Log entries */}
-            {filteredAuditLogs.map((log: any) => {
+            {filteredAuditLogs.map((log) => {
               const isBg = BG_ACTIONS.includes(log.action);
               const details =
                 log.details &&
@@ -962,7 +1057,12 @@ export default function EnterpriseSettings() {
               <textarea
                 className="form-input"
                 value={companyIntro}
-                onChange={(e) => setCompanyIntro(e.target.value)}
+                onChange={(e) =>
+                  setCompanyIntroDraft({
+                    tenantId: selectedTenantId,
+                    content: e.target.value,
+                  })
+                }
                 placeholder={`# Company Name\nClawith\n\n# About\nOpenClaw\uD83E\uDD9E For Teams\nOpen Source \u00B7 Multi-OpenClaw Collaboration\n\nOpenClaw empowers individuals.\nClawith scales it to frontier organizations.`}
                 style={{
                   minHeight: "200px",
@@ -1106,7 +1206,7 @@ export default function EnterpriseSettings() {
                   );
                   if (!ok) return;
                   try {
-                    const res = await fetchJson<any>(
+                    const res = await fetchJson<TenantDeleteResponse>(
                       `/tenants/${selectedTenantId}`,
                       { method: "DELETE" },
                     );
@@ -1588,7 +1688,7 @@ export default function EnterpriseSettings() {
                   aria-selected={toolsView === key}
                   className={toolsView === key ? "active" : ""}
                   onClick={() => {
-                    setToolsView(key as any);
+                    setToolsView(key);
                     if (key === "agent-installed") loadAgentInstalledTools();
                   }}
                 >
@@ -1627,7 +1727,7 @@ export default function EnterpriseSettings() {
                 ) : (
                   (() => {
                     const grouped = agentInstalledTools.reduce(
-                      (acc: Record<string, any[]>, row: any) => {
+                      (acc: Record<string, EnterpriseTool[]>, row) => {
                         const groupKey = mcpToolGroupKey(row);
                         (acc[groupKey] = acc[groupKey] || []).push(row);
                         return acc;
@@ -1652,12 +1752,12 @@ export default function EnterpriseSettings() {
                       >
                         {Object.entries(grouped)
                           .sort(([a, aRows], [b, bRows]) => {
-                            const aMeta = getToolGroupMeta(a, aRows as any[]);
-                            const bMeta = getToolGroupMeta(b, bRows as any[]);
+                            const aMeta = getToolGroupMeta(a, aRows);
+                            const bMeta = getToolGroupMeta(b, bRows);
                             return aMeta.label.localeCompare(bMeta.label);
                           })
                           .map(([groupKey, rows]) => {
-                            const groupRows = rows as any[];
+                            const groupRows = rows;
                             const meta = getToolGroupMeta(groupKey, groupRows);
                             const expanded =
                               expandedAgentInstalledGroups.has(groupKey);
@@ -1762,7 +1862,7 @@ export default function EnterpriseSettings() {
                                   </div>
                                 </div>
                                 {expanded &&
-                                  groupRows.map((row: any, idx: number) => (
+                                  groupRows.map((row, idx) => (
                                     <div
                                       key={row.agent_tool_id}
                                       style={{
@@ -2126,7 +2226,7 @@ export default function EnterpriseSettings() {
                             setMcpTesting(true);
                             setMcpTestResult(null);
                             try {
-                              const r = await fetchJson<any>(
+                              const r = await fetchJson<McpTestResult>(
                                 "/tools/test-mcp",
                                 {
                                   method: "POST",
@@ -2189,109 +2289,99 @@ export default function EnterpriseSettings() {
                                   count: mcpTestResult.tools?.length || 0,
                                 })}
                               </div>
-                              {(mcpTestResult.tools || []).map(
-                                (tool: any, i: number) => (
-                                  <div
-                                    key={i}
-                                    style={{
-                                      display: "flex",
-                                      justifyContent: "space-between",
-                                      alignItems: "center",
-                                      padding: "6px 0",
-                                      borderBottom:
-                                        "1px solid var(--border-color)",
-                                    }}
-                                  >
-                                    <div>
-                                      <span
-                                        style={{
-                                          fontWeight: 500,
-                                          fontSize: "13px",
-                                        }}
-                                      >
-                                        {tool.name}
-                                      </span>
-                                      <div
-                                        style={{
-                                          fontSize: "11px",
-                                          color: "var(--text-tertiary)",
-                                        }}
-                                      >
-                                        {tool.description?.slice(0, 80)}
-                                      </div>
-                                    </div>
-                                    <button
-                                      className="btn btn-secondary"
+                              {(mcpTestResult.tools || []).map((tool, i) => (
+                                <div
+                                  key={i}
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    padding: "6px 0",
+                                    borderBottom:
+                                      "1px solid var(--border-color)",
+                                  }}
+                                >
+                                  <div>
+                                    <span
                                       style={{
-                                        padding: "4px 10px",
-                                        fontSize: "11px",
+                                        fontWeight: 500,
+                                        fontSize: "13px",
                                       }}
-                                      onClick={async () => {
-                                        try {
-                                          const serverName =
-                                            mcpForm.server_name ||
-                                            mcpForm.server_url;
-                                          await fetchJson("/tools", {
-                                            method: "POST",
+                                    >
+                                      {tool.name}
+                                    </span>
+                                    <div
+                                      style={{
+                                        fontSize: "11px",
+                                        color: "var(--text-tertiary)",
+                                      }}
+                                    >
+                                      {tool.description?.slice(0, 80)}
+                                    </div>
+                                  </div>
+                                  <button
+                                    className="btn btn-secondary"
+                                    style={{
+                                      padding: "4px 10px",
+                                      fontSize: "11px",
+                                    }}
+                                    onClick={async () => {
+                                      try {
+                                        const serverName =
+                                          mcpForm.server_name ||
+                                          mcpForm.server_url;
+                                        await fetchJson("/tools", {
+                                          method: "POST",
+                                          body: JSON.stringify({
+                                            name: `mcp_${tool.name}`,
+                                            display_name: tool.name,
+                                            description: tool.description || "",
+                                            type: "mcp",
+                                            category: "custom",
+                                            icon: "·",
+                                            mcp_server_url: mcpForm.server_url,
+                                            mcp_server_name: serverName,
+                                            mcp_tool_name: tool.name,
+                                            parameters_schema:
+                                              tool.inputSchema || {},
+                                            is_default: false,
+                                            tenant_id:
+                                              selectedTenantId || undefined,
+                                          }),
+                                        });
+                                        // Store API key on all tools from this server after creation
+                                        if (mcpForm.api_key) {
+                                          await fetchJson("/tools/mcp-server", {
+                                            method: "PUT",
                                             body: JSON.stringify({
-                                              name: `mcp_${tool.name}`,
-                                              display_name: tool.name,
-                                              description:
-                                                tool.description || "",
-                                              type: "mcp",
-                                              category: "custom",
-                                              icon: "·",
-                                              mcp_server_url:
-                                                mcpForm.server_url,
-                                              mcp_server_name: serverName,
-                                              mcp_tool_name: tool.name,
-                                              parameters_schema:
-                                                tool.inputSchema || {},
-                                              is_default: false,
+                                              server_name: serverName,
+                                              server_url: mcpForm.server_url,
+                                              api_key: mcpForm.api_key,
                                               tenant_id:
                                                 selectedTenantId || undefined,
                                             }),
-                                          });
-                                          // Store API key on all tools from this server after creation
-                                          if (mcpForm.api_key) {
-                                            await fetchJson(
-                                              "/tools/mcp-server",
-                                              {
-                                                method: "PUT",
-                                                body: JSON.stringify({
-                                                  server_name: serverName,
-                                                  server_url:
-                                                    mcpForm.server_url,
-                                                  api_key: mcpForm.api_key,
-                                                  tenant_id:
-                                                    selectedTenantId ||
-                                                    undefined,
-                                                }),
-                                              },
-                                            ).catch(() => {});
-                                          }
-                                          await loadAllTools();
-                                        } catch (error) {
-                                          await dialog.alert(
-                                            t(
-                                              "enterprise.tools.importFailed",
-                                            ) || "导入失败",
-                                            {
-                                              type: "error",
-                                              details: String(
-                                                caughtErrorMessage(error) ||
-                                                  error,
-                                              ),
-                                            },
-                                          );
+                                          }).catch(() => {});
                                         }
-                                      }}
-                                    >
-                                      {t("enterprise.tools.import") || "Import"}
-                                    </button>
-                                  </div>
-                                ),
-                              )}
+                                        await loadAllTools();
+                                      } catch (error) {
+                                        await dialog.alert(
+                                          t("enterprise.tools.importFailed") ||
+                                            "导入失败",
+                                          {
+                                            type: "error",
+                                            details: String(
+                                              caughtErrorMessage(error) ||
+                                                error,
+                                            ),
+                                          },
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    {t("enterprise.tools.import") || "Import"}
+                                  </button>
+                                </div>
+                              ))}
                               <div
                                 style={{
                                   marginTop: "10px",
@@ -2399,7 +2489,7 @@ export default function EnterpriseSettings() {
                 {/* ─── Category-grouped tool list ─── */}
                 {(() => {
                   const normalizedSearch = toolSearch.trim().toLowerCase();
-                  const matchesSearch = (tool: any) => {
+                  const matchesSearch = (tool: EnterpriseTool) => {
                     if (!normalizedSearch) return true;
                     const category = tool.category || "general";
                     const haystack = [
@@ -2415,7 +2505,7 @@ export default function EnterpriseSettings() {
                       .toLowerCase();
                     return haystack.includes(normalizedSearch);
                   };
-                  const matchesStatus = (tool: any) => {
+                  const matchesStatus = (tool: EnterpriseTool) => {
                     if (toolStatusFilter === "enabled") return !!tool.enabled;
                     if (toolStatusFilter === "disabled") return !tool.enabled;
                     if (toolStatusFilter === "default")
@@ -2427,14 +2517,14 @@ export default function EnterpriseSettings() {
                   const filteredTools = allTools.filter(
                     (tool) => matchesSearch(tool) && matchesStatus(tool),
                   );
-                  const groupTools = (toolList: any[]) =>
-                    toolList.reduce(
-                      (acc: Record<string, any[]>, tool: any) => {
+                  const groupTools = (toolList: EnterpriseTool[]) =>
+                    toolList.reduce<Record<string, EnterpriseTool[]>>(
+                      (acc, tool) => {
                         const cat = mcpToolGroupKey(tool);
                         (acc[cat] = acc[cat] || []).push(tool);
                         return acc;
                       },
-                      {} as Record<string, any[]>,
+                      {},
                     );
                   const grouped = groupTools(filteredTools);
                   const allGrouped = groupTools(allTools);
@@ -2450,7 +2540,10 @@ export default function EnterpriseSettings() {
                     });
                   };
 
-                  const bulkToggle = async (tools: any[], enabled: boolean) => {
+                  const bulkToggle = async (
+                    tools: EnterpriseTool[],
+                    enabled: boolean,
+                  ) => {
                     try {
                       const payload = tools.map((t) => ({
                         tool_id: t.id,
@@ -2469,7 +2562,7 @@ export default function EnterpriseSettings() {
                   };
 
                   const renderToolRow = (
-                    tool: any,
+                    tool: EnterpriseTool,
                     category: string,
                     idx: number,
                     total: number,
@@ -2477,7 +2570,7 @@ export default function EnterpriseSettings() {
                     const hasCategoryConfig =
                       !!GLOBAL_CATEGORY_CONFIG_SCHEMAS[category];
                     const hasOwnConfig =
-                      tool.config_schema?.fields?.length > 0 &&
+                      (tool.config_schema?.fields?.length ?? 0) > 0 &&
                       !hasCategoryConfig;
                     const isConfigured = hasMeaningfulConfig(tool.config);
                     return (
@@ -2605,7 +2698,7 @@ export default function EnterpriseSettings() {
                               }}
                               onClick={() =>
                                 setEditingMcpServer({
-                                  server_name: tool.mcp_server_name,
+                                  server_name: tool.mcp_server_name ?? "",
                                   server_url: tool.mcp_server_url || "",
                                   api_key: "",
                                 })
@@ -2929,11 +3022,11 @@ export default function EnterpriseSettings() {
                         .sort(([a, aTools], [b, bTools]) => {
                           const aMeta = getToolGroupMeta(
                             a,
-                            allGrouped[a] || (aTools as any[]),
+                            allGrouped[a] || aTools,
                           );
                           const bMeta = getToolGroupMeta(
                             b,
-                            allGrouped[b] || (bTools as any[]),
+                            allGrouped[b] || bTools,
                           );
                           return aMeta.label.localeCompare(bMeta.label);
                         })
@@ -2948,13 +3041,13 @@ export default function EnterpriseSettings() {
                             ];
                           const label = meta.label;
                           const enabledCount = allCatTools.filter(
-                            (tool: any) => tool.enabled,
+                            (tool) => tool.enabled,
                           ).length;
                           const defaultCount = allCatTools.filter(
-                            (tool: any) => tool.is_default,
+                            (tool) => tool.is_default,
                           ).length;
-                          const configuredCount = allCatTools.filter(
-                            (tool: any) => hasMeaningfulConfig(tool.config),
+                          const configuredCount = allCatTools.filter((tool) =>
+                            hasMeaningfulConfig(tool.config),
                           ).length;
                           const allEnabled =
                             allCatTools.length > 0 &&
@@ -2965,7 +3058,7 @@ export default function EnterpriseSettings() {
                           const expanded =
                             expandedToolCategories.has(category) ||
                             !!toolSearch.trim();
-                          const visibleCount = (catTools as any[]).length;
+                          const visibleCount = catTools.length;
 
                           return (
                             <div
@@ -3108,14 +3201,13 @@ export default function EnterpriseSettings() {
                                       onClick={() => {
                                         setConfigCategory(meta.configCategory);
                                         setEditingConfig({});
-                                        const firstToolWithConfig = (
-                                          allCatTools as any[]
-                                        ).find(
-                                          (tl: any) =>
-                                            tl.category ===
-                                              meta.configCategory &&
-                                            hasMeaningfulConfig(tl.config),
-                                        );
+                                        const firstToolWithConfig =
+                                          allCatTools.find(
+                                            (tl) =>
+                                              tl.category ===
+                                                meta.configCategory &&
+                                              hasMeaningfulConfig(tl.config),
+                                          );
                                         if (firstToolWithConfig?.config)
                                           setEditingConfig({
                                             ...firstToolWithConfig.config,
@@ -3175,14 +3267,13 @@ export default function EnterpriseSettings() {
                               </div>
                               {expanded && (
                                 <div>
-                                  {(catTools as any[]).map(
-                                    (tool: any, idx: number) =>
-                                      renderToolRow(
-                                        tool,
-                                        category,
-                                        idx,
-                                        (catTools as any[]).length,
-                                      ),
+                                  {catTools.map((tool, idx) =>
+                                    renderToolRow(
+                                      tool,
+                                      category,
+                                      idx,
+                                      catTools.length,
+                                    ),
                                   )}
                                 </div>
                               )}
@@ -3445,23 +3536,25 @@ export default function EnterpriseSettings() {
                     const tool = allTools.find((t) => t.id === editingToolId);
                     if (!tool) return null;
                     const visibleFields = (
-                      tool.config_schema.fields || []
-                    ).filter((field: any) => {
+                      tool.config_schema?.fields || []
+                    ).filter((field) => {
                       if (field.depends_on) {
                         return Object.entries(field.depends_on).every(
-                          ([k, vals]: [string, any]) =>
-                            vals.includes(editingConfig[k]),
+                          ([key, values]) =>
+                            values.some(
+                              (value) => value === editingConfig[key],
+                            ),
                         );
                       }
                       return true;
                     });
                     const primaryFields = visibleFields.filter(
-                      (field: any) => !field.advanced,
+                      (field) => !field.advanced,
                     );
                     const advancedFields = visibleFields.filter(
-                      (field: any) => field.advanced,
+                      (field) => field.advanced,
                     );
-                    const renderField = (field: any) => (
+                    const renderField = (field: ToolConfigField) => (
                       <div key={field.key}>
                         <label
                           style={{
@@ -3486,9 +3579,11 @@ export default function EnterpriseSettings() {
                             <input
                               type="checkbox"
                               checked={
-                                editingConfig[field.key] ??
-                                field.default ??
-                                false
+                                !!(
+                                  editingConfig[field.key] ??
+                                  field.default ??
+                                  false
+                                )
                               }
                               onChange={(e) =>
                                 setEditingConfig((p) => ({
@@ -3530,9 +3625,9 @@ export default function EnterpriseSettings() {
                         ) : field.type === "select" ? (
                           <select
                             className="form-input"
-                            value={
-                              editingConfig[field.key] ?? field.default ?? ""
-                            }
+                            value={formControlValue(
+                              editingConfig[field.key] ?? field.default,
+                            )}
                             onChange={(e) =>
                               setEditingConfig((p) => ({
                                 ...p,
@@ -3540,7 +3635,7 @@ export default function EnterpriseSettings() {
                               }))
                             }
                           >
-                            {(field.options || []).map((opt: any) => (
+                            {(field.options || []).map((opt) => (
                               <option key={opt.value} value={opt.value}>
                                 {opt.label}
                               </option>
@@ -3550,9 +3645,9 @@ export default function EnterpriseSettings() {
                           <input
                             type="number"
                             className="form-input"
-                            value={
-                              editingConfig[field.key] ?? field.default ?? ""
-                            }
+                            value={formControlValue(
+                              editingConfig[field.key] ?? field.default,
+                            )}
                             min={field.min}
                             max={field.max}
                             onChange={(e) =>
@@ -3565,9 +3660,9 @@ export default function EnterpriseSettings() {
                         ) : field.type === "textarea" ? (
                           <textarea
                             className="form-input"
-                            value={
-                              editingConfig[field.key] ?? field.default ?? ""
-                            }
+                            value={formControlValue(
+                              editingConfig[field.key] ?? field.default,
+                            )}
                             placeholder={field.placeholder || ""}
                             rows={Math.max(
                               3,
@@ -3599,7 +3694,7 @@ export default function EnterpriseSettings() {
                             type="password"
                             autoComplete="new-password"
                             className="form-input"
-                            value={editingConfig[field.key] ?? ""}
+                            value={formControlValue(editingConfig[field.key])}
                             placeholder={field.placeholder || ""}
                             onChange={(e) =>
                               setEditingConfig((p) => ({
@@ -3612,9 +3707,9 @@ export default function EnterpriseSettings() {
                           <input
                             type="text"
                             className="form-input"
-                            value={
-                              editingConfig[field.key] ?? field.default ?? ""
-                            }
+                            value={formControlValue(
+                              editingConfig[field.key] ?? field.default,
+                            )}
                             placeholder={field.placeholder || ""}
                             onChange={(e) =>
                               setEditingConfig((p) => ({
@@ -3889,7 +3984,7 @@ export default function EnterpriseSettings() {
                         >
                           {GLOBAL_CATEGORY_CONFIG_SCHEMAS[
                             configCategory
-                          ].fields.map((field: any) => (
+                          ].fields.map((field) => (
                             <div key={field.key}>
                               <label
                                 style={{
@@ -3906,7 +4001,9 @@ export default function EnterpriseSettings() {
                                   type="password"
                                   autoComplete="new-password"
                                   className="form-input"
-                                  value={editingConfig[field.key] ?? ""}
+                                  value={formControlValue(
+                                    editingConfig[field.key],
+                                  )}
                                   placeholder={field.placeholder || ""}
                                   onChange={(e) =>
                                     setEditingConfig((p) => ({
@@ -3918,11 +4015,9 @@ export default function EnterpriseSettings() {
                               ) : field.type === "select" ? (
                                 <select
                                   className="form-input"
-                                  value={
-                                    editingConfig[field.key] ??
-                                    field.default ??
-                                    ""
-                                  }
+                                  value={formControlValue(
+                                    editingConfig[field.key] ?? field.default,
+                                  )}
                                   onChange={(e) =>
                                     setEditingConfig((p) => ({
                                       ...p,
@@ -3930,7 +4025,7 @@ export default function EnterpriseSettings() {
                                     }))
                                   }
                                 >
-                                  {(field.options || []).map((o: any) => (
+                                  {(field.options || []).map((o) => (
                                     <option key={o.value} value={o.value}>
                                       {o.label}
                                     </option>
@@ -3940,7 +4035,9 @@ export default function EnterpriseSettings() {
                                 <input
                                   type="text"
                                   className="form-input"
-                                  value={editingConfig[field.key] ?? ""}
+                                  value={formControlValue(
+                                    editingConfig[field.key],
+                                  )}
                                   placeholder={field.placeholder || ""}
                                   onChange={(e) =>
                                     setEditingConfig((p) => ({
@@ -3971,7 +4068,7 @@ export default function EnterpriseSettings() {
                               onClick={async () => {
                                 // Save config to the category's runtime representative tool.
                                 const catTools = allTools.filter(
-                                  (tl: any) =>
+                                  (tl) =>
                                     (tl.category || "general") ===
                                     configCategory,
                                 );
@@ -3981,7 +4078,7 @@ export default function EnterpriseSettings() {
                                   ];
                                 const representativeTool =
                                   catTools.find(
-                                    (tl: any) => tl.name === primaryToolName,
+                                    (tl) => tl.name === primaryToolName,
                                   ) || catTools[0];
                                 if (representativeTool) {
                                   await fetchJson(
@@ -4018,30 +4115,6 @@ export default function EnterpriseSettings() {
         {/* ── Invitation Codes Tab ── */}
         {activeTab === "invites" && <InvitationCodes />}
       </div>
-
-      {kbToast && (
-        <div
-          style={{
-            position: "fixed",
-            top: "20px",
-            right: "20px",
-            zIndex: 20000,
-            padding: "12px 20px",
-            borderRadius: "8px",
-            background:
-              kbToast.type === "success"
-                ? "rgba(34, 197, 94, 0.9)"
-                : "rgba(239, 68, 68, 0.9)",
-            color: "#fff",
-            fontSize: "14px",
-            fontWeight: 500,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-          }}
-        >
-          {""}
-          {kbToast.message}
-        </div>
-      )}
     </>
   );
 }

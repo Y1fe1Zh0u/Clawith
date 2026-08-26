@@ -14,6 +14,7 @@ import {
   BarChart,
   Bar,
   Legend,
+  type TooltipContentProps,
 } from "recharts";
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -46,6 +47,250 @@ const CHART_COLORS = [
   "#f97316",
   "#6366f1",
 ];
+
+interface TimeSeriesPoint {
+  date: string;
+  total_companies: number;
+  new_companies: number;
+  total_users: number;
+  new_users: number;
+  total_tokens: number;
+  new_tokens: number;
+  total_sessions: number;
+  new_sessions: number;
+  dau: number;
+  wau: number;
+  mau: number;
+}
+
+interface LeaderboardEntry {
+  name: string;
+  tokens: number;
+  cache_read_tokens?: number;
+  cache_hit_rate?: number;
+}
+
+interface AgentLeaderboardEntry extends LeaderboardEntry {
+  company: string;
+}
+
+interface ChannelDistribution {
+  channel: string;
+  count: number;
+}
+
+interface ToolCategoryCount {
+  category: string;
+  count: number;
+}
+
+interface ChurnWarning {
+  name: string;
+  total_tokens: number;
+  last_active: string | null;
+  days_inactive: number | null;
+}
+
+interface EnhancedMetrics {
+  avg_tokens_per_session_30d: number;
+  retention_rate_7d: number;
+  retained_companies: number;
+  last_week_active_companies: number;
+  channel_distribution: ChannelDistribution[];
+  tool_category_top10: ToolCategoryCount[];
+  churn_warnings: ChurnWarning[];
+}
+
+interface LeaderboardsResponse {
+  top_companies?: LeaderboardEntry[];
+  top_agents?: AgentLeaderboardEntry[];
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isTimeSeriesPoint(value: unknown): value is TimeSeriesPoint {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "date" in value &&
+    typeof value.date === "string" &&
+    "total_companies" in value &&
+    isNumber(value.total_companies) &&
+    "new_companies" in value &&
+    isNumber(value.new_companies) &&
+    "total_users" in value &&
+    isNumber(value.total_users) &&
+    "new_users" in value &&
+    isNumber(value.new_users) &&
+    "total_tokens" in value &&
+    isNumber(value.total_tokens) &&
+    "new_tokens" in value &&
+    isNumber(value.new_tokens) &&
+    "total_sessions" in value &&
+    isNumber(value.total_sessions) &&
+    "new_sessions" in value &&
+    isNumber(value.new_sessions) &&
+    "dau" in value &&
+    isNumber(value.dau) &&
+    "wau" in value &&
+    isNumber(value.wau) &&
+    "mau" in value &&
+    isNumber(value.mau)
+  );
+}
+
+function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    typeof value.name === "string" &&
+    "tokens" in value &&
+    isNumber(value.tokens) &&
+    (!("cache_read_tokens" in value) ||
+      value.cache_read_tokens === undefined ||
+      isNumber(value.cache_read_tokens)) &&
+    (!("cache_hit_rate" in value) ||
+      value.cache_hit_rate === undefined ||
+      isNumber(value.cache_hit_rate))
+  );
+}
+
+function isAgentLeaderboardEntry(
+  value: unknown,
+): value is AgentLeaderboardEntry {
+  return (
+    isLeaderboardEntry(value) &&
+    "company" in value &&
+    typeof value.company === "string"
+  );
+}
+
+function isChannelDistribution(value: unknown): value is ChannelDistribution {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "channel" in value &&
+    typeof value.channel === "string" &&
+    "count" in value &&
+    isNumber(value.count)
+  );
+}
+
+function isToolCategoryCount(value: unknown): value is ToolCategoryCount {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "category" in value &&
+    typeof value.category === "string" &&
+    "count" in value &&
+    isNumber(value.count)
+  );
+}
+
+function isChurnWarning(value: unknown): value is ChurnWarning {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    typeof value.name === "string" &&
+    "total_tokens" in value &&
+    isNumber(value.total_tokens) &&
+    "last_active" in value &&
+    (value.last_active === null || typeof value.last_active === "string") &&
+    "days_inactive" in value &&
+    (value.days_inactive === null || isNumber(value.days_inactive))
+  );
+}
+
+function isEnhancedMetrics(value: unknown): value is EnhancedMetrics {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "avg_tokens_per_session_30d" in value &&
+    isNumber(value.avg_tokens_per_session_30d) &&
+    "retention_rate_7d" in value &&
+    isNumber(value.retention_rate_7d) &&
+    "retained_companies" in value &&
+    isNumber(value.retained_companies) &&
+    "last_week_active_companies" in value &&
+    isNumber(value.last_week_active_companies) &&
+    "channel_distribution" in value &&
+    Array.isArray(value.channel_distribution) &&
+    value.channel_distribution.every(isChannelDistribution) &&
+    "tool_category_top10" in value &&
+    Array.isArray(value.tool_category_top10) &&
+    value.tool_category_top10.every(isToolCategoryCount) &&
+    "churn_warnings" in value &&
+    Array.isArray(value.churn_warnings) &&
+    value.churn_warnings.every(isChurnWarning)
+  );
+}
+
+function isLeaderboardsResponse(value: unknown): value is LeaderboardsResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (!("top_companies" in value) ||
+      value.top_companies === undefined ||
+      (Array.isArray(value.top_companies) &&
+        value.top_companies.every(isLeaderboardEntry))) &&
+    (!("top_agents" in value) ||
+      value.top_agents === undefined ||
+      (Array.isArray(value.top_agents) &&
+        value.top_agents.every(isAgentLeaderboardEntry)))
+  );
+}
+
+function authHeaders(): HeadersInit {
+  const token = localStorage.getItem("token");
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function requestTimeSeries(
+  days: number,
+  signal: AbortSignal,
+): Promise<TimeSeriesPoint[]> {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  const response = await fetch(
+    `/api/admin/metrics/timeseries?start_date=${start.toISOString()}&end_date=${end.toISOString()}`,
+    { headers: authHeaders(), signal },
+  );
+  if (!response.ok) return [];
+  const data: unknown = await response.json();
+  return Array.isArray(data) && data.every(isTimeSeriesPoint) ? data : [];
+}
+
+async function requestLeaderboards(
+  signal: AbortSignal,
+): Promise<LeaderboardsResponse> {
+  const response = await fetch("/api/admin/metrics/leaderboards", {
+    headers: authHeaders(),
+    signal,
+  });
+  if (!response.ok) return {};
+  const data: unknown = await response.json();
+  return isLeaderboardsResponse(data) ? data : {};
+}
+
+async function requestEnhancedMetrics(
+  signal: AbortSignal,
+): Promise<EnhancedMetrics | null> {
+  const response = await fetch("/api/admin/metrics/enhanced", {
+    headers: authHeaders(),
+    signal,
+  });
+  if (!response.ok) return null;
+  const data: unknown = await response.json();
+  return isEnhancedMetrics(data) ? data : null;
+}
 
 // ─── InfoTooltip ─────────────────────────────────────────
 
@@ -178,81 +423,65 @@ const MetricCard = ({
 export default function PlatformDashboard() {
   useTranslation();
   const [timeRange, setTimeRange] = useState<30 | 7>(30);
-  const [loadingStats, setLoadingStats] = useState(false);
-  const [loadingLeaders, setLoadingLeaders] = useState(false);
-  const [loadingEnhanced, setLoadingEnhanced] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [loadingLeaders, setLoadingLeaders] = useState(true);
+  const [loadingEnhanced, setLoadingEnhanced] = useState(true);
 
-  const [timeSeriesData, setTimeSeriesData] = useState<any[]>([]);
-  const [topCompanies, setTopCompanies] = useState<any[]>([]);
-  const [topAgents, setTopAgents] = useState<any[]>([]);
-  const [enhanced, setEnhanced] = useState<any>(null);
-
-  const authHeaders = () => {
-    const token = localStorage.getItem("token");
-    return {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
-  };
-
-  const fetchTimeSeries = async (days: number) => {
-    setLoadingStats(true);
-    try {
-      const end = new Date();
-      const start = new Date();
-      start.setDate(start.getDate() - days);
-      const res = await fetch(
-        `/api/admin/metrics/timeseries?start_date=${start.toISOString()}&end_date=${end.toISOString()}`,
-        { headers: authHeaders() },
-      );
-      if (res.ok) setTimeSeriesData(await res.json());
-    } catch (e) {
-      console.error("Failed to load metrics:", e);
-    }
-    setLoadingStats(false);
-  };
-
-  const fetchLeaderboards = async () => {
-    setLoadingLeaders(true);
-    try {
-      const res = await fetch("/api/admin/metrics/leaderboards", {
-        headers: authHeaders(),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTopCompanies(data.top_companies || []);
-        setTopAgents(data.top_agents || []);
-      }
-    } catch (e) {
-      console.error("Failed to load leaderboards:", e);
-    }
-    setLoadingLeaders(false);
-  };
-
-  const fetchEnhanced = async () => {
-    setLoadingEnhanced(true);
-    try {
-      const res = await fetch("/api/admin/metrics/enhanced", {
-        headers: authHeaders(),
-      });
-      if (res.ok) setEnhanced(await res.json());
-    } catch (e) {
-      console.error("Failed to load enhanced metrics:", e);
-    }
-    setLoadingEnhanced(false);
-  };
+  const [timeSeriesData, setTimeSeriesData] = useState<TimeSeriesPoint[]>([]);
+  const [topCompanies, setTopCompanies] = useState<LeaderboardEntry[]>([]);
+  const [topAgents, setTopAgents] = useState<AgentLeaderboardEntry[]>([]);
+  const [enhanced, setEnhanced] = useState<EnhancedMetrics | null>(null);
 
   useEffect(() => {
-    fetchTimeSeries(timeRange);
+    const controller = new AbortController();
+    requestTimeSeries(timeRange, controller.signal)
+      .then(setTimeSeriesData)
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error("Failed to load metrics:", error);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingStats(false);
+      });
+    return () => controller.abort();
   }, [timeRange]);
+
   useEffect(() => {
-    fetchLeaderboards();
-    fetchEnhanced();
+    const controller = new AbortController();
+    requestLeaderboards(controller.signal)
+      .then((data) => {
+        setTopCompanies(data.top_companies ?? []);
+        setTopAgents(data.top_agents ?? []);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error("Failed to load leaderboards:", error);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingLeaders(false);
+      });
+    requestEnhancedMetrics(controller.signal)
+      .then(setEnhanced)
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error("Failed to load enhanced metrics:", error);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingEnhanced(false);
+      });
+    return () => controller.abort();
   }, []);
 
   // ─── Chart Tooltip ────────────────────────────────────
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
+  const renderCustomTooltip = ({
+    active,
+    payload,
+    label,
+  }: TooltipContentProps) => {
     if (active && payload && payload.length) {
       return (
         <div
@@ -274,7 +503,7 @@ export default function PlatformDashboard() {
           >
             {label}
           </div>
-          {payload.map((p: any, i: number) => (
+          {payload.map((p, i) => (
             <div
               key={i}
               style={{
@@ -294,9 +523,11 @@ export default function PlatformDashboard() {
               />
               <span style={{ color: "var(--text-tertiary)" }}>{p.name}:</span>
               <span style={{ fontWeight: 500 }}>
-                {p.dataKey?.includes("tokens")
-                  ? formatTokens(p.value)
-                  : formatNumber(p.value)}
+                {typeof p.value === "number"
+                  ? String(p.dataKey ?? "").includes("tokens")
+                    ? formatTokens(p.value)
+                    : formatNumber(p.value)
+                  : String(p.value ?? "-")}
               </span>
             </div>
           ))}
@@ -308,7 +539,7 @@ export default function PlatformDashboard() {
 
   // ─── Chart Cards ─────────────────────────────────────
 
-  const ChartCard = ({
+  const renderChartCard = ({
     title,
     tooltip,
     dataKeyTotal,
@@ -378,7 +609,7 @@ export default function PlatformDashboard() {
                 axisLine={false}
                 tickFormatter={formatTokens}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={renderCustomTooltip} />
               <Line
                 yAxisId="left"
                 type="monotone"
@@ -409,7 +640,7 @@ export default function PlatformDashboard() {
 
   // ─── Multi-Line Chart (for Active Users DAU/WAU/MAU) ─
 
-  const MultiLineChart = ({
+  const renderMultiLineChart = ({
     title,
     tooltip,
     lines,
@@ -473,7 +704,7 @@ export default function PlatformDashboard() {
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={renderCustomTooltip} />
               <Legend iconSize={8} wrapperStyle={{ fontSize: "11px" }} />
               {lines.map((l) => (
                 <Line
@@ -496,9 +727,9 @@ export default function PlatformDashboard() {
 
   // ─── Channel Pie Chart ──────────────────────────────────
 
-  const ChannelPieChart = () => {
+  const renderChannelPieChart = () => {
     const data = enhanced?.channel_distribution || [];
-    const total = data.reduce((s: number, d: any) => s + d.count, 0);
+    const total = data.reduce((sum, item) => sum + item.count, 0);
     return (
       <div
         className="card"
@@ -558,19 +789,27 @@ export default function PlatformDashboard() {
                   outerRadius={90}
                   innerRadius={50}
                   paddingAngle={2}
-                  label={({ channel, count }: any) =>
-                    `${channel} (${((count * 100) / total).toFixed(0)}%)`
-                  }
+                  label={(entry) => {
+                    const channel =
+                      "channel" in entry && typeof entry.channel === "string"
+                        ? entry.channel
+                        : "";
+                    const count =
+                      "count" in entry && typeof entry.count === "number"
+                        ? entry.count
+                        : 0;
+                    return `${channel} (${((count * 100) / total).toFixed(0)}%)`;
+                  }}
                   labelLine={{ stroke: "var(--text-tertiary)", strokeWidth: 1 }}
                 >
-                  {data.map((_: any, i: number) => (
+                  {data.map((item, i) => (
                     <Cell
-                      key={i}
+                      key={item.channel}
                       fill={CHART_COLORS[i % CHART_COLORS.length]}
                     />
                   ))}
                 </Pie>
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={renderCustomTooltip} />
               </PieChart>
             </ResponsiveContainer>
           )}
@@ -581,7 +820,7 @@ export default function PlatformDashboard() {
 
   // ─── Tool Category Bar Chart ──────────────────────────
 
-  const ToolBarChart = () => {
+  const renderToolBarChart = () => {
     const data = enhanced?.tool_category_top10 || [];
     return (
       <div
@@ -656,7 +895,7 @@ export default function PlatformDashboard() {
                   axisLine={false}
                   width={55}
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={renderCustomTooltip} />
                 <Bar
                   dataKey="count"
                   name="Enabled"
@@ -674,7 +913,7 @@ export default function PlatformDashboard() {
 
   // ─── Churn Warning Table ───────────────────────────────
 
-  const ChurnTable = () => {
+  const renderChurnTable = () => {
     const data = enhanced?.churn_warnings || [];
     return (
       <div className="card" style={{ padding: "0", overflow: "hidden" }}>
@@ -771,9 +1010,9 @@ export default function PlatformDashboard() {
               </tr>
             </thead>
             <tbody>
-              {data.map((row: any, i: number) => (
+              {data.map((row) => (
                 <tr
-                  key={i}
+                  key={row.name}
                   style={{ borderBottom: "1px solid var(--border-subtle)" }}
                 >
                   <td style={{ padding: "12px 20px", fontWeight: 500 }}>
@@ -831,7 +1070,7 @@ export default function PlatformDashboard() {
 
   // ─── Leaderboard ──────────────────────────────────────
 
-  const LeaderboardCard = ({
+  const renderLeaderboardCard = <T extends LeaderboardEntry>({
     title,
     tooltip,
     items,
@@ -839,8 +1078,8 @@ export default function PlatformDashboard() {
   }: {
     title: string;
     tooltip: string;
-    items: any[];
-    renderItem: (item: any, i: number) => React.ReactNode;
+    items: T[];
+    renderItem: (item: T, i: number) => React.ReactNode;
   }) => (
     <div
       className="card"
@@ -909,7 +1148,11 @@ export default function PlatformDashboard() {
           {([7, 30] as const).map((d) => (
             <button
               key={d}
-              onClick={() => setTimeRange(d)}
+              onClick={() => {
+                if (d === timeRange) return;
+                setLoadingStats(true);
+                setTimeRange(d);
+              }}
               style={{
                 padding: "6px 16px",
                 fontSize: "12px",
@@ -952,62 +1195,65 @@ export default function PlatformDashboard() {
 
       {/* Existing Trend Charts */}
       <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-        <ChartCard
-          title="Companies"
-          tooltip="Cumulative and daily new company registrations"
-          dataKeyTotal="total_companies"
-          dataKeyNew="new_companies"
-          color="#3b82f6"
-        />
-        <ChartCard
-          title="Users"
-          tooltip="Cumulative and daily new user registrations"
-          dataKeyTotal="total_users"
-          dataKeyNew="new_users"
-          color="#10b981"
-        />
-        <ChartCard
-          title="Token Usage"
-          tooltip="Cumulative and daily token consumption across all agents"
-          dataKeyTotal="total_tokens"
-          dataKeyNew="new_tokens"
-          color="#8b5cf6"
-        />
+        {renderChartCard({
+          title: "Companies",
+          tooltip: "Cumulative and daily new company registrations",
+          dataKeyTotal: "total_companies",
+          dataKeyNew: "new_companies",
+          color: "#3b82f6",
+        })}
+        {renderChartCard({
+          title: "Users",
+          tooltip: "Cumulative and daily new user registrations",
+          dataKeyTotal: "total_users",
+          dataKeyNew: "new_users",
+          color: "#10b981",
+        })}
+        {renderChartCard({
+          title: "Token Usage",
+          tooltip: "Cumulative and daily token consumption across all agents",
+          dataKeyTotal: "total_tokens",
+          dataKeyNew: "new_tokens",
+          color: "#8b5cf6",
+        })}
       </div>
 
       {/* New Trend Charts: Sessions + Active Users */}
       <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-        <ChartCard
-          title="Daily Sessions"
-          tooltip="Number of new chat sessions created per day and cumulative total"
-          dataKeyTotal="total_sessions"
-          dataKeyNew="new_sessions"
-          color="#f59e0b"
-        />
-        <MultiLineChart
-          title="Active Users"
-          tooltip="DAU: distinct users who sent at least 1 message that day. WAU: distinct users active in a rolling 7-day window. MAU: distinct users active in a rolling 30-day window."
-          lines={[
+        {renderChartCard({
+          title: "Daily Sessions",
+          tooltip:
+            "Number of new chat sessions created per day and cumulative total",
+          dataKeyTotal: "total_sessions",
+          dataKeyNew: "new_sessions",
+          color: "#f59e0b",
+        })}
+        {renderMultiLineChart({
+          title: "Active Users",
+          tooltip:
+            "DAU: distinct users who sent at least 1 message that day. WAU: distinct users active in a rolling 7-day window. MAU: distinct users active in a rolling 30-day window.",
+          lines: [
             { key: "dau", name: "DAU", color: "#10b981" },
             { key: "wau", name: "WAU", color: "#3b82f6" },
             { key: "mau", name: "MAU", color: "#8b5cf6" },
-          ]}
-        />
+          ],
+        })}
       </div>
 
       {/* Distribution Charts */}
       <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-        <ChannelPieChart />
-        <ToolBarChart />
+        {renderChannelPieChart()}
+        {renderToolBarChart()}
       </div>
 
       {/* Leaderboards */}
       <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-        <LeaderboardCard
-          title="Top 20 Companies by Tokens"
-          tooltip="Companies ranked by total cumulative token consumption across all their agents"
-          items={topCompanies}
-          renderItem={(c, i) => (
+        {renderLeaderboardCard({
+          title: "Top 20 Companies by Tokens",
+          tooltip:
+            "Companies ranked by total cumulative token consumption across all their agents",
+          items: topCompanies,
+          renderItem: (c, i) => (
             <div
               key={i}
               style={{
@@ -1048,13 +1294,14 @@ export default function PlatformDashboard() {
                 </div>
               </div>
             </div>
-          )}
-        />
-        <LeaderboardCard
-          title="Top 20 Agents by Tokens"
-          tooltip="Individual agents ranked by total cumulative token consumption"
-          items={topAgents}
-          renderItem={(a, i) => (
+          ),
+        })}
+        {renderLeaderboardCard({
+          title: "Top 20 Agents by Tokens",
+          tooltip:
+            "Individual agents ranked by total cumulative token consumption",
+          items: topAgents,
+          renderItem: (a, i) => (
             <div
               key={i}
               style={{
@@ -1102,12 +1349,12 @@ export default function PlatformDashboard() {
                 </div>
               </div>
             </div>
-          )}
-        />
+          ),
+        })}
       </div>
 
       {/* Churn Warning */}
-      <ChurnTable />
+      {renderChurnTable()}
     </div>
   );
 }

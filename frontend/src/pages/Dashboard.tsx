@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   agentApi,
   taskApi,
@@ -10,10 +11,35 @@ import {
   tenantApi,
 } from "../services/api";
 import type { Agent, Task } from "../types";
+import type { ActivityItem, TenantTokenUsage } from "../services/apiContracts";
 
 type LayoutOutletContext = {
   openTalentMarket?: () => void;
 };
+
+type KrStatus = "on_track" | "at_risk" | "behind" | "completed";
+
+interface OkrPeriod {
+  start: string;
+  end: string;
+  is_current: boolean;
+}
+
+interface OkrKeyResult {
+  status: string;
+}
+
+interface OkrObjective {
+  key_results?: OkrKeyResult[];
+}
+
+interface DashboardActivity extends ActivityItem {
+  agent_id: string;
+}
+
+function isKrStatus(status: string): status is KrStatus {
+  return ["on_track", "at_risk", "behind", "completed"].includes(status);
+}
 
 /* ────── Inline SVG Icons (monochrome) ────── */
 
@@ -127,7 +153,7 @@ const Icons = {
 
 /* ────── Helpers ────── */
 
-const timeAgo = (dateStr: string | undefined, t: any) => {
+const timeAgo = (dateStr: string | null | undefined, t: TFunction) => {
   if (!dateStr) return "-";
   const diff = Date.now() - new Date(dateStr).getTime();
   const mins = Math.floor(diff / 60000);
@@ -151,7 +177,7 @@ const priorityColor = (p: string) => {
   }
 };
 
-const statusLabel = (s: string, t: any) => {
+const statusLabel = (s: string, t: TFunction) => {
   switch (s) {
     case "running":
       return t("dashboard.status.running");
@@ -213,15 +239,16 @@ function OKRSummaryCard() {
   });
 
   // Load current-period objectives (only when OKR enabled)
-  const { data: objectives = [] } = useQuery<any[]>({
+  const { data: objectives = [] } = useQuery<OkrObjective[]>({
     queryKey: ["okr-objectives-dash"],
     queryFn: async () => {
       // Fetch periods first to get the current period
-      const periods = await fetchJson<any[]>("/okr/periods");
+      const periods = await fetchJson<OkrPeriod[]>("/okr/periods");
       const current =
-        periods.find((p: any) => p.is_current) ?? periods[periods.length - 1];
+        periods.find((period) => period.is_current) ??
+        periods[periods.length - 1];
       if (!current) return [];
-      return fetchJson<any[]>(
+      return fetchJson<OkrObjective[]>(
         `/okr/objectives?period_start=${current.start}&period_end=${current.end}`,
       );
     },
@@ -233,10 +260,12 @@ function OKRSummaryCard() {
   if (!settings?.enabled || objectives.length === 0) return null;
 
   // Flatten all KRs and count statuses
-  const allKRs: any[] = objectives.flatMap((o: any) => o.key_results ?? []);
+  const allKRs = objectives.flatMap((objective) =>
+    objective.key_results ? objective.key_results : [],
+  );
   const counts = { on_track: 0, at_risk: 0, behind: 0, completed: 0 };
   for (const kr of allKRs) {
-    if (kr.status in counts) counts[kr.status as keyof typeof counts]++;
+    if (isKrStatus(kr.status)) counts[kr.status]++;
   }
   const total = allKRs.length;
 
@@ -450,10 +479,12 @@ function StatsBar({
   agents,
   allTasks,
   tokenUsage,
+  dataUpdatedAt,
 }: {
   agents: Agent[];
   allTasks: Task[];
-  tokenUsage?: any;
+  tokenUsage?: TenantTokenUsage;
+  dataUpdatedAt: number;
 }) {
   const { t } = useTranslation();
   const totalAgents = agents.length;
@@ -481,7 +512,7 @@ function StatsBar({
       : 0;
   const recentlyActive = agents.filter((a) => {
     if (!a.last_active_at) return false;
-    return Date.now() - new Date(a.last_active_at).getTime() < 3600000;
+    return dataUpdatedAt - new Date(a.last_active_at).getTime() < 3600000;
   }).length;
 
   const stats = [
@@ -576,7 +607,7 @@ function AgentRow({
 }: {
   agent: Agent;
   tasks: Task[];
-  recentActivity: any[];
+  recentActivity: ActivityItem[];
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -605,10 +636,10 @@ function AgentRow({
         transition: "background 120ms ease",
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
+        e.currentTarget.style.background = "var(--bg-hover)";
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = "transparent";
+        e.currentTarget.style.background = "transparent";
       }}
     >
       {/* Agent Info */}
@@ -846,7 +877,7 @@ function ActivityFeed({
   activities,
   agents,
 }: {
-  activities: any[];
+  activities: DashboardActivity[];
   agents: Agent[];
 }) {
   const { t } = useTranslation();
@@ -935,7 +966,11 @@ export default function Dashboard() {
   const openTalentMarket = outletContext?.openTalentMarket;
   const currentTenant = localStorage.getItem("current_tenant_id") || "";
 
-  const { data: agents = [], isLoading } = useQuery({
+  const {
+    data: agents = [],
+    isLoading,
+    dataUpdatedAt: agentsUpdatedAt,
+  } = useQuery({
     queryKey: ["agents", currentTenant],
     queryFn: () => agentApi.list(currentTenant || undefined),
     refetchInterval: 15000,
@@ -949,17 +984,19 @@ export default function Dashboard() {
 
   // Fetch tasks & activities for all agents
   const [allTasks, setAllTasks] = useState<Task[]>([]);
-  const [allActivities, setAllActivities] = useState<any[]>([]);
-  const [agentActivities, setAgentActivities] = useState<Record<string, any[]>>(
-    {},
-  );
+  const [allActivities, setAllActivities] = useState<DashboardActivity[]>([]);
+  const [agentActivities, setAgentActivities] = useState<
+    Record<string, ActivityItem[]>
+  >({});
+  const agentIdsKey = agents.map((agent) => agent.id).join(",");
 
   useEffect(() => {
-    if (agents.length === 0) return;
+    if (!agentIdsKey) return;
+    const agentIds = agentIdsKey.split(",");
     const fetchData = async () => {
       try {
         const taskResults = await Promise.allSettled(
-          agents.map((a) => taskApi.list(a.id)),
+          agentIds.map((agentId) => taskApi.list(agentId)),
         );
         const tasks: Task[] = [];
         taskResults.forEach((r) => {
@@ -972,21 +1009,26 @@ export default function Dashboard() {
 
       try {
         const actResults = await Promise.allSettled(
-          agents.map((a) => activityApi.list(a.id, 5)),
+          agentIds.map((agentId) => activityApi.list(agentId, 5)),
         );
-        const activities: any[] = [];
-        const perAgent: Record<string, any[]> = {};
+        const activities: DashboardActivity[] = [];
+        const perAgent: Record<string, ActivityItem[]> = {};
         actResults.forEach((r, i) => {
           if (r.status === "fulfilled") {
-            perAgent[agents[i].id] = r.value;
+            const agentId = agentIds[i];
+            perAgent[agentId] = r.value;
             activities.push(
-              ...r.value.map((v: any) => ({ ...v, agent_id: agents[i].id })),
+              ...r.value.map((activity) => ({
+                ...activity,
+                agent_id: agentId,
+              })),
             );
           }
         });
         activities.sort(
           (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+            new Date(b.created_at ?? 0).getTime() -
+            new Date(a.created_at ?? 0).getTime(),
         );
         setAllActivities(activities.slice(0, 20));
         setAgentActivities(perAgent);
@@ -997,7 +1039,7 @@ export default function Dashboard() {
     fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [agents.map((a) => a.id).join(",")]);
+  }, [agentIdsKey]);
 
   // Group tasks by agent
   const tasksByAgent = new Map<string, Task[]>();
@@ -1103,6 +1145,7 @@ export default function Dashboard() {
             agents={agents}
             allTasks={allTasks}
             tokenUsage={tokenUsage}
+            dataUpdatedAt={agentsUpdatedAt}
           />
 
           {/* OKR Summary (P3) — only shown when OKR is enabled */}
