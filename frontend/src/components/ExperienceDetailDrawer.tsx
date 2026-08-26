@@ -10,38 +10,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { experienceApi, type ExperienceEntry } from "../services/api";
 import { Drawer } from "./ExperienceDraftEditor";
 import { EXP_FIELDS, secondaryBtn } from "./ExperienceDraftEditor.shared";
+import {
+  fmtDate,
+  freshness,
+  retiredDaysLeft,
+} from "./ExperienceDetailDrawer.shared";
 import MarkdownRenderer from "./MarkdownRenderer";
-
-// 2026年7月9日; empty string for null/invalid.
-export function fmtDate(s?: string | null): string {
-  if (!s) return "";
-  const d = new Date(s);
-  if (isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
-export function freshness(entry: ExperienceEntry): {
-  label: string;
-  stale: boolean;
-} {
-  if (entry.status !== "published") return { label: "", stale: false };
-  if (!entry.last_reviewed_at) return { label: "未复核", stale: true };
-  const d = new Date(entry.last_reviewed_at);
-  const dateStr = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
-  const age = Date.now() - d.getTime();
-  const stale = age > 90 * 86400000;
-  return { label: `${stale ? "复核超期" : "已复核"}（${dateStr}）`, stale };
-}
-
-const RETIRED_TTL_DAYS = 30;
-// Days left before a retired entry is auto-deleted (retired_at + 30d). null when not applicable.
-export function retiredDaysLeft(entry: ExperienceEntry): number | null {
-  if (entry.status !== "retired" || !entry.retired_at) return null;
-  const d = new Date(entry.retired_at);
-  if (isNaN(d.getTime())) return null;
-  const deadline = d.getTime() + RETIRED_TTL_DAYS * 86400000;
-  return Math.max(0, Math.ceil((deadline - Date.now()) / 86400000));
-}
 
 const badgeStyle = (bg: string, fg: string): React.CSSProperties => ({
   display: "inline-block",
@@ -240,7 +214,7 @@ export function EntryDrawer({
         <CreatorLine entry={entry} />
       </div>
       {EXP_FIELDS.map((fl) => {
-        const value = (entry[fl.key] as string) || "";
+        const value = entry[fl.key] || "";
         return (
           <section key={fl.key} style={{ marginBottom: 14 }}>
             <div

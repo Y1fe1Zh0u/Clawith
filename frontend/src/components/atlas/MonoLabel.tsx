@@ -11,7 +11,7 @@ export default function MonoLabel({
   className,
   ...rest
 }: Props) {
-  const Tag = as as any;
+  const Tag = as;
   const classes = ["atlas-mono", className].filter(Boolean).join(" ");
   return (
     <Tag className={classes} {...rest}>

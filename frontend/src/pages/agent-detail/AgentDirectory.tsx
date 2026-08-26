@@ -69,6 +69,16 @@ type CustomHumanCandidate = Omit<
 type CustomAgentCandidate = CustomAgentEntry;
 type CustomTab = "human" | "agent";
 
+const primaryId = (member: DirectoryMember) =>
+  (member.member_type === "agent"
+    ? member.target_agent_id
+    : member.target_member_id) || "";
+
+const customCandidateId = (
+  candidate: CustomHumanCandidate | CustomAgentCandidate,
+): string =>
+  "user_id" in candidate ? candidate.user_id : candidate.target_agent_id;
+
 export default function AgentDirectory({
   agentId,
   accessMode,
@@ -85,16 +95,26 @@ export default function AgentDirectory({
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [memberType, setMemberType] = useState<DirectoryMemberType>("all");
   const [includeUnavailable, setIncludeUnavailable] = useState(false);
-  const [offset, setOffset] = useState(0);
-  const [loadedMembers, setLoadedMembers] = useState<DirectoryMember[]>([]);
+  const directoryScope = `${agentId}:${debouncedSearch}:${memberType}:${includeUnavailable}`;
+  const [directoryPage, setDirectoryPage] = useState({ scope: "", offset: 0 });
+  const offset =
+    directoryPage.scope === directoryScope ? directoryPage.offset : 0;
+  const [loadedMembers, setLoadedMembers] = useState<{
+    scope: string;
+    members: DirectoryMember[];
+  }>({ scope: "", members: [] });
   const showCustomMaintenance = accessMode === "custom" && canManage;
   const [customTab, setCustomTab] = useState<CustomTab>("human");
   const [customSearch, setCustomSearch] = useState("");
   const [debouncedCustomSearch, setDebouncedCustomSearch] = useState("");
-  const [candidateOffset, setCandidateOffset] = useState(0);
-  const [loadedCandidates, setLoadedCandidates] = useState<
-    Array<CustomHumanCandidate | CustomAgentCandidate>
-  >([]);
+  const candidateScope = `${agentId}:${customTab}:${debouncedCustomSearch}`;
+  const [candidatePage, setCandidatePage] = useState({ scope: "", offset: 0 });
+  const candidateOffset =
+    candidatePage.scope === candidateScope ? candidatePage.offset : 0;
+  const [loadedCandidates, setLoadedCandidates] = useState<{
+    scope: string;
+    candidates: Array<CustomHumanCandidate | CustomAgentCandidate>;
+  }>({ scope: "", candidates: [] });
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -110,16 +130,6 @@ export default function AgentDirectory({
     return () => clearTimeout(timer);
   }, [customSearch]);
 
-  useEffect(() => {
-    setOffset(0);
-    setLoadedMembers([]);
-  }, [agentId, debouncedSearch, memberType, includeUnavailable]);
-
-  useEffect(() => {
-    setCandidateOffset(0);
-    setLoadedCandidates([]);
-  }, [agentId, customTab, debouncedCustomSearch]);
-
   const directoryQuery = useQuery({
     queryKey: [
       "agent-directory",
@@ -129,7 +139,7 @@ export default function AgentDirectory({
       includeUnavailable,
       offset,
     ],
-    queryFn: () => {
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams({
         member_type: memberType,
         limit: String(PAGE_SIZE),
@@ -137,9 +147,30 @@ export default function AgentDirectory({
         include_uncontactable: includeUnavailable ? "true" : "false",
       });
       if (debouncedSearch) params.set("query", debouncedSearch);
-      return fetchAuth<DirectoryResponse>(
+      const data = await fetchAuth<DirectoryResponse>(
         `/agents/${agentId}/directory?${params.toString()}`,
+        { signal },
       );
+      if (!signal.aborted) {
+        setLoadedMembers((current) => {
+          if (data.offset === 0 || current.scope !== directoryScope) {
+            return { scope: directoryScope, members: data.members };
+          }
+          const seen = new Set(
+            current.members.map(
+              (member) => `${member.member_type}:${primaryId(member)}`,
+            ),
+          );
+          const next = data.members.filter(
+            (member) => !seen.has(`${member.member_type}:${primaryId(member)}`),
+          );
+          return {
+            scope: directoryScope,
+            members: [...current.members, ...next],
+          };
+        });
+      }
+      return data;
     },
     enabled: Boolean(agentId),
   });
@@ -170,7 +201,7 @@ export default function AgentDirectory({
       debouncedCustomSearch,
       candidateOffset,
     ],
-    queryFn: () => {
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams({
         limit: String(PAGE_SIZE),
         offset: String(candidateOffset),
@@ -178,49 +209,42 @@ export default function AgentDirectory({
       if (debouncedCustomSearch) params.set("query", debouncedCustomSearch);
       const path =
         customTab === "human" ? "human-candidates" : "agent-candidates";
-      return fetchAuth<{
+      const data = await fetchAuth<{
         candidates: Array<CustomHumanCandidate | CustomAgentCandidate>;
         limit: number;
         offset: number;
         has_more: boolean;
-      }>(`/agents/${agentId}/directory/custom/${path}?${params.toString()}`);
+      }>(`/agents/${agentId}/directory/custom/${path}?${params.toString()}`, {
+        signal,
+      });
+      if (!signal.aborted) {
+        setLoadedCandidates((current) => {
+          if (data.offset === 0 || current.scope !== candidateScope) {
+            return { scope: candidateScope, candidates: data.candidates };
+          }
+          const seen = new Set(current.candidates.map(customCandidateId));
+          return {
+            scope: candidateScope,
+            candidates: [
+              ...current.candidates,
+              ...data.candidates.filter(
+                (candidate) => !seen.has(customCandidateId(candidate)),
+              ),
+            ],
+          };
+        });
+      }
+      return data;
     },
     enabled: showCustomMaintenance,
   });
 
-  useEffect(() => {
-    const data = directoryQuery.data;
-    if (!data) return;
-    setLoadedMembers((current) => {
-      if (data.offset === 0) return data.members;
-      const seen = new Set(
-        current.map((member) => `${member.member_type}:${primaryId(member)}`),
-      );
-      const next = data.members.filter(
-        (member) => !seen.has(`${member.member_type}:${primaryId(member)}`),
-      );
-      return [...current, ...next];
-    });
-  }, [directoryQuery.data]);
-
-  useEffect(() => {
-    const data = customCandidatesQuery.data;
-    if (!data) return;
-    setLoadedCandidates((current) => {
-      if (data.offset === 0) return data.candidates;
-      const idOf = (item: CustomHumanCandidate | CustomAgentCandidate) =>
-        customTab === "human"
-          ? (item as CustomHumanCandidate).user_id
-          : (item as CustomAgentCandidate).target_agent_id;
-      const seen = new Set(current.map(idOf));
-      return [
-        ...current,
-        ...data.candidates.filter((item) => !seen.has(idOf(item))),
-      ];
-    });
-  }, [customCandidatesQuery.data, customTab]);
-
-  const members = loadedMembers;
+  const members =
+    loadedMembers.scope === directoryScope ? loadedMembers.members : [];
+  const candidates =
+    loadedCandidates.scope === candidateScope
+      ? loadedCandidates.candidates
+      : [];
   const isInitialLoading =
     directoryQuery.isLoading && offset === 0 && members.length === 0;
   const isLoadingMore = directoryQuery.isFetching && offset > 0;
@@ -254,11 +278,6 @@ export default function AgentDirectory({
       t("agent.directory.provider.fallback", { provider: providerType })
     );
   };
-
-  const primaryId = (member: DirectoryMember) =>
-    (member.member_type === "agent"
-      ? member.target_agent_id
-      : member.target_member_id) || "";
 
   const secondaryText = (member: DirectoryMember) => {
     if (member.member_type === "agent") {
@@ -295,35 +314,30 @@ export default function AgentDirectory({
   const addCustomCandidate = async (
     candidate: CustomHumanCandidate | CustomAgentCandidate,
   ) => {
-    const key =
-      customTab === "human"
-        ? (candidate as CustomHumanCandidate).user_id
-        : (candidate as CustomAgentCandidate).target_agent_id;
+    const key = customCandidateId(candidate);
     setSavingKey(`add:${key}`);
     try {
-      if (customTab === "human") {
+      if ("user_id" in candidate) {
         await fetchAuth(`/agents/${agentId}/directory/custom/humans`, {
           method: "POST",
           body: JSON.stringify({
-            user_id: (candidate as CustomHumanCandidate).user_id,
+            user_id: candidate.user_id,
           }),
         });
       } else {
         await fetchAuth(`/agents/${agentId}/directory/custom/agents`, {
           method: "POST",
           body: JSON.stringify({
-            target_agent_id: (candidate as CustomAgentCandidate)
-              .target_agent_id,
+            target_agent_id: candidate.target_agent_id,
           }),
         });
       }
-      setLoadedCandidates((current) =>
-        current.filter((item) =>
-          customTab === "human"
-            ? (item as CustomHumanCandidate).user_id !== key
-            : (item as CustomAgentCandidate).target_agent_id !== key,
+      setLoadedCandidates((current) => ({
+        ...current,
+        candidates: current.candidates.filter(
+          (item) => customCandidateId(item) !== key,
         ),
-      );
+      }));
       refreshDirectory();
     } finally {
       setSavingKey(null);
@@ -638,41 +652,30 @@ export default function AgentDirectory({
             <div
               style={{ display: "flex", flexDirection: "column", gap: "6px" }}
             >
-              {loadedCandidates.length === 0 &&
-                !customCandidatesQuery.isLoading && (
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      color: "var(--text-tertiary)",
-                      border: "1px dashed var(--border-subtle)",
-                      borderRadius: "8px",
-                      padding: "12px",
-                    }}
-                  >
-                    {isChinese
-                      ? "没有可加入的候选对象。"
-                      : "No candidates available."}
-                  </div>
-                )}
-              {loadedCandidates.map((candidate) => {
-                const isHuman = customTab === "human";
-                const key = isHuman
-                  ? (candidate as CustomHumanCandidate).user_id
-                  : (candidate as CustomAgentCandidate).target_agent_id;
-                const title = isHuman
-                  ? (candidate as CustomHumanCandidate).display_name
-                  : (candidate as CustomAgentCandidate).display_name;
+              {candidates.length === 0 && !customCandidatesQuery.isLoading && (
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "var(--text-tertiary)",
+                    border: "1px dashed var(--border-subtle)",
+                    borderRadius: "8px",
+                    padding: "12px",
+                  }}
+                >
+                  {isChinese
+                    ? "没有可加入的候选对象。"
+                    : "No candidates available."}
+                </div>
+              )}
+              {candidates.map((candidate) => {
+                const isHuman = "user_id" in candidate;
+                const key = customCandidateId(candidate);
+                const title = candidate.display_name;
                 const desc = isHuman
-                  ? [
-                      (candidate as CustomHumanCandidate).title,
-                      (candidate as CustomHumanCandidate).department,
-                      (candidate as CustomHumanCandidate).email,
-                    ]
+                  ? [candidate.title, candidate.department, candidate.email]
                       .filter(Boolean)
                       .join(" · ")
-                  : (candidate as CustomAgentCandidate).role_description ||
-                    (candidate as CustomAgentCandidate).access_mode ||
-                    "";
+                  : candidate.role_description || candidate.access_mode || "";
                 return (
                   <div
                     key={key}
@@ -732,10 +735,12 @@ export default function AgentDirectory({
                   className="btn btn-secondary"
                   disabled={customCandidatesQuery.isFetching}
                   onClick={() =>
-                    setCandidateOffset(
-                      (customCandidatesQuery.data?.offset || 0) +
+                    setCandidatePage({
+                      scope: candidateScope,
+                      offset:
+                        (customCandidatesQuery.data?.offset || 0) +
                         (customCandidatesQuery.data?.limit || PAGE_SIZE),
-                    )
+                    })
                   }
                   style={{ fontSize: "12px", alignSelf: "center" }}
                 >
@@ -1049,10 +1054,12 @@ export default function AgentDirectory({
                 className="btn btn-secondary"
                 disabled={isLoadingMore}
                 onClick={() =>
-                  setOffset(
-                    (directoryQuery.data?.offset || 0) +
+                  setDirectoryPage({
+                    scope: directoryScope,
+                    offset:
+                      (directoryQuery.data?.offset || 0) +
                       (directoryQuery.data?.limit || PAGE_SIZE),
-                  )
+                  })
                 }
               >
                 {isLoadingMore

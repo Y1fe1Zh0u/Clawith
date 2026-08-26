@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -24,30 +23,19 @@ export function useAgentDetailRoute({ agentId }: { agentId?: string }) {
   const isSettingsRoute = isSettingsPath || isDirectoryRoute;
   const isChatRoute = !isSettingsRoute;
   const hashTab = location.hash ? location.hash.replace("#", "") : null;
-  const [activeTab, setActiveTabRaw] = useState<AgentDetailTab>(() =>
-    resolveInitialTab(isSettingsRoute, isDirectoryRoute, hashTab),
+  const activeTab = resolveInitialTab(
+    isSettingsRoute,
+    isDirectoryRoute,
+    hashTab,
   );
-
-  useEffect(() => {
-    const nextTab = resolveInitialTab(
-      isSettingsRoute,
-      isDirectoryRoute,
-      hashTab,
-    );
-    setActiveTabRaw((currentTab) =>
-      currentTab === nextTab ? currentTab : nextTab,
-    );
-  }, [hashTab, isDirectoryRoute, isSettingsRoute]);
 
   const setActiveTab = (tab: AgentDetailTab) => {
     if (tab === "chat") {
-      setActiveTabRaw("chat");
       if (agentId) navigate(`/agents/${agentId}/chat`);
       return;
     }
 
     const nextTab = isAgentDetailSettingsTab(tab) ? tab : "status";
-    setActiveTabRaw(nextTab);
 
     if (agentId && nextTab === "relationships") {
       navigate(`/agents/${agentId}/directory`);
@@ -58,7 +46,7 @@ export function useAgentDetailRoute({ agentId }: { agentId?: string }) {
       navigate(`/agents/${agentId}/settings#${nextTab}`);
       return;
     }
-    window.history.replaceState(null, "", `#${nextTab}`);
+    navigate({ hash: `#${nextTab}` }, { replace: true });
   };
 
   return {

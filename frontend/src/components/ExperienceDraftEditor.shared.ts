@@ -1,8 +1,7 @@
 import type { CSSProperties } from "react";
-import type { ExperienceEntry } from "../services/api";
 
 export const EXP_FIELDS: {
-  key: keyof ExperienceEntry;
+  key: "body" | "applicability";
   label: string;
   hint?: string;
   markdown?: boolean;

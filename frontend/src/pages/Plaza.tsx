@@ -18,9 +18,11 @@ import {
   EntryDrawer,
   Badge,
   CreatorLine,
+} from "../components/ExperienceDetailDrawer";
+import {
   freshness,
   retiredDaysLeft,
-} from "../components/ExperienceDetailDrawer";
+} from "../components/ExperienceDetailDrawer.shared";
 
 const sicon = (d: string) => (
   <svg
@@ -91,7 +93,8 @@ export default function Plaza() {
   const entryParam = params.get("entry");
   useEffect(() => {
     if (!draftParam && !entryParam) return;
-    const id = draftParam || entryParam!;
+    const id = draftParam || entryParam;
+    if (!id) return;
     experienceApi
       .get(id)
       .then((e) => {
@@ -100,11 +103,11 @@ export default function Plaza() {
         else setOpenId(e.id);
       })
       .catch(() => {});
-    params.delete("draft");
-    params.delete("entry");
-    setParams(params, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftParam, entryParam]);
+    const nextParams = new URLSearchParams(params);
+    nextParams.delete("draft");
+    nextParams.delete("entry");
+    setParams(nextParams, { replace: true });
+  }, [draftParam, entryParam, params, setParams]);
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ["experience"] });
@@ -115,11 +118,11 @@ export default function Plaza() {
     e.status === "draft" ? setEditing(e) : setOpenId(e.id);
   const newEntry = () => setEditing({ tags: [] });
 
-  const unfilteredTeamEntries = teamQ.data ?? [];
+  const unfilteredTeamEntries = useMemo(() => teamQ.data ?? [], [teamQ.data]);
   const teamEntries = teamTag
     ? (taggedTeamQ.data ?? [])
     : unfilteredTeamEntries;
-  const mineEntries = mineQ.data ?? [];
+  const mineEntries = useMemo(() => mineQ.data ?? [], [mineQ.data]);
 
   const trending = useMemo(() => {
     const m = new Map<string, number>();
