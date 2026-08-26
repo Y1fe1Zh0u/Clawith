@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../services/apiError";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
 import { channelApi } from "../services/api";
@@ -906,10 +907,10 @@ export default function ChannelConfig({
       );
       setWechatQr(qr);
       setWechatQrStatus("wait");
-    } catch (error: any) {
+    } catch (error) {
       setActionFeedback({
         type: "error",
-        text: error.message || "Failed to generate WeChat QR code.",
+        text: caughtErrorMessage(error) || "Failed to generate WeChat QR code.",
       });
     } finally {
       setWechatLoadingQr(false);

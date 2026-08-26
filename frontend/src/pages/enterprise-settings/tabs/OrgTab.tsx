@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../../../services/apiError";
 import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { useToast } from "../../../components/Toast/ToastProvider";
 import LinearCopyButton from "../../../components/LinearCopyButton";
@@ -149,8 +150,8 @@ function SsoChannelSection({
       if (result?.sso_domain) setLiveDomain(result.sso_domain);
       qc.invalidateQueries({ queryKey: ["identity-providers"] });
       if (tenant?.id) qc.invalidateQueries({ queryKey: ["tenant", tenant.id] });
-    } catch (e: any) {
-      const msg = e?.message || "";
+    } catch (error) {
+      const msg = caughtErrorMessage(error) || "";
       if (msg.includes("IP address") || msg.includes("multi-tenant")) {
         setSsoError(
           t(
@@ -438,8 +439,10 @@ export default function OrgTab({ tenant }: { tenant: any }) {
           }),
         });
         qc.invalidateQueries({ queryKey: ["tenant", tenant.id] });
-      } catch (e: any) {
-        setError(e.message || "Failed to update SSO configuration");
+      } catch (error) {
+        setError(
+          caughtErrorMessage(error) || "Failed to update SSO configuration",
+        );
       }
       setSaving(false);
     };
@@ -729,8 +732,8 @@ export default function OrgTab({ tenant }: { tenant: any }) {
       await qc.invalidateQueries({ queryKey: ["org-departments"] });
       await qc.invalidateQueries({ queryKey: ["org-members"] });
       await qc.invalidateQueries({ queryKey: ["identity-providers"] });
-    } catch (e: any) {
-      setSyncResult({ error: e.message, providerId });
+    } catch (error) {
+      setSyncResult({ error: caughtErrorMessage(error), providerId });
     }
     setSyncing(null);
   };

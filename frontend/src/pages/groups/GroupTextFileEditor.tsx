@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../../services/apiError";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "../../components/Toast/ToastProvider";
 import type { GroupTextFile } from "../../types/group";
@@ -62,8 +63,10 @@ export default function GroupTextFileEditor({
       toast.success(t("groups.fileSaved", "已保存"));
       setDirty(false);
       await refetch();
-    } catch (err: any) {
-      toast.error(err?.message ?? t("groups.fileSaveFailed", "保存失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.fileSaveFailed", "保存失败"),
+      );
     } finally {
       setBusy(false);
     }
@@ -78,8 +81,10 @@ export default function GroupTextFileEditor({
       setDirty(false);
       await refetch();
       toast.success(t("groups.fileDeleted", "已删除"));
-    } catch (err: any) {
-      toast.error(err?.message ?? t("groups.fileDeleteFailed", "删除失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.fileDeleteFailed", "删除失败"),
+      );
     } finally {
       setBusy(false);
     }

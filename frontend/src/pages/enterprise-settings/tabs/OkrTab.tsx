@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../../../services/apiError";
 import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { fetchJson } from "../utils/fetchJson";
 
@@ -81,10 +82,10 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
           (zh ? "测试收集已触发。" : "Daily collection test triggered."),
       );
       qc.invalidateQueries({ queryKey: ["okr-members-without-okr-settings"] });
-    } catch (error: any) {
+    } catch (error) {
       setDailyTestState("error");
       setDailyTestMessage(
-        error?.message ||
+        caughtErrorMessage(error) ||
           (zh
             ? "测试触发失败，请重试。"
             : "Failed to trigger the test collection."),

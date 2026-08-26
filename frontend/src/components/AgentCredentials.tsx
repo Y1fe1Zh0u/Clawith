@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../services/apiError";
 import { credentialApi } from "../services/api";
 
 /* ── Types ── */
@@ -202,8 +203,8 @@ export default function AgentCredentials({ agentId }: Props) {
       setLoading(true);
       const data = await credentialApi.list(agentId);
       setCredentials(data);
-    } catch (e: any) {
-      setError(e.message || t("agent.credentials.error"));
+    } catch (error) {
+      setError(caughtErrorMessage(error) || t("agent.credentials.error"));
     } finally {
       setLoading(false);
     }
@@ -273,8 +274,10 @@ export default function AgentCredentials({ agentId }: Props) {
 
       setShowModal(false);
       await fetchCredentials();
-    } catch (e: any) {
-      setFormError(e.message || t("agent.credentials.saveError"));
+    } catch (error) {
+      setFormError(
+        caughtErrorMessage(error) || t("agent.credentials.saveError"),
+      );
     } finally {
       setSaving(false);
     }
@@ -285,8 +288,8 @@ export default function AgentCredentials({ agentId }: Props) {
       await credentialApi.delete(agentId, id);
       setDeletingId(null);
       await fetchCredentials();
-    } catch (e: any) {
-      setError(e.message || t("agent.credentials.deleteError"));
+    } catch (error) {
+      setError(caughtErrorMessage(error) || t("agent.credentials.deleteError"));
     }
   };
 

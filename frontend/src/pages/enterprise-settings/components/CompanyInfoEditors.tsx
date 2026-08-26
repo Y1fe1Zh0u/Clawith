@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../../../services/apiError";
 import { IconCheck } from "@tabler/icons-react";
 import {
   buildCompanyRegions,
@@ -244,9 +245,9 @@ export function CompanyLogoEditor() {
       setCropSource(null);
       qc.invalidateQueries({ queryKey: ["tenant", tenantId] });
       qc.invalidateQueries({ queryKey: ["my-tenants"] });
-    } catch (e: any) {
+    } catch (error) {
       setLogoError(
-        e.message ||
+        caughtErrorMessage(error) ||
           t("enterprise.logo.uploadFailed", "Failed to upload logo."),
       );
     } finally {
@@ -273,9 +274,10 @@ export function CompanyLogoEditor() {
       setLogoUrl("");
       qc.invalidateQueries({ queryKey: ["tenant", tenantId] });
       qc.invalidateQueries({ queryKey: ["my-tenants"] });
-    } catch (e: any) {
+    } catch (error) {
       setLogoError(
-        e.message || t("enterprise.logo.resetFailed", "Failed to reset logo."),
+        caughtErrorMessage(error) ||
+          t("enterprise.logo.resetFailed", "Failed to reset logo."),
       );
     } finally {
       setLogoSaving(false);
@@ -535,8 +537,8 @@ export function CompanyTimezoneEditor() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e: any) {
-      setError(e.message || "Failed to save timezone");
+    } catch (error) {
+      setError(caughtErrorMessage(error) || "Failed to save timezone");
     }
     setSaving(false);
   };
@@ -845,9 +847,9 @@ export function A2AAsyncToggle() {
         method: "PUT",
         body: JSON.stringify({ a2a_async_enabled: next }),
       });
-    } catch (e: any) {
+    } catch (error) {
       setEnabled(!next);
-      setError(e.message || "Failed to save A2A setting");
+      setError(caughtErrorMessage(error) || "Failed to save A2A setting");
     } finally {
       setSaving(false);
     }

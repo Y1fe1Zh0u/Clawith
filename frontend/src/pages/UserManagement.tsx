@@ -3,6 +3,7 @@
  */
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
 import LinearCopyButton from "../components/LinearCopyButton";
 import { useDialog } from "../components/Dialog/DialogProvider";
@@ -111,8 +112,8 @@ export default function UserManagement() {
       setTimeout(() => setToast(""), 2000);
       setEditingUserId(null);
       loadUsers();
-    } catch (e: any) {
-      setToast(`Error: ${e.message}`);
+    } catch (error) {
+      setToast(`Error: ${caughtErrorMessage(error)}`);
       setTimeout(() => setToast(""), 3000);
     }
     setSaving(false);
@@ -133,15 +134,16 @@ export default function UserManagement() {
         setUser({ ...currentUser, role: newRole as any });
       }
       loadUsers();
-    } catch (e: any) {
+    } catch (error) {
+      const message = caughtErrorMessage(error);
       const detail = (() => {
         try {
-          return JSON.parse(e.message)?.detail;
+          return message ? JSON.parse(message)?.detail : message;
         } catch {
-          return e.message;
+          return message;
         }
       })();
-      setToast(`Error: ${detail || e.message}`);
+      setToast(`Error: ${detail || message}`);
       setTimeout(() => setToast(""), 4000);
     }
     setChangingRoleUserId(null);
@@ -166,8 +168,8 @@ export default function UserManagement() {
       setInviteEmails("");
       // Refresh user list after invite
       loadUsers();
-    } catch (e: any) {
-      setToast(`Error: ${e.message}`);
+    } catch (error) {
+      setToast(`Error: ${caughtErrorMessage(error)}`);
       setTimeout(() => setToast(""), 3000);
     }
     setInviting(false);

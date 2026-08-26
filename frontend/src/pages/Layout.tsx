@@ -15,6 +15,7 @@ import {
   useLocation,
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { caughtErrorMessage } from "../services/apiError";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../stores";
 import { agentApi, tenantApi, authApi, onboardingApi } from "../services/api";
@@ -166,8 +167,8 @@ function AccountSettingsModal({
       const updated = await res.json();
       setUser(updated);
       showMsg(isChinese ? "个人信息已更新" : "Profile updated");
-    } catch (e: any) {
-      showMsg(e.message || "Failed", "error");
+    } catch (error) {
+      showMsg(caughtErrorMessage(error) || "Failed", "error");
     }
     setSaving(false);
   };
@@ -193,8 +194,8 @@ function AccountSettingsModal({
           ? "验证邮件已发送，请查收"
           : "Verification email sent. Please check your inbox.",
       );
-    } catch (e: any) {
-      showMsg(e.message || "Failed", "error");
+    } catch (error) {
+      showMsg(caughtErrorMessage(error) || "Failed", "error");
     }
     setResendingEmail(false);
   };
@@ -237,8 +238,8 @@ function AccountSettingsModal({
       setOldPassword("");
       setNewPassword("");
       setConfirmPassword("");
-    } catch (e: any) {
-      showMsg(e.message || "Failed", "error");
+    } catch (error) {
+      showMsg(caughtErrorMessage(error) || "Failed", "error");
     }
     setSaving(false);
   };
@@ -960,8 +961,8 @@ export default function Layout() {
       setShowTenantMenu(false);
       setShowTenantSetupModal(false);
       window.location.href = "/onboarding?mode=join";
-    } catch (err: any) {
-      setTenantFormError(err.message || "Failed to join company");
+    } catch (error) {
+      setTenantFormError(caughtErrorMessage(error) || "Failed to join company");
     } finally {
       setTenantFormLoading(false);
     }
@@ -986,8 +987,10 @@ export default function Layout() {
       setShowTenantMenu(false);
       setShowTenantSetupModal(false);
       window.location.href = "/onboarding?mode=create";
-    } catch (err: any) {
-      setTenantFormError(err.message || "Failed to create company");
+    } catch (error) {
+      setTenantFormError(
+        caughtErrorMessage(error) || "Failed to create company",
+      );
     } finally {
       setTenantFormLoading(false);
     }
