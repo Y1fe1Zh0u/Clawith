@@ -1,7 +1,7 @@
 /** Global state management with Zustand */
 
 import { create } from "zustand";
-import type { User, Agent } from "../types";
+import type { User } from "../types";
 
 interface AuthStore {
   user: User | null;

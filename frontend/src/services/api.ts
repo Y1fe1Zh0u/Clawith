@@ -1,6 +1,6 @@
 /** API service layer */
 
-import type { Agent, TokenResponse, User, Task, ChatMessage } from '../types';
+import type { Agent, TokenResponse, User, Task } from '../types';
 import { AppError, parseHttpError, parseHttpErrorResponse, normalizeUnknownError } from './apiError';
 
 export { ApiError, AppError } from './apiError';
