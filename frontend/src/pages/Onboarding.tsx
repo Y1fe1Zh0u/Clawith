@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconArrowRight } from "@tabler/icons-react";
 import { onboardingApi } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
 import {
   AtlasFrame,
@@ -102,8 +103,10 @@ export default function Onboarding() {
         result?.agent?.id || result?.onboarding?.personal_assistant_agent_id;
       setAssistantId(nextId);
       setStep("opening");
-    } catch (err: any) {
-      setError(err.message || "Failed to create personal assistant");
+    } catch (error) {
+      setError(
+        caughtErrorMessage(error) || "Failed to create personal assistant",
+      );
     } finally {
       setLoading(false);
     }
