@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../stores";
 import { authApi, tenantApi, fetchJson } from "../services/api";
-import { caughtErrorMessage } from "../services/apiError";
+import { ApiError, caughtErrorMessage } from "../services/apiError";
 import type { TokenResponse } from "../types";
 import {
   IconAlertTriangle,
@@ -11,6 +11,27 @@ import {
   IconCheck,
 } from "@tabler/icons-react";
 import { AtlasFrame, OriginPlate } from "../components/atlas";
+
+function verificationErrorDetail(
+  error: unknown,
+): { email?: string } | undefined {
+  if (!(error instanceof ApiError)) return undefined;
+  const detail = error.detail;
+  if (
+    typeof detail !== "object" ||
+    detail === null ||
+    !("needs_verification" in detail) ||
+    detail.needs_verification !== true
+  ) {
+    return undefined;
+  }
+  return {
+    email:
+      "email" in detail && typeof detail.email === "string"
+        ? detail.email
+        : undefined,
+  };
+}
 
 export default function Login() {
   const { t, i18n } = useTranslation();
@@ -352,22 +373,22 @@ export default function Login() {
           navigate("/");
         }
       }
-    } catch (err: any) {
+    } catch (error) {
       // Handle structured verification error
-      if (err.detail?.needs_verification) {
-        enterVerificationStep(
-          err.detail.email || form.login_identifier,
-          "home",
-        );
+      const verificationDetail = verificationErrorDetail(error);
+      if (verificationDetail) {
+        const verificationEmail =
+          verificationDetail.email || form.login_identifier;
+        enterVerificationStep(verificationEmail, "home");
         setSuccessMessage(
           i18n.language.startsWith("zh")
-            ? `请先输入发送到 ${err.detail.email || form.login_identifier} 的验证码。`
-            : `Enter the verification code sent to ${err.detail.email || form.login_identifier}.`,
+            ? `请先输入发送到 ${verificationEmail} 的验证码。`
+            : `Enter the verification code sent to ${verificationEmail}.`,
         );
         return;
       }
 
-      const msg = err.message || "";
+      const msg = caughtErrorMessage(error) || "";
       if (
         msg &&
         msg !== "Failed to fetch" &&
