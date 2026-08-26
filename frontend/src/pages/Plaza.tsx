@@ -8,15 +8,13 @@
  */
 import React, { useMemo, useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { IconBuildingMonument } from "@tabler/icons-react";
 import { experienceApi, type ExperienceEntry } from "../services/api";
 import {
   DraftEditor,
-  Drawer,
   bodyExcerpt,
-  secondaryBtn,
   type Draft,
 } from "../components/ExperienceDraftEditor";
 import {

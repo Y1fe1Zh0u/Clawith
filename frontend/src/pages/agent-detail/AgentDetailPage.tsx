@@ -15,7 +15,7 @@ import PromptModal from '../../components/PromptModal';
 import { appendLiveCodeOutput, type LivePreviewState } from '../../components/AgentBayLivePanel';
 import AgentSidePanel, { SidePanelTab } from '../../components/AgentSidePanel';
 import type { WorkspaceActivity, WorkspaceLiveDraft } from '../../components/WorkspaceOperationPanel';
-import { activityApi, agentApi, channelApi, enterpriseApi, experienceApi, fileApi, focusApi, scheduleApi, skillApi, taskApi, tenantApi, triggerApi, uploadFileWithProgress } from '../../services/api';
+import { activityApi, agentApi, enterpriseApi, experienceApi, fileApi, focusApi, scheduleApi, skillApi, taskApi, tenantApi, triggerApi, uploadFileWithProgress } from '../../services/api';
 import type { FocusApiItem } from '../../services/api';
 import ModelSwitcher from '../../components/ModelSwitcher';
 import { useAppStore } from '../../stores';
@@ -29,8 +29,6 @@ import {
     IconCheck,
     IconChevronDown,
     IconClock,
-    IconDna,
-    IconDownload,
     IconEye,
     IconFileText,
     IconFolder,
@@ -39,7 +37,6 @@ import {
     IconMailForward,
     IconMessageCircle,
     IconPaperclip,
-    IconPlugConnected,
     IconRobot,
     IconSearch,
     IconSend,

@@ -9,7 +9,6 @@ import {
   IconPlugConnected,
   IconSettings,
   IconSparkles,
-  IconUser,
   IconX,
 } from "@tabler/icons-react";
 import { agentApi, authApi, enterpriseApi, tenantApi } from "../services/api";
