@@ -107,7 +107,7 @@ export default function UserManagement() {
     if (!editingUserId) return;
     setSaving(true);
     try {
-      await fetchJson<void>(`/users/${editingUserId}/quota`, {
+      await fetchJson<unknown>(`/users/${editingUserId}/quota`, {
         method: "PATCH",
         body: JSON.stringify(editForm),
       });
@@ -126,7 +126,7 @@ export default function UserManagement() {
   const handleRoleChange = async (userId: string, newRole: User["role"]) => {
     setChangingRoleUserId(userId);
     try {
-      await fetchJson<void>(`/users/${userId}/role`, {
+      await fetchJson<unknown>(`/users/${userId}/role`, {
         method: "PATCH",
         body: JSON.stringify({ role: newRole }),
       });

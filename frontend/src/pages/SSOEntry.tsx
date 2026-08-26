@@ -32,7 +32,7 @@ export default function SSOEntry() {
     }
 
     // 1. Mark as scanned
-    fetchJson<void>(`/sso/session/${sid}/scan`, { method: "PUT" }).catch(
+    fetchJson<unknown>(`/sso/session/${sid}/scan`, { method: "PUT" }).catch(
       () => {},
     );
 

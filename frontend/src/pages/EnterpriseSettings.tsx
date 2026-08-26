@@ -338,7 +338,7 @@ export default function EnterpriseSettings() {
     if (quotaLoadState.status !== "ready") return;
     setQuotaSaving(true);
     try {
-      await fetchJson<void>("/enterprise/tenant-quotas", {
+      await fetchJson<unknown>("/enterprise/tenant-quotas", {
         method: "PATCH",
         body: JSON.stringify(quotaForm),
       });
@@ -416,10 +416,13 @@ export default function EnterpriseSettings() {
       return;
     setCompanyIntroSaving(true);
     try {
-      await fetchJson<void>(`/enterprise/system-settings/${companyIntroKey}`, {
-        method: "PUT",
-        body: JSON.stringify({ value: { content: companyIntro } }),
-      });
+      await fetchJson<unknown>(
+        `/enterprise/system-settings/${companyIntroKey}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ value: { content: companyIntro } }),
+        },
+      );
       setCompanyIntroSaved(true);
       setTimeout(() => setCompanyIntroSaved(false), 2000);
     } catch (error) {
@@ -696,7 +699,7 @@ export default function EnterpriseSettings() {
             }),
           }).then(parseCreatedMcpTool),
         saveCredential: async () => {
-          await fetchJson<void>("/tools/mcp-server", {
+          await fetchJson<unknown>("/tools/mcp-server", {
             method: "PUT",
             body: JSON.stringify({
               server_name: serverName,
@@ -707,7 +710,7 @@ export default function EnterpriseSettings() {
           });
         },
         deleteTool: async (id) => {
-          await fetchJson<void>(`/tools/${id}`, { method: "DELETE" });
+          await fetchJson<unknown>(`/tools/${id}`, { method: "DELETE" });
         },
       },
     );
@@ -770,7 +773,7 @@ export default function EnterpriseSettings() {
   });
   const resolveApproval = useMutation({
     mutationFn: ({ id, action }: { id: string; action: string }) =>
-      fetchJson<void>(`/enterprise/approvals/${id}/resolve`, {
+      fetchJson<unknown>(`/enterprise/approvals/${id}/resolve`, {
         method: "POST",
         body: JSON.stringify({ action }),
       }),
@@ -2132,7 +2135,7 @@ export default function EnterpriseSettings() {
                                           );
                                           if (!ok) return;
                                           try {
-                                            await fetchJson<void>(
+                                            await fetchJson<unknown>(
                                               `/tools/agent-tool/${row.agent_tool_id}`,
                                               { method: "DELETE" },
                                             );
@@ -2686,7 +2689,7 @@ export default function EnterpriseSettings() {
                         tool_id: t.id,
                         enabled,
                       }));
-                      await fetchJson<void>("/tools/bulk", {
+                      await fetchJson<unknown>("/tools/bulk", {
                         method: "PUT",
                         body: JSON.stringify(payload),
                       });
@@ -2911,7 +2914,7 @@ export default function EnterpriseSettings() {
                                   },
                                 );
                                 if (!ok) return;
-                                await fetchJson<void>(`/tools/${tool.id}`, {
+                                await fetchJson<unknown>(`/tools/${tool.id}`, {
                                   method: "DELETE",
                                 });
                                 loadAllTools();
@@ -2935,7 +2938,7 @@ export default function EnterpriseSettings() {
                               type="checkbox"
                               checked={tool.enabled}
                               onChange={async (e) => {
-                                await fetchJson<void>(`/tools/${tool.id}`, {
+                                await fetchJson<unknown>(`/tools/${tool.id}`, {
                                   method: "PUT",
                                   body: JSON.stringify({
                                     enabled: e.target.checked,
@@ -3634,7 +3637,7 @@ export default function EnterpriseSettings() {
                           onClick={async () => {
                             setMcpServerSaving(true);
                             try {
-                              await fetchJson<void>("/tools/mcp-server", {
+                              await fetchJson<unknown>("/tools/mcp-server", {
                                 method: "PUT",
                                 body: JSON.stringify({
                                   server_name: editingMcpServer.server_name,
@@ -4020,14 +4023,17 @@ export default function EnterpriseSettings() {
                                       );
                                     }
                                   } else {
-                                    await fetchJson<void>(`/tools/${tool.id}`, {
-                                      method: "PUT",
-                                      body: JSON.stringify({
-                                        config: editingConfig,
-                                        tenant_id:
-                                          selectedTenantId || undefined,
-                                      }),
-                                    });
+                                    await fetchJson<unknown>(
+                                      `/tools/${tool.id}`,
+                                      {
+                                        method: "PUT",
+                                        body: JSON.stringify({
+                                          config: editingConfig,
+                                          tenant_id:
+                                            selectedTenantId || undefined,
+                                        }),
+                                      },
+                                    );
                                   }
                                   setEditingToolId(null);
                                   loadAllTools();
@@ -4218,7 +4224,7 @@ export default function EnterpriseSettings() {
                                     (tl) => tl.name === primaryToolName,
                                   ) || catTools[0];
                                 if (representativeTool) {
-                                  await fetchJson<void>(
+                                  await fetchJson<unknown>(
                                     `/tools/${representativeTool.id}`,
                                     {
                                       method: "PUT",

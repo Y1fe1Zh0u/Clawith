@@ -474,7 +474,7 @@ function PlatformTab() {
     if (!requirePlatformConfig()) return;
     setEmailConfigSaving(true);
     try {
-      await fetchJson<void>(
+      await fetchJson<unknown>(
         "/enterprise/system-settings/system_email_platform",
         {
           method: "PUT",
@@ -500,7 +500,7 @@ function PlatformTab() {
     setTestEmailSending(true);
     setTestEmailResult(null);
     try {
-      await fetchJson<void>("/enterprise/system-email/test", {
+      await fetchJson<unknown>("/enterprise/system-email/test", {
         method: "POST",
         body: JSON.stringify({ email: testEmailAddr }),
       });
@@ -524,7 +524,7 @@ function PlatformTab() {
     if (!requirePlatformConfig()) return;
     setTemplatesSaving(true);
     try {
-      await fetchJson<void>("/enterprise/email-templates", {
+      await fetchJson<unknown>("/enterprise/email-templates", {
         method: "PUT",
         body: JSON.stringify({ templates: emailTemplates }),
       });
