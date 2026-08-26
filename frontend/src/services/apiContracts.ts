@@ -251,6 +251,23 @@ export interface UploadResponse {
   image_data_url: string;
 }
 
+export interface WorkspaceUploadResponse {
+  status: string;
+  path: string;
+  url: string;
+  filename: string;
+  size: number;
+  extracted_text_path: string | null;
+}
+
+export interface GroupWorkspaceUploadResponse {
+  path: string;
+  size: number;
+  version_token: string;
+  modified_at?: string | null;
+  revision_id?: string | null;
+}
+
 export interface ChannelConfigRequest {
   channel_type: string;
   app_id?: string;

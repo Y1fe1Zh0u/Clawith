@@ -1,6 +1,8 @@
 /** Group chat API client — /api/groups. */
 
 import { fetchJson, uploadFileWithProgress } from "./api";
+import { parseGroupWorkspaceUploadResponse } from "./apiResponseParsers";
+import type { GroupWorkspaceUploadResponse } from "./apiContracts";
 import type {
   Group,
   GroupMember,
@@ -239,13 +241,7 @@ export const groupApi = {
     requireAbsent = false,
     onProgress?: (percent: number) => void,
   ) =>
-    uploadFileWithProgress<{
-      path: string;
-      size: number;
-      version_token: string;
-      modified_at?: string | null;
-      revision_id?: string | null;
-    }>(
+    uploadFileWithProgress<GroupWorkspaceUploadResponse>(
       `/groups/${groupId}/workspace/upload${qs({
         path,
         expected_version_token: expectedVersionToken ?? undefined,
@@ -253,6 +249,9 @@ export const groupApi = {
       })}`,
       file,
       onProgress,
+      undefined,
+      undefined,
+      parseGroupWorkspaceUploadResponse,
     ).promise,
 
   downloadWorkspaceUrl: (

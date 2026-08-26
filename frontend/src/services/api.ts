@@ -51,6 +51,7 @@ import type {
   Trigger,
   TriggerUpdateRequest,
   UploadResponse,
+  WorkspaceUploadResponse,
 } from "./apiContracts";
 import {
   AppError,
@@ -58,13 +59,47 @@ import {
   parseHttpErrorResponse,
   normalizeUnknownError,
 } from "./apiError";
+import {
+  parseAgentCollaboratorsResponse,
+  parseAgentListResponse,
+  parseAgentMetricsResponse,
+  parseAgentResponse,
+  parseAgentTemplatesResponse,
+  parseCompanyCreateResponse,
+  parseCompanyStatsListResponse,
+  parseCompanyStatsResponse,
+  parseControlScreenshotResponse,
+  parseControlStatusResponse,
+  parseControlUnlockResponse,
+  parseCreatedAgentResponse,
+  parseFileItemsResponse,
+  parseFileLockResponse,
+  parseFileMutationResponse,
+  parseFilePreviewResponse,
+  parseFileRevisionsResponse,
+  parseLoginResponse,
+  parsePlatformSettingsResponse,
+  parseResolvedTenantResponse,
+  parseTenantChoicesResponse,
+  parseTenantResponse,
+  parseTenantSetupResponse,
+  parseTenantTokenUsageResponse,
+  parseUploadResponse,
+  parseUserResponse,
+  parseWorkspaceUploadResponse,
+  type ResponseParser,
+} from "./apiResponseParsers";
 
 export { ApiError, AppError } from "./apiError";
 export type { ApiErrorContext, AppErrorContext, ErrorSource } from "./apiError";
 
 const API_BASE = "/api";
 
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(
+  url: string,
+  options: RequestInit = {},
+  parser?: ResponseParser<T>,
+): Promise<T> {
   const token = localStorage.getItem("token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -101,18 +136,71 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     throw apiError;
   }
 
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) {
+    throw new AppError({
+      message: "API returned no content for a JSON response",
+      code: "invalid_api_response",
+      source: "http",
+      retryable: false,
+    });
+  }
+  if (parser) {
+    const value: unknown = await res.json();
+    return parser(value);
+  }
+  return res.json();
+}
+
+async function requestVoid(
+  url: string,
+  options: RequestInit = {},
+): Promise<void> {
+  await requestRaw(url, options, true);
+}
+
+async function requestRaw(
+  url: string,
+  options: RequestInit,
+  expectNoContent: boolean,
+): Promise<unknown> {
+  const token = localStorage.getItem("token");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${url}`, { ...options, headers });
+  } catch (error) {
+    throw normalizeUnknownError(error, {
+      code: "network_error",
+      source: "http",
+      retryable: true,
+    });
+  }
+  if (!res.ok) throw await parseHttpErrorResponse(res);
+  if (expectNoContent) {
+    if (res.status !== 204) {
+      throw new AppError({
+        message: "API returned content where no content was expected",
+        code: "invalid_api_response",
+        source: "http",
+        retryable: false,
+      });
+    }
+    return undefined;
+  }
   return res.json();
 }
 
 /** Legacy/Internal generic fetcher */
 export const fetchJson = request;
 
-async function uploadFile<T = UploadResponse>(
+async function uploadFile(
   url: string,
   file: File,
   extraFields?: Record<string, string>,
-): Promise<T> {
+): Promise<WorkspaceUploadResponse> {
   const token = localStorage.getItem("token");
   const formData = new FormData();
   formData.append("file", file);
@@ -138,21 +226,45 @@ async function uploadFile<T = UploadResponse>(
   if (!res.ok) {
     throw await parseHttpErrorResponse(res);
   }
-  return res.json();
+  const value: unknown = await res.json();
+  return parseWorkspaceUploadResponse(value);
 }
 
 // Upload with progress tracking via XMLHttpRequest.
 // Returns { promise, abort } — call abort() to cancel the upload.
 // Progress callback: 0-100 = upload phase, 101 = processing phase (server is parsing the file).
-export function uploadFileWithProgress<T = UploadResponse>(
+export function uploadFileWithProgress(
+  url: "/chat/upload",
+  file: File,
+  onProgress?: (percent: number) => void,
+  extraFields?: Record<string, string>,
+  timeoutMs?: number,
+): { promise: Promise<UploadResponse>; abort: () => void };
+export function uploadFileWithProgress(
   url: string,
   file: File,
   onProgress?: (percent: number) => void,
   extraFields?: Record<string, string>,
-  timeoutMs: number = 120_000,
-): { promise: Promise<T>; abort: () => void } {
+  timeoutMs?: number,
+): { promise: Promise<WorkspaceUploadResponse>; abort: () => void };
+export function uploadFileWithProgress<T>(
+  url: string,
+  file: File,
+  onProgress: ((percent: number) => void) | undefined,
+  extraFields: Record<string, string> | undefined,
+  timeoutMs: number | undefined,
+  parser: ResponseParser<T>,
+): { promise: Promise<T>; abort: () => void };
+export function uploadFileWithProgress(
+  url: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+  extraFields?: Record<string, string>,
+  timeoutMs?: number,
+  parser?: ResponseParser<unknown>,
+): { promise: Promise<unknown>; abort: () => void } {
   const xhr = new XMLHttpRequest();
-  const promise = new Promise<T>((resolve, reject) => {
+  const promise = new Promise<unknown>((resolve, reject) => {
     const token = localStorage.getItem("token");
     const formData = new FormData();
     formData.append("file", file);
@@ -178,7 +290,13 @@ export function uploadFileWithProgress<T = UploadResponse>(
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          resolve(JSON.parse(xhr.responseText));
+          const value: unknown = JSON.parse(xhr.responseText);
+          const responseParser =
+            parser ??
+            (url === "/chat/upload"
+              ? parseUploadResponse
+              : parseWorkspaceUploadResponse);
+          resolve(responseParser(value));
         } catch {
           reject(
             new AppError({
@@ -227,7 +345,7 @@ export function uploadFileWithProgress<T = UploadResponse>(
           retryable: false,
         }),
       );
-    xhr.timeout = timeoutMs;
+    xhr.timeout = timeoutMs ?? 120_000;
     xhr.send(formData);
   });
   return { promise, abort: () => xhr.abort() };
@@ -265,7 +383,11 @@ export const authApi = {
           login_identifier: string;
           tenants: OAuthTenantChoice[];
         }
-    >("/auth/login", { method: "POST", body: JSON.stringify(data) }),
+    >(
+      "/auth/login",
+      { method: "POST", body: JSON.stringify(data) },
+      parseLoginResponse,
+    ),
 
   forgotPassword: (data: { email: string }) =>
     request<{ ok: boolean; message: string }>("/auth/forgot-password", {
@@ -284,10 +406,14 @@ export const authApi = {
       `/auth/email-hint?username=${encodeURIComponent(username)}`,
     ),
 
-  me: () => request<User>("/auth/me"),
+  me: () => request<User>("/auth/me", {}, parseUserResponse),
 
   updateMe: (data: Partial<User>) =>
-    request<User>("/auth/me", { method: "PATCH", body: JSON.stringify(data) }),
+    request<User>(
+      "/auth/me",
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseUserResponse,
+    ),
 
   verifyEmail: (token: string) =>
     request<{
@@ -307,7 +433,8 @@ export const authApi = {
       body: JSON.stringify({ email }),
     }),
 
-  getMyTenants: () => request<TenantChoice[]>("/auth/my-tenants"),
+  getMyTenants: () =>
+    request<TenantChoice[]>("/auth/my-tenants", {}, parseTenantChoicesResponse),
 
   switchTenant: (tenantId: string) =>
     request<{ access_token: string; redirect_url?: string; message?: string }>(
@@ -319,16 +446,21 @@ export const authApi = {
 // ─── Tenants ──────────────────────────────────────────
 export const tenantApi = {
   selfCreate: (data: { name: string }) =>
-    request<TenantSetupResponse>("/tenants/self-create", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<TenantSetupResponse>(
+      "/tenants/self-create",
+      { method: "POST", body: JSON.stringify(data) },
+      parseTenantSetupResponse,
+    ),
 
   join: (invitationCode: string) =>
-    request<TenantSetupResponse>("/tenants/join", {
-      method: "POST",
-      body: JSON.stringify({ invitation_code: invitationCode }),
-    }),
+    request<TenantSetupResponse>(
+      "/tenants/join",
+      {
+        method: "POST",
+        body: JSON.stringify({ invitation_code: invitationCode }),
+      },
+      parseTenantSetupResponse,
+    ),
 
   registrationConfig: () =>
     request<{ allow_self_create_company: boolean }>(
@@ -338,11 +470,18 @@ export const tenantApi = {
   resolveByDomain: (domain: string) =>
     request<ResolvedTenant>(
       `/tenants/resolve-by-domain?domain=${encodeURIComponent(domain)}`,
+      {},
+      parseResolvedTenantResponse,
     ),
 
-  me: () => request<Tenant>("/tenants/me"),
+  me: () => request<Tenant>("/tenants/me", {}, parseTenantResponse),
 
-  tokenUsage: () => request<TenantTokenUsage>("/tenants/me/token-usage"),
+  tokenUsage: () =>
+    request<TenantTokenUsage>(
+      "/tenants/me/token-usage",
+      {},
+      parseTenantTokenUsageResponse,
+    ),
 };
 
 export const onboardingApi = {
@@ -370,66 +509,110 @@ export const onboardingApi = {
 };
 
 export const adminApi = {
-  listCompanies: () => request<CompanyStats[]>("/admin/companies"),
+  listCompanies: () =>
+    request<CompanyStats[]>(
+      "/admin/companies",
+      {},
+      parseCompanyStatsListResponse,
+    ),
 
   createCompany: (data: { name: string }) =>
-    request<CompanyCreateResponse>("/admin/companies", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<CompanyCreateResponse>(
+      "/admin/companies",
+      { method: "POST", body: JSON.stringify(data) },
+      parseCompanyCreateResponse,
+    ),
 
   updateCompany: (id: string, data: TenantUpdate) =>
-    request<Tenant>(`/tenants/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+    request<Tenant>(
+      `/tenants/${id}`,
+      { method: "PUT", body: JSON.stringify(data) },
+      parseTenantResponse,
+    ),
 
   toggleCompany: (id: string) =>
-    request<CompanyStats>(`/admin/companies/${id}/toggle`, { method: "PUT" }),
+    request<CompanyStats>(
+      `/admin/companies/${id}/toggle`,
+      { method: "PUT" },
+      parseCompanyStatsResponse,
+    ),
 
   getPlatformSettings: () =>
-    request<PlatformSettings>("/admin/platform-settings"),
+    request<PlatformSettings>(
+      "/admin/platform-settings",
+      {},
+      parsePlatformSettingsResponse,
+    ),
 
   updatePlatformSettings: (data: Partial<PlatformSettings>) =>
-    request<PlatformSettings>("/admin/platform-settings", {
-      method: "PUT",
-      body: JSON.stringify(data),
-    }),
+    request<PlatformSettings>(
+      "/admin/platform-settings",
+      { method: "PUT", body: JSON.stringify(data) },
+      parsePlatformSettingsResponse,
+    ),
 };
 
 // ─── Agents ───────────────────────────────────────────
 export const agentApi = {
   list: (tenantId?: string) =>
-    request<Agent[]>(`/agents/${tenantId ? `?tenant_id=${tenantId}` : ""}`),
+    request<Agent[]>(
+      `/agents/${tenantId ? `?tenant_id=${tenantId}` : ""}`,
+      {},
+      parseAgentListResponse,
+    ),
 
-  get: (id: string) => request<Agent>(`/agents/${id}`),
+  get: (id: string) => request<Agent>(`/agents/${id}`, {}, parseAgentResponse),
 
   create: (data: AgentCreateRequest) =>
-    request<CreatedAgent>("/agents/", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<CreatedAgent>(
+      "/agents/",
+      { method: "POST", body: JSON.stringify(data) },
+      parseCreatedAgentResponse,
+    ),
 
   update: (id: string, data: Partial<Agent>) =>
-    request<Agent>(`/agents/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
+    request<Agent>(
+      `/agents/${id}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      parseAgentResponse,
+    ),
 
-  delete: (id: string) => request<void>(`/agents/${id}`, { method: "DELETE" }),
+  delete: (id: string) => requestVoid(`/agents/${id}`, { method: "DELETE" }),
 
   start: (id: string) =>
-    request<Agent>(`/agents/${id}/start`, { method: "POST" }),
+    request<Agent>(
+      `/agents/${id}/start`,
+      { method: "POST" },
+      parseAgentResponse,
+    ),
 
   stop: (id: string) =>
-    request<Agent>(`/agents/${id}/stop`, { method: "POST" }),
+    request<Agent>(
+      `/agents/${id}/stop`,
+      { method: "POST" },
+      parseAgentResponse,
+    ),
 
-  metrics: (id: string) => request<AgentMetrics>(`/agents/${id}/metrics`),
+  metrics: (id: string) =>
+    request<AgentMetrics>(
+      `/agents/${id}/metrics`,
+      {},
+      parseAgentMetricsResponse,
+    ),
 
   collaborators: (id: string) =>
-    request<AgentCollaborator[]>(`/agents/${id}/collaborators`),
+    request<AgentCollaborator[]>(
+      `/agents/${id}/collaborators`,
+      {},
+      parseAgentCollaboratorsResponse,
+    ),
 
-  templates: () => request<AgentTemplate[]>("/agents/templates"),
+  templates: () =>
+    request<AgentTemplate[]>(
+      "/agents/templates",
+      {},
+      parseAgentTemplatesResponse,
+    ),
 
   // OpenClaw gateway
   generateApiKey: (id: string) =>
@@ -478,6 +661,8 @@ export const fileApi = {
   list: (agentId: string, path: string = "") =>
     request<FileItem[]>(
       `/agents/${agentId}/files/?path=${encodeURIComponent(path)}`,
+      {},
+      parseFileItemsResponse,
     ),
 
   read: (agentId: string, path: string) =>
@@ -523,13 +708,19 @@ export const fileApi = {
   preview: (agentId: string, path: string) =>
     request<FilePreview>(
       `/agents/${agentId}/files/preview?path=${encodeURIComponent(path)}`,
+      {},
+      parseFilePreviewResponse,
     ),
 
   lock: (agentId: string, path: string, sessionId?: string | null) =>
-    request<FileLockResponse>(`/agents/${agentId}/files/locks`, {
-      method: "POST",
-      body: JSON.stringify({ path, session_id: sessionId || undefined }),
-    }),
+    request<FileLockResponse>(
+      `/agents/${agentId}/files/locks`,
+      {
+        method: "POST",
+        body: JSON.stringify({ path, session_id: sessionId || undefined }),
+      },
+      parseFileLockResponse,
+    ),
 
   unlock: (agentId: string, path: string) =>
     request<FileLockResponse>(
@@ -537,18 +728,22 @@ export const fileApi = {
       {
         method: "DELETE",
       },
+      parseFileLockResponse,
     ),
 
   revisions: (agentId: string, path: string) =>
     request<FileRevision[]>(
       `/agents/${agentId}/files/revisions?path=${encodeURIComponent(path)}`,
+      {},
+      parseFileRevisionsResponse,
     ),
 
   restoreRevision: (agentId: string, revisionId: string) =>
-    request<FileMutationResponse>(`/agents/${agentId}/files/restore`, {
-      method: "POST",
-      body: JSON.stringify({ revision_id: revisionId }),
-    }),
+    request<FileMutationResponse>(
+      `/agents/${agentId}/files/restore`,
+      { method: "POST", body: JSON.stringify({ revision_id: revisionId }) },
+      parseFileMutationResponse,
+    ),
 
   upload: (
     agentId: string,
@@ -568,10 +763,11 @@ export const fileApi = {
         ),
 
   importSkill: (agentId: string, skillId: string) =>
-    request<FileMutationResponse>(`/agents/${agentId}/files/import-skill`, {
-      method: "POST",
-      body: JSON.stringify({ skill_id: skillId }),
-    }),
+    request<FileMutationResponse>(
+      `/agents/${agentId}/files/import-skill`,
+      { method: "POST", body: JSON.stringify({ skill_id: skillId }) },
+      parseFileMutationResponse,
+    ),
 
   downloadUrl: (
     agentId: string,
@@ -650,7 +846,7 @@ export const channelApi = {
     }),
 
   delete: (agentId: string) =>
-    request<void>(`/agents/${agentId}/channel`, { method: "DELETE" }),
+    requestVoid(`/agents/${agentId}/channel`, { method: "DELETE" }),
 
   webhookUrl: (agentId: string) =>
     request<{ webhook_url: string }>(
@@ -668,7 +864,7 @@ export const enterpriseApi = {
   },
 
   setDefaultModel: (modelId: string) =>
-    request<void>(`/enterprise/llm-models/${modelId}/set-default`, {
+    requestVoid(`/enterprise/llm-models/${modelId}/set-default`, {
       method: "POST",
     }),
   templates: () => request<AgentTemplate[]>("/agents/templates"),
@@ -746,7 +942,7 @@ export const scheduleApi = {
     }),
 
   delete: (agentId: string, scheduleId: string) =>
-    request<void>(`/agents/${agentId}/schedules/${scheduleId}`, {
+    requestVoid(`/agents/${agentId}/schedules/${scheduleId}`, {
       method: "DELETE",
     }),
 
@@ -775,7 +971,7 @@ export const skillApi = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
-  delete: (id: string) => request<void>(`/skills/${id}`, { method: "DELETE" }),
+  delete: (id: string) => requestVoid(`/skills/${id}`, { method: "DELETE" }),
   // Path-based browse for FileBrowser
   browse: {
     list: (path: string) =>
@@ -900,7 +1096,7 @@ export const credentialApi = {
     }),
 
   delete: (agentId: string, credentialId: string) =>
-    request<void>(`/agents/${agentId}/credentials/${credentialId}`, {
+    requestVoid(`/agents/${agentId}/credentials/${credentialId}`, {
       method: "DELETE",
     }),
 };
@@ -911,22 +1107,25 @@ export const controlApi = {
     agentId: string,
     data: { session_id: string; x: number; y: number; button?: string },
   ) =>
-    request<ControlStatusResponse>(`/agents/${agentId}/control/click`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlStatusResponse>(
+      `/agents/${agentId}/control/click`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseControlStatusResponse,
+    ),
 
   type: (agentId: string, data: { session_id: string; text: string }) =>
-    request<ControlStatusResponse>(`/agents/${agentId}/control/type`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlStatusResponse>(
+      `/agents/${agentId}/control/type`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseControlStatusResponse,
+    ),
 
   pressKeys: (agentId: string, data: { session_id: string; keys: string[] }) =>
-    request<ControlStatusResponse>(`/agents/${agentId}/control/press_keys`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlStatusResponse>(
+      `/agents/${agentId}/control/press_keys`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseControlStatusResponse,
+    ),
 
   /** Simulate a natural human drag (Bezier curve trajectory) for slider CAPTCHAs. */
   drag: (
@@ -940,10 +1139,11 @@ export const controlApi = {
       duration_ms?: number;
     },
   ) =>
-    request<ControlStatusResponse>(`/agents/${agentId}/control/drag`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlStatusResponse>(
+      `/agents/${agentId}/control/drag`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseControlStatusResponse,
+    ),
 
   /** Get the current active page URL from the browser session (for auto-populating domain). */
   currentUrl: (agentId: string, data: { session_id: string }) =>
@@ -959,16 +1159,18 @@ export const controlApi = {
         method: "POST",
         body: JSON.stringify(data),
       },
+      parseControlScreenshotResponse,
     ),
 
   lock: (
     agentId: string,
     data: { session_id: string; platform_hint?: string; env_type?: string },
   ) =>
-    request<ControlStatusResponse>(`/agents/${agentId}/control/lock`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlStatusResponse>(
+      `/agents/${agentId}/control/lock`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseControlStatusResponse,
+    ),
 
   unlock: (
     agentId: string,
@@ -978,10 +1180,11 @@ export const controlApi = {
       platform_hint?: string;
     },
   ) =>
-    request<ControlUnlockResponse>(`/agents/${agentId}/control/unlock`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+    request<ControlUnlockResponse>(
+      `/agents/${agentId}/control/unlock`,
+      { method: "POST", body: JSON.stringify(data) },
+      parseControlUnlockResponse,
+    ),
 };
 
 // ─── Experience Library ───────────────────────────────
