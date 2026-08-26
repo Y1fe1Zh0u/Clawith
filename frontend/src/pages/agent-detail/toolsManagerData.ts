@@ -59,6 +59,40 @@ export async function requestAgentToolsWithConfig<T>({
   return parsePayload(await response.json());
 }
 
+interface RequestToolsJsonOptions<T> {
+  url: string;
+  token: string | null;
+  method?: "GET" | "POST";
+  body?: unknown;
+  signal?: AbortSignal;
+  parsePayload: (payload: unknown) => T;
+  parseError: (response: Response) => Promise<Error>;
+  fetchImpl?: FetchTools;
+}
+
+export async function requestToolsJson<T>({
+  url,
+  token,
+  method = "GET",
+  body,
+  signal,
+  parsePayload,
+  parseError,
+  fetchImpl = fetch,
+}: RequestToolsJsonOptions<T>): Promise<T> {
+  const response = await fetchImpl(url, {
+    method,
+    signal,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token || ""}`,
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (!response.ok) throw await parseError(response);
+  return parsePayload(await response.json());
+}
+
 interface RequestToolsMutationOptions {
   url: string;
   token: string | null;
@@ -85,4 +119,27 @@ export async function requestToolsMutation({
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (!response.ok) throw await parseError(response);
+}
+
+export function resetAgentToolConfig({
+  agentId,
+  toolId,
+  token,
+  parseError,
+  fetchImpl,
+}: {
+  agentId: string;
+  toolId: string;
+  token: string | null;
+  parseError: (response: Response) => Promise<Error>;
+  fetchImpl?: FetchTools;
+}): Promise<void> {
+  return requestToolsMutation({
+    url: `/api/tools/agents/${encodeURIComponent(agentId)}/tool-config/${encodeURIComponent(toolId)}`,
+    token,
+    method: "PUT",
+    body: { config: {} },
+    parseError,
+    fetchImpl,
+  });
 }

@@ -35,12 +35,15 @@ import {
 import {
   parseCompleteList,
   requestAgentToolsWithConfig,
+  requestToolsJson,
   requestToolsMutation,
+  resetAgentToolConfig,
   updateToolEnabled,
 } from "../toolsManagerData";
 
 type ToolConfig = Record<string, JsonValue>;
 type ToolStatusFilter = "all" | "enabled" | "disabled" | "configured";
+type ConfigLoadStatus = "idle" | "loading" | "ready" | "error";
 
 const TOOL_STATUS_FILTERS: readonly ToolStatusFilter[] = [
   "all",
@@ -102,6 +105,12 @@ interface EmailTestResponse {
   imap?: string;
   smtp?: string;
   error?: string;
+}
+
+interface CategoryTestResponse {
+  ok: boolean;
+  message?: string;
+  error?: JsonValue;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -254,13 +263,19 @@ const parseAgentTools = (value: unknown): AgentTool[] =>
     contractName: "agent tools",
   });
 
-const parseCategoryConfig = (value: unknown): CategoryConfigResponse =>
-  isRecord(value)
-    ? {
-        global_config: parseToolConfig(value.global_config),
-        agent_config: parseToolConfig(value.agent_config),
-      }
-    : { global_config: {}, agent_config: {} };
+const parseCategoryConfig = (value: unknown): CategoryConfigResponse => {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.global_config) ||
+    !isRecord(value.agent_config)
+  ) {
+    throw new Error("Invalid category configuration response");
+  }
+  return {
+    global_config: parseToolConfig(value.global_config),
+    agent_config: parseToolConfig(value.agent_config),
+  };
+};
 
 const parseEmailTestResponse = (value: unknown): EmailTestResponse => {
   if (!isRecord(value)) return { ok: false, error: "Invalid response" };
@@ -269,6 +284,23 @@ const parseEmailTestResponse = (value: unknown): EmailTestResponse => {
     ...(typeof value.imap === "string" ? { imap: value.imap } : {}),
     ...(typeof value.smtp === "string" ? { smtp: value.smtp } : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
+  };
+};
+
+const parseCategoryTestResponse = (value: unknown): CategoryTestResponse => {
+  if (!isRecord(value) || typeof value.ok !== "boolean") {
+    throw new Error("Invalid category test response");
+  }
+  if (value.message !== undefined && typeof value.message !== "string") {
+    throw new Error("Invalid category test response");
+  }
+  if (value.error !== undefined && !isJsonValue(value.error)) {
+    throw new Error("Invalid category test response");
+  }
+  return {
+    ok: value.ok,
+    ...(typeof value.message === "string" ? { message: value.message } : {}),
+    ...(value.error !== undefined ? { error: value.error } : {}),
   };
 };
 
@@ -311,6 +343,11 @@ export default function ToolsManager({
   const [configData, setConfigData] = useState<ToolConfig>({});
   const [configJson, setConfigJson] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
+  const [configLoadStatus, setConfigLoadStatus] =
+    useState<ConfigLoadStatus>("idle");
+  const [configLoadError, setConfigLoadError] = useState("");
+  const [categoryConfigController, setCategoryConfigController] =
+    useState<AbortController | null>(null);
   const [toolTab, setToolTab] = useState<"company" | "installed">("company");
   const [deletingToolId, setDeletingToolId] = useState<string | null>(null);
   const [configCategory, setConfigCategory] = useState<string | null>(null);
@@ -480,7 +517,11 @@ export default function ToolsManager({
   };
 
   const openConfig = (tool: AgentTool) => {
+    categoryConfigController?.abort();
+    setCategoryConfigController(null);
     setConfigTool(tool);
+    setConfigLoadStatus("ready");
+    setConfigLoadError("");
     setShowAdvancedToolConfig(false);
     // Build merged config: start with global defaults, overlay agent overrides.
     // For sensitive fields, only use agent_config values (global ones are masked
@@ -503,46 +544,85 @@ export default function ToolsManager({
   };
 
   const openCategoryConfig = async (category: string) => {
+    categoryConfigController?.abort();
+    const controller = new AbortController();
+    setCategoryConfigController(controller);
     setConfigCategory(category);
     setShowAdvancedToolConfig(false);
-    setConfigData({});
-    setConfigGlobalData({});
-    setConfigSaving(true);
+    setConfigLoadStatus("loading");
+    setConfigLoadError("");
     setFocusedField(null);
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch(
-        `/api/tools/agents/${agentId}/category-config/${category}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (res.ok) {
-        const data = parseCategoryConfig(await res.json());
-        // global_config: company-level (masked sensitive fields like ****xxxx)
-        // agent_config: agent-level overrides only
-        const globalCfg = data.global_config || {};
-        const agentCfg = data.agent_config || {};
-        setConfigGlobalData(globalCfg);
-        // Pre-fill only agent-level values; company fields show as hints
-        const catSchema = CATEGORY_CONFIG_SCHEMAS[category];
-        const sensitiveKeys = getSensitiveKeys(catSchema);
-        const merged: ToolConfig = {};
-        for (const [k, v] of Object.entries(globalCfg)) {
-          // Non-sensitive global fields (e.g. os_type) pre-fill; sensitive ones don't
-          if (!sensitiveKeys.has(k)) merged[k] = v;
-        }
-        Object.assign(merged, agentCfg);
-        setConfigData(merged);
+      const data = await requestToolsJson({
+        url: `/api/tools/agents/${encodeURIComponent(agentId)}/category-config/${encodeURIComponent(category)}`,
+        token,
+        signal: controller.signal,
+        parsePayload: parseCategoryConfig,
+        parseError: parseHttpErrorResponse,
+      });
+      // global_config: company-level (masked sensitive fields like ****xxxx)
+      // agent_config: agent-level overrides only
+      const globalCfg = data.global_config;
+      const agentCfg = data.agent_config;
+      setConfigGlobalData(globalCfg);
+      // Pre-fill only agent-level values; company fields show as hints
+      const catSchema = CATEGORY_CONFIG_SCHEMAS[category];
+      const sensitiveKeys = getSensitiveKeys(catSchema);
+      const merged: ToolConfig = {};
+      for (const [k, v] of Object.entries(globalCfg)) {
+        // Non-sensitive global fields (e.g. os_type) pre-fill; sensitive ones don't
+        if (!sensitiveKeys.has(k)) merged[k] = v;
       }
-    } catch (e) {
-      console.error(e);
+      Object.assign(merged, agentCfg);
+      setConfigData(merged);
+      setConfigLoadStatus("ready");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      setConfigLoadStatus("error");
+      setConfigLoadError(
+        caughtErrorMessage(error) || "Failed to load category configuration.",
+      );
+    } finally {
+      setCategoryConfigController((current) =>
+        current === controller ? null : current,
+      );
     }
-    setConfigSaving(false);
+  };
+
+  const closeConfigModal = () => {
+    categoryConfigController?.abort();
+    setCategoryConfigController(null);
+    setConfigTool(null);
+    setConfigCategory(null);
+    setConfigLoadStatus("idle");
+    setConfigLoadError("");
+  };
+
+  const resetToolConfig = async () => {
+    if (!configTool) return;
+    setConfigSaving(true);
+    try {
+      await resetAgentToolConfig({
+        agentId,
+        toolId: configTool.id,
+        token: localStorage.getItem("token"),
+        parseError: parseHttpErrorResponse,
+      });
+      closeConfigModal();
+      await loadTools();
+    } catch (error) {
+      toast.error(t("common.error.saveFailed", "Save failed"), {
+        details: caughtErrorMessage(error),
+      });
+    } finally {
+      setConfigSaving(false);
+    }
   };
 
   const saveConfig = async () => {
     if (!configTool && !configCategory) return;
+    if (configCategory && configLoadStatus !== "ready") return;
     setConfigSaving(true);
     try {
       const token = localStorage.getItem("token");
@@ -569,7 +649,7 @@ export default function ToolsManager({
           body: { config: payload },
           parseError: parseHttpErrorResponse,
         });
-        setConfigCategory(null);
+        closeConfigModal();
       } else if (configTool) {
         const currentConfigTool = configTool;
         const hasSchema = currentConfigTool.config_schema.fields.length > 0;
@@ -594,7 +674,7 @@ export default function ToolsManager({
           body: { config: payload },
           parseError: parseHttpErrorResponse,
         });
-        setConfigTool(null);
+        closeConfigModal();
       }
       await loadTools();
     } catch (error) {
@@ -991,6 +1071,8 @@ export default function ToolsManager({
           {canManage && tool.source === "agent" && tool.agent_tool_id && (
             <button
               onClick={async () => {
+                const agentToolId = tool.agent_tool_id;
+                if (!agentToolId) return;
                 const ok = await dialog.confirm(
                   t(
                     "agent.tools.confirmDelete",
@@ -1005,16 +1087,13 @@ export default function ToolsManager({
                 setDeletingToolId(tool.id);
                 try {
                   const token = localStorage.getItem("token");
-                  const res = await fetch(
-                    `/api/tools/agent-tool/${tool.agent_tool_id}`,
-                    {
-                      method: "DELETE",
-                      headers: { Authorization: `Bearer ${token}` },
-                    },
-                  );
-                  if (res.ok) await loadTools();
-                  else
-                    toast.error(t("agent.tools.deleteFailed", "Delete failed"));
+                  await requestToolsMutation({
+                    url: `/api/tools/agent-tool/${encodeURIComponent(agentToolId)}`,
+                    token,
+                    method: "DELETE",
+                    parseError: parseHttpErrorResponse,
+                  });
+                  await loadTools();
                 } catch (error) {
                   toast.error(t("agent.tools.deleteFailed", "Delete failed"), {
                     details: String(caughtErrorMessage(error) || error),
@@ -1586,10 +1665,7 @@ export default function ToolsManager({
                 alignItems: "center",
                 justifyContent: "center",
               }}
-              onClick={() => {
-                setConfigTool(null);
-                setConfigCategory(null);
-              }}
+              onClick={closeConfigModal}
             >
               <div
                 onClick={(e) => e.stopPropagation()}
@@ -1636,10 +1712,7 @@ export default function ToolsManager({
                     </div>
                   </div>
                   <button
-                    onClick={() => {
-                      setConfigTool(null);
-                      setConfigCategory(null);
-                    }}
+                    onClick={closeConfigModal}
                     style={{
                       background: "none",
                       border: "none",
@@ -1651,6 +1724,42 @@ export default function ToolsManager({
                     ✕
                   </button>
                 </div>
+
+                {isCat && configLoadStatus !== "ready" && (
+                  <div
+                    role={configLoadStatus === "error" ? "alert" : "status"}
+                    style={{
+                      color:
+                        configLoadStatus === "error"
+                          ? "var(--error)"
+                          : "var(--text-secondary)",
+                      background: "var(--bg-secondary)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      marginBottom: "14px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                    }}
+                  >
+                    <span>
+                      {configLoadStatus === "loading"
+                        ? t("common.loading", "Loading...")
+                        : configLoadError}
+                    </span>
+                    {configLoadStatus === "error" && configCategory && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => void openCategoryConfig(configCategory)}
+                      >
+                        {t("common.retry", "Retry")}
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {fields.length > 0 ? (
                   <div
@@ -2350,17 +2459,14 @@ export default function ToolsManager({
                             }
                             try {
                               const token = localStorage.getItem("token");
-                              const res = await fetch("/api/tools/test-email", {
+                              const data = await requestToolsJson({
+                                url: "/api/tools/test-email",
+                                token,
                                 method: "POST",
-                                headers: {
-                                  "Content-Type": "application/json",
-                                  Authorization: `Bearer ${token}`,
-                                },
-                                body: JSON.stringify({ config: configData }),
+                                body: { config: configData },
+                                parsePayload: parseEmailTestResponse,
+                                parseError: parseHttpErrorResponse,
                               });
-                              const data = parseEmailTestResponse(
-                                await res.json(),
-                              );
                               if (status) {
                                 status.textContent = data.ok
                                   ? `${data.imap}\n${data.smtp}`
@@ -2454,22 +2560,8 @@ export default function ToolsManager({
                       <button
                         className="btn btn-ghost"
                         style={{ color: "var(--error)", marginRight: "auto" }}
-                        onClick={async () => {
-                          const token = localStorage.getItem("token");
-                          await fetch(
-                            `/api/tools/agents/${agentId}/tool-config/${configTool.id}`,
-                            {
-                              method: "PUT",
-                              headers: {
-                                "Content-Type": "application/json",
-                                Authorization: `Bearer ${token}`,
-                              },
-                              body: JSON.stringify({ config: {} }),
-                            },
-                          );
-                          setConfigTool(null);
-                          loadTools();
-                        }}
+                        onClick={() => void resetToolConfig()}
+                        disabled={configSaving}
                       >
                         Reset to Global
                       </button>
@@ -2479,18 +2571,19 @@ export default function ToolsManager({
                       className="btn btn-secondary"
                       style={{ marginRight: "auto" }}
                       onClick={async () => {
+                        const category = configCategory;
+                        if (!category) return;
                         const btn = document.getElementById("cat-test-btn");
                         if (btn) btn.textContent = "Testing...";
                         try {
                           const token = localStorage.getItem("token");
-                          const res = await fetch(
-                            `/api/tools/agents/${agentId}/category-config/${configCategory}/test`,
-                            {
-                              method: "POST",
-                              headers: { Authorization: `Bearer ${token}` },
-                            },
-                          );
-                          const data = await res.json();
+                          const data = await requestToolsJson({
+                            url: `/api/tools/agents/${encodeURIComponent(agentId)}/category-config/${encodeURIComponent(category)}/test`,
+                            token,
+                            method: "POST",
+                            parsePayload: parseCategoryTestResponse,
+                            parseError: parseHttpErrorResponse,
+                          });
                           if (data.ok) {
                             await dialog.alert(
                               data.message || t("common.error.testSuccess"),
@@ -2520,23 +2613,23 @@ export default function ToolsManager({
                         }
                       }}
                       id="cat-test-btn"
+                      disabled={configLoadStatus !== "ready"}
                     >
                       Test Connection
                     </button>
                   )}
                   <button
                     className="btn btn-secondary"
-                    onClick={() => {
-                      setConfigTool(null);
-                      setConfigCategory(null);
-                    }}
+                    onClick={closeConfigModal}
                   >
                     Cancel
                   </button>
                   <button
                     className="btn btn-primary"
                     onClick={saveConfig}
-                    disabled={configSaving}
+                    disabled={
+                      configSaving || (isCat && configLoadStatus !== "ready")
+                    }
                   >
                     {configSaving
                       ? t("common.saving", "Saving…")

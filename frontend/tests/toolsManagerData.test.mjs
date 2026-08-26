@@ -6,7 +6,9 @@ import { parseHttpErrorResponse } from "../src/services/apiError.ts";
 import {
   parseCompleteList,
   requestAgentToolsWithConfig,
+  requestToolsJson,
   requestToolsMutation,
+  resetAgentToolConfig,
   updateToolEnabled,
 } from "../src/pages/agent-detail/toolsManagerData.ts";
 
@@ -167,14 +169,95 @@ test("ToolsManager exposes load retry and closes config modals only after succes
   );
   assert.match(
     toolsManagerSource,
-    /await requestToolsMutation\(\{[\s\S]*?category-config[\s\S]*?\}\);\s*setConfigCategory\(null\)/,
+    /await requestToolsMutation\(\{[\s\S]*?category-config[\s\S]*?\}\);\s*closeConfigModal\(\)/,
   );
   assert.match(
     toolsManagerSource,
-    /await requestToolsMutation\(\{[\s\S]*?tool-config[\s\S]*?\}\);\s*setConfigTool\(null\)/,
+    /await requestToolsMutation\(\{[\s\S]*?tool-config[\s\S]*?\}\);\s*closeConfigModal\(\)/,
   );
   assert.match(
     toolsManagerSource,
     /catch \(error\) \{\s*setTools\([\s\S]*?!enabled[\s\S]*?toast\.error/,
+  );
+});
+
+test("category load failures remain errors and cannot enable saving", async () => {
+  for (const status of [401, 403, 500]) {
+    await assert.rejects(
+      requestToolsJson({
+        url: "/api/tools/agents/agent-1/category-config/agentbay",
+        token: "browser-token",
+        parsePayload: (payload) => payload,
+        parseError: parseHttpErrorResponse,
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ detail: `load failed ${status}` }), {
+            status,
+          }),
+      }),
+      (error) => error.status === status,
+    );
+  }
+
+  const openCategorySource = toolsManagerSource.slice(
+    toolsManagerSource.indexOf("const openCategoryConfig"),
+    toolsManagerSource.indexOf("const closeConfigModal"),
+  );
+  assert.doesNotMatch(openCategorySource, /setConfigData\(\{\}\)/);
+  assert.match(openCategorySource, /setConfigLoadStatus\("error"\)/);
+  assert.match(
+    toolsManagerSource,
+    /configSaving \|\|\s*\(isCat && configLoadStatus !== "ready"\)/,
+  );
+  assert.match(toolsManagerSource, /openCategoryConfig\(configCategory\)/);
+});
+
+test("Reset to Global retains the modal on HTTP failure and closes after success", async () => {
+  for (const status of [401, 403, 500]) {
+    await assert.rejects(
+      resetAgentToolConfig({
+        agentId: "agent-1",
+        toolId: "tool-1",
+        token: "browser-token",
+        parseError: parseHttpErrorResponse,
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ detail: `reset failed ${status}` }), {
+            status,
+          }),
+      }),
+      (error) => error.status === status,
+    );
+  }
+
+  const calls = [];
+  await resetAgentToolConfig({
+    agentId: "agent / 1",
+    toolId: "tool / 1",
+    token: "browser-token",
+    parseError: parseHttpErrorResponse,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(null, { status: 204 });
+    },
+  });
+  assert.deepEqual(calls, [
+    {
+      url: "/api/tools/agents/agent%20%2F%201/tool-config/tool%20%2F%201",
+      init: {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer browser-token",
+        },
+        body: JSON.stringify({ config: {} }),
+      },
+    },
+  ]);
+  assert.match(
+    toolsManagerSource,
+    /await resetAgentToolConfig\(\{[\s\S]*?\}\);\s*closeConfigModal\(\);\s*await loadTools\(\)/,
+  );
+  assert.doesNotMatch(
+    toolsManagerSource,
+    /Reset to Global[\s\S]{0,500}\bfetch\s*\(/,
   );
 });
