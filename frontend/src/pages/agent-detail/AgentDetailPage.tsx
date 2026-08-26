@@ -4554,9 +4554,9 @@ export default function AgentDetailPage() {
       // immediately in local state so unread badges clear without waiting for the next poll.
       clearUnreadForSession(String(sess.id));
       queryClient.invalidateQueries({ queryKey: ["agents"] });
-    } catch (err: any) {
-      if (err?.name === "AbortError") return;
-      console.error("Failed to load session messages:", err);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      console.error("Failed to load session messages:", error);
     }
   };
 
