@@ -39,6 +39,13 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
+function stringValue(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid OAuth callback response: ${field}`);
+  }
+  return value;
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -85,7 +92,7 @@ function parseTenantChoice(value: unknown): OAuthTenantChoice {
   return {
     tenant_id: requiredString(value.tenant_id, "tenant.tenant_id"),
     tenant_name: requiredString(value.tenant_name, "tenant.tenant_name"),
-    tenant_slug: requiredString(value.tenant_slug, "tenant.tenant_slug"),
+    tenant_slug: stringValue(value.tenant_slug, "tenant.tenant_slug"),
     ...(logoUrl !== undefined ? { logo_url: logoUrl } : {}),
   };
 }
@@ -102,10 +109,7 @@ export function parseOAuthCallbackResponse(
     }
     return {
       requires_tenant_selection: true,
-      login_identifier: requiredString(
-        value.login_identifier,
-        "login_identifier",
-      ),
+      login_identifier: stringValue(value.login_identifier, "login_identifier"),
       tenants: value.tenants.map(parseTenantChoice),
       pending_token: requiredString(value.pending_token, "pending_token"),
     };

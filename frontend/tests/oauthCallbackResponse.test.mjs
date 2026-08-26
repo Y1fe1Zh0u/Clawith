@@ -32,26 +32,26 @@ test("OAuth callback parser distinguishes token and tenant-selection results", (
   assert.deepEqual(
     parseOAuthCallbackResponse({
       requires_tenant_selection: true,
-      login_identifier: "person@example.com",
+      login_identifier: "",
       pending_token: "pending",
       tenants: [
         {
           tenant_id: "tenant-1",
           tenant_name: "Acme",
-          tenant_slug: "acme",
+          tenant_slug: "",
           logo_url: null,
         },
       ],
     }),
     {
       requires_tenant_selection: true,
-      login_identifier: "person@example.com",
+      login_identifier: "",
       pending_token: "pending",
       tenants: [
         {
           tenant_id: "tenant-1",
           tenant_name: "Acme",
-          tenant_slug: "acme",
+          tenant_slug: "",
         },
       ],
     },
