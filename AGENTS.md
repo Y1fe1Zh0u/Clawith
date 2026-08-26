@@ -47,6 +47,7 @@ Each behavior-driving fact has one authoritative owner. Other layers may submit 
 
 - Keep each change scoped to one intent. Do not mix structural refactoring, behavior changes, compatibility work, and unrelated cleanup.
 - Preserve verified behavior unless the task explicitly changes the owning product or architecture contract.
+- **Trace shared contracts end to end.** Before changing a shared, API, persistence, credential, state, protocol, or cross-layer fact, trace its authoritative owner, persisted representations, producers and mutations, adapters, every consumer, and cleanup, failure, and compatibility paths. Do not fix the fact only where a diagnostic or caller exposes it, or treat local tests as proof that the contract chain is complete. Change and verify all participants in one intent using owner-produced data shapes and real end-to-end failure paths.
 - Before introducing an abstraction, identify the current owner and consumer. Delete obsolete code, reuse the existing owner when it already fits, and move misplaced behavior back to that owner while removing bypass paths. Add a new layer only when it has an independently changing responsibility and a current consumer.
 - **Delete verified dead code.** Once code, configuration, tests, compatibility paths, or documentation are confirmed to have no current contract or production consumer, remove them in the same change. Do not keep commented-out implementations, speculative fallbacks, or tests that only preserve deleted behavior.
 - Preserve unrelated working-tree changes and user-owned files.
