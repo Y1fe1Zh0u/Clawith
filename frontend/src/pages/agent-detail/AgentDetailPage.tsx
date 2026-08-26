@@ -7693,7 +7693,7 @@ export default function AgentDetailPage() {
                         try {
                             await fileApi.delete(id!, path);
                             showToast(t('common.delete'));
-                        } catch (err: any) {
+                        } catch {
                             showToast(t('agent.upload.failed'), 'error');
                         }
                     }

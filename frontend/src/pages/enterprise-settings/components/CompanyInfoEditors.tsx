@@ -410,7 +410,7 @@ export function CompanyNameEditor() {
       qc.invalidateQueries({ queryKey: ["my-tenants"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e) {}
+    } catch {}
     setSaving(false);
   };
 

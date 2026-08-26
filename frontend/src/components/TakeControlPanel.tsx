@@ -405,7 +405,7 @@ export default function TakeControlPanel({
             ? finalRes.screenshot
             : `data:image/png;base64,${finalRes.screenshot}`;
         }
-      } catch (e) {
+      } catch {
         // fallback to whatever is in lastScreenshotRef
       }
 
@@ -486,7 +486,7 @@ export default function TakeControlPanel({
           ? finalRes.screenshot
           : `data:image/png;base64,${finalRes.screenshot}`;
       }
-    } catch (e) {
+    } catch {
       // fallback to whatever is in lastScreenshotRef
     }
 

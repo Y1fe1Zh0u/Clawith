@@ -184,7 +184,7 @@ export default function EnterpriseSettings() {
             });
             setCompanyIntroSaved(true);
             setTimeout(() => setCompanyIntroSaved(false), 2000);
-        } catch (e) { }
+        } catch { }
         setCompanyIntroSaving(false);
     };
     const [auditFilter, setAuditFilter] = useState<'all' | 'background' | 'actions'>('all');
