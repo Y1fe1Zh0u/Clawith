@@ -1,12 +1,60 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { caughtErrorMessage } from "../../../services/apiError";
 import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { fetchJson } from "../utils/fetchJson";
 
+interface OkrSettings {
+  enabled: boolean;
+  first_enabled_at: string | null;
+  daily_report_enabled: boolean;
+  daily_report_time: string;
+  daily_report_skip_non_workdays: boolean;
+  weekly_report_enabled: boolean;
+  weekly_report_day: number;
+  period_frequency: "quarterly" | "monthly";
+  period_length_days: number | null;
+  period_frequency_locked: boolean;
+  okr_agent_id?: string | null;
+}
+
+interface TenantTimezone {
+  timezone: string;
+}
+
+interface DailyCollectionResult {
+  message?: string;
+}
+
+interface MembersWithoutOkrResult {
+  okr_agent_id?: string | null;
+  company_okr_exists?: boolean;
+}
+
+function responseErrorDetail(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || !("detail" in value)) {
+    return undefined;
+  }
+  const detail = value.detail;
+  return typeof detail === "string" ? detail : undefined;
+}
+
+function isPeriodFrequency(
+  value: string,
+): value is OkrSettings["period_frequency"] {
+  return value === "quarterly" || value === "monthly";
+}
+
 // ─── OKR Tab ──────────────────────────────────────────
-export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
+export default function OkrTab({
+  tenantId,
+  t,
+}: {
+  tenantId: string;
+  t: TFunction;
+}) {
   const qc = useQueryClient();
   const dialog = useDialog();
   const { i18n } = useTranslation();
@@ -24,15 +72,15 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ["okr-settings", tenantId],
-    queryFn: () => fetchJson<any>("/okr/settings"),
+    queryFn: () => fetchJson<OkrSettings>("/okr/settings"),
   });
   const { data: tenantInfo } = useQuery({
     queryKey: ["tenant-timezone", tenantId],
-    queryFn: () => fetchJson<any>(`/tenants/${tenantId}`),
+    queryFn: () => fetchJson<TenantTimezone>(`/tenants/${tenantId}`),
     enabled: !!tenantId,
   });
   const updateSettings = useMutation({
-    mutationFn: (data: any) =>
+    mutationFn: (data: OkrSettings) =>
       fetchJson("/okr/settings", { method: "PUT", body: JSON.stringify(data) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["okr-settings"] });
@@ -43,10 +91,10 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
         okrSaveTimerRef.current = null;
       }, 1800);
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       setOkrSaveState("error");
       setOkrSaveError(
-        error?.message ||
+        caughtErrorMessage(error) ||
           (zh ? "保存失败，请重试" : "Save failed, please retry"),
       );
     },
@@ -59,7 +107,7 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
     [],
   );
 
-  const saveOkrSettings = (nextSettings: any) => {
+  const saveOkrSettings = (nextSettings: OkrSettings) => {
     if (okrSaveTimerRef.current) {
       window.clearTimeout(okrSaveTimerRef.current);
       okrSaveTimerRef.current = null;
@@ -73,9 +121,12 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
     setDailyTestState("running");
     setDailyTestMessage("");
     try {
-      const result = await fetchJson<any>("/okr/trigger-daily-collection", {
-        method: "POST",
-      });
+      const result = await fetchJson<DailyCollectionResult>(
+        "/okr/trigger-daily-collection",
+        {
+          method: "POST",
+        },
+      );
       setDailyTestState("success");
       setDailyTestMessage(
         result?.message ||
@@ -96,7 +147,8 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
   // Fetch members-without-okr to get okr_agent_id and company_okr_exists for the guidance card
   const { data: membersData } = useQuery({
     queryKey: ["okr-members-without-okr-settings", tenantId],
-    queryFn: () => fetchJson<any>("/okr/members-without-okr"),
+    queryFn: () =>
+      fetchJson<MembersWithoutOkrResult>("/okr/members-without-okr"),
     enabled: !!settings?.enabled,
     retry: false,
   });
@@ -239,9 +291,11 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
               <select
                 className="form-input"
                 value={s.period_frequency}
-                onChange={(e) =>
-                  saveOkrSettings({ ...s, period_frequency: e.target.value })
-                }
+                onChange={(e) => {
+                  if (isPeriodFrequency(e.target.value)) {
+                    saveOkrSettings({ ...s, period_frequency: e.target.value });
+                  }
+                }}
                 style={{ maxWidth: "300px", cursor: "pointer" }}
               >
                 <option value="quarterly">{zh ? "按季度" : "Quarterly"}</option>
@@ -495,12 +549,13 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
                         queryKey: ["okr-members-without-okr-settings"],
                       });
                     } else {
-                      const err = await res.json().catch(() => ({}));
+                      const err: unknown = await res.json().catch(() => null);
                       await dialog.alert(
                         zh ? "关系网络同步失败" : "Relationship sync failed",
                         {
                           type: "error",
-                          details: String(err.detail || res.status),
+                          details:
+                            responseErrorDetail(err) || String(res.status),
                         },
                       );
                     }
@@ -509,7 +564,7 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
                       zh ? "同步失败，请重试" : "Sync failed, please retry",
                       {
                         type: "error",
-                        details: String((e as any)?.message || e),
+                        details: caughtErrorMessage(e) || String(e),
                       },
                     );
                   }
@@ -553,9 +608,11 @@ export default function OkrTab({ tenantId, t }: { tenantId: string; t: any }) {
                       : "OKR cadence is locked and cannot be changed"
                     : undefined
                 }
-                onChange={(e) =>
-                  saveOkrSettings({ ...s, period_frequency: e.target.value })
-                }
+                onChange={(e) => {
+                  if (isPeriodFrequency(e.target.value)) {
+                    saveOkrSettings({ ...s, period_frequency: e.target.value });
+                  }
+                }}
                 style={{
                   maxWidth: "300px",
                   opacity: periodFrequencyLocked ? 0.65 : 1,

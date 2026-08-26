@@ -1,12 +1,80 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { caughtErrorMessage } from "../../../services/apiError";
 import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { useToast } from "../../../components/Toast/ToastProvider";
 import LinearCopyButton from "../../../components/LinearCopyButton";
 import { IconSettings } from "@tabler/icons-react";
 import { fetchJson } from "../utils/fetchJson";
+import type { OrgDepartmentItem } from "../../../services/api";
+import type { Tenant } from "../../../services/apiContracts";
+
+interface IdentityProviderConfig {
+  app_id?: string;
+  app_key?: string;
+  app_secret?: string;
+  client_id?: string;
+  client_secret?: string;
+  corp_id?: string;
+  secret?: string;
+  agent_id?: string;
+  bot_id?: string;
+  bot_secret?: string;
+  verify_token?: string;
+  verify_aes_key?: string;
+  authorize_url?: string;
+  token_url?: string;
+  user_info_url?: string;
+  scope?: string;
+  google_admin_authorized_email?: string;
+}
+
+interface IdentityProviderForm {
+  provider_type: string;
+  name: string;
+  config: IdentityProviderConfig;
+  app_id: string;
+  app_secret: string;
+  authorize_url: string;
+  token_url: string;
+  user_info_url: string;
+  scope: string;
+}
+
+interface IdentityProvider extends IdentityProviderForm {
+  id: string;
+  sso_domain?: string | null;
+  sso_login_enabled?: boolean;
+  last_synced_at?: string | null;
+}
+
+interface OrgMember {
+  id: string;
+  name: string;
+  provider_type?: string | null;
+  title?: string | null;
+  department_path?: string | null;
+  department_id?: string | null;
+}
+
+interface OrgSyncResult {
+  providerId: string;
+  departments?: number;
+  members?: number;
+  errors?: string[];
+  error?: string;
+}
+
+function hasMessageType(value: unknown, type: string): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === type
+  );
+}
 
 const FEISHU_SYNC_PERM_JSON = `{
   "scopes": {
@@ -28,19 +96,19 @@ function DeptTree({
   onSelect,
   level,
 }: {
-  departments: any[];
+  departments: OrgDepartmentItem[];
   parentId: string | null;
   selectedDept: string | null;
   onSelect: (id: string | null) => void;
   level: number;
 }) {
-  const children = departments.filter((d: any) =>
+  const children = departments.filter((d) =>
     parentId === null ? !d.parent_id : d.parent_id === parentId,
   );
   if (children.length === 0) return null;
   return (
     <>
-      {children.map((d: any) => (
+      {children.map((d) => (
         <div key={d.id}>
           <div
             style={{
@@ -68,7 +136,7 @@ function DeptTree({
                   fontSize: "11px",
                 }}
               >
-                {departments.some((c: any) => c.parent_id === d.id) ? "▾" : "·"}
+                {departments.some((c) => c.parent_id === d.id) ? "▾" : "·"}
               </span>
               {d.name}
             </div>
@@ -99,27 +167,26 @@ function SsoChannelSection({
   t,
 }: {
   idpType: string;
-  existingProvider: any;
-  tenant: any;
-  t: any;
+  existingProvider?: IdentityProvider;
+  tenant?: Tenant;
+  t: TFunction;
 }) {
   const qc = useQueryClient();
-  const dialog = useDialog();
   const toast = useToast();
-  const [liveDomain, setLiveDomain] = useState<string>(
-    existingProvider?.sso_domain || tenant?.sso_domain || "",
+  const [liveDomainOverride, setLiveDomainOverride] = useState<string | null>(
+    null,
   );
   const [ssoError, setSsoError] = useState<string>("");
   const [toggling, setToggling] = useState(false);
 
-  useEffect(() => {
-    setLiveDomain(existingProvider?.sso_domain || tenant?.sso_domain || "");
-  }, [existingProvider?.sso_domain, tenant?.sso_domain]);
-
   const ssoEnabled = existingProvider
     ? !!existingProvider.sso_login_enabled
     : false;
-  const domain = liveDomain;
+  const domain =
+    liveDomainOverride ??
+    existingProvider?.sso_domain ??
+    tenant?.sso_domain ??
+    "";
   const callbackUrl = domain
     ? domain.startsWith("http")
       ? `${domain}/api/auth/${idpType}/callback`
@@ -140,14 +207,14 @@ function SsoChannelSection({
     setToggling(true);
     setSsoError("");
     try {
-      const result = await fetchJson<any>(
+      const result = await fetchJson<IdentityProvider>(
         `/enterprise/identity-providers/${existingProvider.id}`,
         {
           method: "PUT",
           body: JSON.stringify({ sso_login_enabled: newVal }),
         },
       );
-      if (result?.sso_domain) setLiveDomain(result.sso_domain);
+      if (result.sso_domain) setLiveDomainOverride(result.sso_domain);
       qc.invalidateQueries({ queryKey: ["identity-providers"] });
       if (tenant?.id) qc.invalidateQueries({ queryKey: ["tenant", tenant.id] });
     } catch (error) {
@@ -406,201 +473,13 @@ function SsoChannelSection({
 }
 
 // ─── Org & Identity Tab ─────────────────────────────
-export default function OrgTab({ tenant }: { tenant: any }) {
+export default function OrgTab({ tenant }: { tenant?: Tenant }) {
   const { t } = useTranslation();
   const dialog = useDialog();
   const qc = useQueryClient();
 
-  const SsoStatus = () => {
-    const [isExpanded, setIsExpanded] = useState(!!tenant?.sso_enabled);
-    const [ssoEnabled, setSsoEnabled] = useState(!!tenant?.sso_enabled);
-    const [ssoDomain, setSsoDomain] = useState(tenant?.sso_domain || "");
-    const [saving, setSaving] = useState(false);
-    const [error, setError] = useState("");
-
-    useEffect(() => {
-      setSsoEnabled(!!tenant?.sso_enabled);
-      setSsoDomain(tenant?.sso_domain || "");
-      setIsExpanded(!!tenant?.sso_enabled);
-    }, [tenant]);
-
-    const handleSave = async (forceEnabled?: boolean) => {
-      if (!tenant?.id) return;
-      const targetEnabled =
-        forceEnabled !== undefined ? forceEnabled : ssoEnabled;
-      setSaving(true);
-      setError("");
-      try {
-        await fetchJson(`/tenants/${tenant.id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            sso_enabled: targetEnabled,
-            sso_domain: targetEnabled ? ssoDomain.trim() || null : null,
-          }),
-        });
-        qc.invalidateQueries({ queryKey: ["tenant", tenant.id] });
-      } catch (error) {
-        setError(
-          caughtErrorMessage(error) || "Failed to update SSO configuration",
-        );
-      }
-      setSaving(false);
-    };
-
-    const handleToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const checked = e.target.checked;
-      setSsoEnabled(checked);
-      setIsExpanded(checked);
-      if (!checked) {
-        // auto-save when disabling
-        handleSave(false);
-      }
-    };
-
-    return (
-      <div
-        className="card"
-        style={{ marginBottom: "24px", overflow: "hidden" }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "16px",
-          }}
-        >
-          <div>
-            <div
-              style={{ fontWeight: 600, fontSize: "14px", marginBottom: "4px" }}
-            >
-              {t("enterprise.identity.ssoTitle", "Enterprise SSO")}
-            </div>
-            <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
-              {t(
-                "enterprise.identity.ssoDisabledHint",
-                "Seamless enterprise login via Single Sign-On.",
-              )}
-            </div>
-          </div>
-          <div>
-            <label
-              style={{
-                position: "relative",
-                display: "inline-block",
-                width: "36px",
-                height: "20px",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={ssoEnabled}
-                onChange={handleToggle}
-                style={{ opacity: 0, width: 0, height: 0 }}
-              />
-              <span
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  borderRadius: "20px",
-                  cursor: "pointer",
-                  background: ssoEnabled
-                    ? "var(--accent-primary)"
-                    : "var(--border-subtle)",
-                  transition: "0.2s",
-                }}
-              >
-                <span
-                  style={{
-                    position: "absolute",
-                    left: ssoEnabled ? "18px" : "2px",
-                    top: "2px",
-                    width: "16px",
-                    height: "16px",
-                    borderRadius: "50%",
-                    background: "#fff",
-                    transition: "0.2s",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
-                  }}
-                />
-              </span>
-            </label>
-          </div>
-        </div>
-
-        {isExpanded && (
-          <div
-            style={{
-              padding: "0 16px 16px",
-              borderTop: "1px solid var(--border-subtle)",
-              paddingTop: "16px",
-            }}
-          >
-            <div style={{ marginBottom: "16px" }}>
-              <label
-                className="form-label"
-                style={{ fontSize: "12px", marginBottom: "8px" }}
-              >
-                {t("enterprise.identity.ssoDomain", "Custom Access Domain")}
-              </label>
-              <input
-                className="form-input"
-                value={ssoDomain}
-                onChange={(e) => setSsoDomain(e.target.value)}
-                placeholder={t(
-                  "enterprise.identity.ssoDomainPlaceholder",
-                  "e.g. acme.clawith.com",
-                )}
-                style={{ fontSize: "13px", width: "100%", maxWidth: "400px" }}
-              />
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "var(--text-tertiary)",
-                  marginTop: "6px",
-                }}
-              >
-                {t(
-                  "enterprise.identity.ssoDomainDesc",
-                  "The custom domain users will use to log in via SSO.",
-                )}
-              </div>
-            </div>
-
-            {error && (
-              <div
-                style={{
-                  color: "var(--error)",
-                  fontSize: "12px",
-                  marginBottom: "12px",
-                }}
-              >
-                {error}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={() => handleSave()}
-                disabled={saving || !ssoDomain.trim()}
-              >
-                {saving
-                  ? t("common.loading")
-                  : t("common.save", "Save Configuration")}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const [syncing, setSyncing] = useState<string | null>(null);
-  const [syncResult, setSyncResult] = useState<any>(null);
+  const [syncResult, setSyncResult] = useState<OrgSyncResult | null>(null);
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
   const [expandedType, setExpandedType] = useState<string | null>(null);
@@ -610,10 +489,10 @@ export default function OrgTab({ tenant }: { tenant: any }) {
   // Identity Providers state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [useOAuth2Form, setUseOAuth2Form] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<IdentityProviderForm>({
     provider_type: "feishu",
     name: "",
-    config: {} as any,
+    config: {},
     app_id: "",
     app_secret: "",
     authorize_url: "",
@@ -628,7 +507,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
   const { data: providers = [] } = useQuery({
     queryKey: ["identity-providers", currentTenantId],
     queryFn: () =>
-      fetchJson<any[]>(
+      fetchJson<IdentityProvider[]>(
         `/enterprise/identity-providers${currentTenantId ? `?tenant_id=${currentTenantId}` : ""}`,
       ),
   });
@@ -639,7 +518,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
       const params = new URLSearchParams();
       if (currentTenantId) params.set("tenant_id", currentTenantId);
       if (editingId) params.set("provider_id", editingId);
-      return fetchJson<{ items: any[]; total_member: number }>(
+      return fetchJson<{ items: OrgDepartmentItem[]; total_member: number }>(
         `/enterprise/org/departments?${params}`,
       );
     },
@@ -660,14 +539,14 @@ export default function OrgTab({ tenant }: { tenant: any }) {
       if (memberSearch) params.set("search", memberSearch);
       if (currentTenantId) params.set("tenant_id", currentTenantId);
       if (editingId) params.set("provider_id", editingId);
-      return fetchJson<any[]>(`/enterprise/org/members?${params}`);
+      return fetchJson<OrgMember[]>(`/enterprise/org/members?${params}`);
     },
     enabled: !!editingId,
   });
 
   // Mutations
   const addProvider = useMutation({
-    mutationFn: (data: any) => {
+    mutationFn: (data: IdentityProviderForm) => {
       const payload = { ...data, tenant_id: currentTenantId, is_active: true };
       if (data.provider_type === "oauth2" && useOAuth2Form) {
         return fetchJson("/enterprise/identity-providers/oauth2", {
@@ -691,7 +570,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
   });
 
   const updateProvider = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => {
+    mutationFn: ({ id, data }: { id: string; data: IdentityProviderForm }) => {
       if (data.provider_type === "oauth2" && useOAuth2Form) {
         return fetchJson(`/enterprise/identity-providers/${id}/oauth2`, {
           method: "PATCH",
@@ -723,7 +602,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
     setSyncing(providerId);
     setSyncResult(null);
     try {
-      const result = await fetchJson<any>(
+      const result = await fetchJson<Omit<OrgSyncResult, "providerId">>(
         `/enterprise/org/sync?provider_id=${providerId}`,
         { method: "POST" },
       );
@@ -738,7 +617,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
     setSyncing(null);
   };
 
-  const initOAuth2FromConfig = (config: any) => ({
+  const initOAuth2FromConfig = (config: IdentityProviderConfig) => ({
     app_id: config?.app_id || config?.client_id || "",
     app_secret: config?.app_secret || config?.client_secret || "",
     authorize_url: config?.authorize_url || "",
@@ -767,12 +646,12 @@ export default function OrgTab({ tenant }: { tenant: any }) {
       "width=640,height=760",
     );
     if (!popup) {
-      window.location.href = res.authorization_url;
+      window.location.assign(res.authorization_url);
       return;
     }
 
-    const onMessage = (event: MessageEvent) => {
-      if (event.data?.type === "google-workspace-sync-authorized") {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (hasMessageType(event.data, "google-workspace-sync-authorized")) {
         window.removeEventListener("message", onMessage);
         qc.invalidateQueries({ queryKey: ["identity-providers"] });
       }
@@ -846,7 +725,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
     },
   ];
 
-  const handleExpand = (type: string, existingProvider?: any) => {
+  const handleExpand = (type: string, existingProvider?: IdentityProvider) => {
     if (expandedType === type) {
       setExpandedType(null);
       return;
@@ -863,7 +742,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
           : {}),
       });
     } else {
-      const defaults: any = {
+      const defaults: Record<string, IdentityProviderConfig> = {
         feishu: { app_id: "", app_secret: "", corp_id: "" },
         dingtalk: { app_key: "", app_secret: "", corp_id: "" },
         wecom: {
@@ -904,7 +783,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
     setMemberSearch("");
   };
 
-  const renderForm = (type: string, existingProvider?: any) => {
+  const renderForm = (type: string, existingProvider?: IdentityProvider) => {
     const providerBaseUrl = (() => {
       const rawDomain =
         existingProvider?.sso_domain || tenant?.sso_domain || "";
@@ -1538,7 +1417,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
     );
   };
 
-  const renderOrgBrowser = (p: any) => {
+  const renderOrgBrowser = (p: IdentityProvider) => {
     return (
       <div
         style={{
@@ -1673,7 +1552,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
                 overflowY: "auto",
               }}
             >
-              {members.map((m: any) => (
+              {members.map((m) => (
                 <div
                   key={m.id}
                   style={{
@@ -1778,7 +1657,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
         <div style={{ display: "flex", flexDirection: "column" }}>
           {IDP_TYPES.map((idp, index) => {
             const existingProvider = providers.find(
-              (p: any) => p.provider_type === idp.type,
+              (p) => p.provider_type === idp.type,
             );
             const isExpanded = expandedType === idp.type;
 
@@ -1902,6 +1781,7 @@ export default function OrgTab({ tenant }: { tenant: any }) {
                       "oauth2",
                     ].includes(idp.type) && (
                       <SsoChannelSection
+                        key={`${existingProvider?.id ?? idp.type}:${existingProvider?.sso_domain ?? tenant?.sso_domain ?? ""}`}
                         idpType={idp.type}
                         existingProvider={existingProvider}
                         tenant={tenant}

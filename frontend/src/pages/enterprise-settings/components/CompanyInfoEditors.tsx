@@ -9,6 +9,12 @@ import {
 } from "../../../utils/companyRegions";
 import { useAuthStore } from "../../../stores";
 import { fetchJson } from "../utils/fetchJson";
+import type { Tenant } from "../../../services/apiContracts";
+
+function firstCharacter(value: string): string | undefined {
+  for (const character of value.trim()) return character;
+  return undefined;
+}
 
 function CompanyLogoCropModal({
   imageUrl,
@@ -93,7 +99,7 @@ function CompanyLogoCropModal({
         <div
           className="tenant-logo-crop-stage"
           onPointerDown={(e) => {
-            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            e.currentTarget.setPointerCapture(e.pointerId);
             setDragStart({
               x: e.clientX,
               y: e.clientY,
@@ -186,7 +192,7 @@ export function CompanyLogoEditor() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<any>(`/tenants/${tenantId}`)
+    fetchJson<Tenant>(`/tenants/${tenantId}`)
       .then((d) => {
         if (d?.name) setName(d.name);
         setLogoUrl(d?.logo_url || "");
@@ -306,11 +312,7 @@ export function CompanyLogoEditor() {
           {logoUrl ? (
             <img src={logoUrl} alt="" />
           ) : (
-            <span>
-              {(
-                Array.from(name.trim())[0] as string | undefined
-              )?.toUpperCase() || "C"}
-            </span>
+            <span>{firstCharacter(name)?.toUpperCase() || "C"}</span>
           )}
         </div>
         <div>
@@ -392,7 +394,7 @@ export function CompanyNameEditor() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<any>(`/tenants/${tenantId}`)
+    fetchJson<Tenant>(`/tenants/${tenantId}`)
       .then((d) => {
         if (d?.name) setName(d.name);
       })
@@ -458,7 +460,7 @@ export function CompanyTimezoneEditor() {
   const regionPickerRef = useRef<HTMLDivElement>(null);
   const [timezone, setTimezone] = useState("UTC");
   const [countryRegion, setCountryRegion] = useState("001");
-  const [regionInput, setRegionInput] = useState("");
+  const [regionQuery, setRegionQuery] = useState<string | null>(null);
   const [regionOpen, setRegionOpen] = useState(false);
   const [highlightedRegion, setHighlightedRegion] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -472,12 +474,13 @@ export function CompanyTimezoneEditor() {
   const regionLabel = (r: CompanyRegion) => (zh ? r.zh : r.en);
   const selectedRegion =
     companyRegions.find((r) => r.code === countryRegion) || companyRegions[0];
+  const selectedRegionLabel = zh ? selectedRegion.zh : selectedRegion.en;
+  const regionInput = regionQuery ?? selectedRegionLabel;
   const filteredRegions = useMemo(() => {
     const query = regionInput.trim().toLowerCase();
-    if (!query || (!regionOpen && regionInput === regionLabel(selectedRegion)))
-      return companyRegions;
+    if (!query || !regionOpen) return companyRegions;
     return companyRegions.filter((r) => {
-      const localName = regionLabel(r).toLowerCase();
+      const localName = (zh ? r.zh : r.en).toLowerCase();
       const altName = (zh ? r.en : r.zh).toLowerCase();
       return (
         localName.includes(query) ||
@@ -486,37 +489,34 @@ export function CompanyTimezoneEditor() {
         r.timezone.toLowerCase().includes(query)
       );
     });
-  }, [companyRegions, regionInput, regionOpen, selectedRegion, zh]);
-
-  useEffect(() => {
-    setRegionInput(regionLabel(selectedRegion));
-  }, [countryRegion, zh]);
+  }, [companyRegions, regionInput, regionOpen, zh]);
 
   useEffect(() => {
     if (!regionOpen) return;
     const handlePointerDown = (e: MouseEvent) => {
-      if (!regionPickerRef.current?.contains(e.target as Node)) {
+      if (
+        e.target instanceof Node &&
+        !regionPickerRef.current?.contains(e.target)
+      ) {
         setRegionOpen(false);
-        setRegionInput(regionLabel(selectedRegion));
+        setRegionQuery(null);
         setHighlightedRegion(0);
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [regionOpen, selectedRegion, zh]);
-
-  useEffect(() => {
-    setHighlightedRegion(0);
-  }, [regionInput]);
+  }, [regionOpen]);
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<any>(`/tenants/${tenantId}`)
+    fetchJson<Tenant>(`/tenants/${tenantId}`)
       .then((d) => {
         if (d?.timezone) setTimezone(d.timezone);
         if (d?.country_region) setCountryRegion(d.country_region);
       })
-      .catch((e: any) => setError(e.message || "Failed to load timezone"));
+      .catch((error: unknown) =>
+        setError(caughtErrorMessage(error) || "Failed to load timezone"),
+      );
   }, [tenantId]);
 
   const handleSave = async (regionCode: string) => {
@@ -544,7 +544,7 @@ export function CompanyTimezoneEditor() {
   };
 
   const selectRegion = (region: CompanyRegion) => {
-    setRegionInput(regionLabel(region));
+    setRegionQuery(null);
     setRegionOpen(false);
     setHighlightedRegion(0);
     if (region.code !== countryRegion) {
@@ -590,12 +590,14 @@ export function CompanyTimezoneEditor() {
             className="form-input"
             value={regionInput}
             onChange={(e) => {
-              setRegionInput(e.target.value);
+              setRegionQuery(e.target.value);
               setRegionOpen(true);
+              setHighlightedRegion(0);
             }}
             onFocus={() => {
               setRegionOpen(true);
-              setRegionInput("");
+              setRegionQuery("");
+              setHighlightedRegion(0);
             }}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
@@ -613,7 +615,8 @@ export function CompanyTimezoneEditor() {
                 if (region) selectRegion(region);
               } else if (e.key === "Escape") {
                 setRegionOpen(false);
-                setRegionInput(regionLabel(selectedRegion));
+                setRegionQuery(null);
+                setHighlightedRegion(0);
               }
             }}
             placeholder={t(
@@ -637,7 +640,12 @@ export function CompanyTimezoneEditor() {
             onClick={() => {
               if (saving || !tenantId) return;
               setRegionOpen((v) => !v);
-              if (!regionOpen) setRegionInput("");
+              if (!regionOpen) {
+                setRegionQuery("");
+                setHighlightedRegion(0);
+              } else {
+                setRegionQuery(null);
+              }
             }}
             disabled={saving || !tenantId}
             aria-label={
@@ -831,9 +839,11 @@ export function A2AAsyncToggle() {
 
   useEffect(() => {
     if (!tenantId) return;
-    fetchJson<any>(`/tenants/${tenantId}`)
+    fetchJson<Tenant>(`/tenants/${tenantId}`)
       .then((d) => setEnabled(!!d?.a2a_async_enabled))
-      .catch((e: any) => setError(e.message || "Failed to load A2A setting"));
+      .catch((error: unknown) =>
+        setError(caughtErrorMessage(error) || "Failed to load A2A setting"),
+      );
   }, [tenantId]);
 
   const handleToggle = async () => {

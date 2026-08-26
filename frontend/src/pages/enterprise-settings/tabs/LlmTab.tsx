@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { IconEdit } from "@tabler/icons-react";
@@ -45,6 +45,44 @@ interface RuntimeModelSettings {
   planning_source: "database" | "environment" | "unavailable";
   compact_source: "database" | "environment" | "unavailable";
   candidates: Array<Pick<LLMModel, "id" | "label" | "provider" | "model">>;
+}
+
+interface RuntimeModelForm {
+  planning_model_id: string;
+  compact_model_id: string;
+}
+
+interface LLMModelWrite {
+  provider: string;
+  model: string;
+  api_key: string;
+  base_url: string;
+  label: string;
+  supports_vision: boolean;
+  max_output_tokens: number | null;
+  request_timeout: number | null;
+  temperature: number | null;
+}
+
+interface ConnectivityTestRequest {
+  provider: string;
+  model: string;
+  base_url?: string;
+  api_key?: string;
+  model_id?: string;
+}
+
+interface ConnectivityTestResult {
+  capability_recorded?: boolean;
+  connection_success: boolean;
+  tool_calling_supported?: boolean | null;
+  tool_calling_error?: string | null;
+  latency_ms?: number;
+  error?: string | null;
+}
+
+interface TenantDefaultModel {
+  default_model_id: string | null;
 }
 
 const FALLBACK_LLM_PROVIDERS: LLMProviderSpec[] = [
@@ -189,14 +227,12 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     base_url: "",
     label: "",
     supports_vision: false,
-    max_output_tokens: "" as string,
-    request_timeout: "" as string,
-    temperature: "" as string,
+    max_output_tokens: "",
+    request_timeout: "",
+    temperature: "",
   });
-  const [runtimeModelForm, setRuntimeModelForm] = useState({
-    planning_model_id: "",
-    compact_model_id: "",
-  });
+  const [runtimeModelDraft, setRuntimeModelDraft] =
+    useState<RuntimeModelForm | null>(null);
 
   const invalidateModelCaches = () => {
     qc.invalidateQueries({ queryKey: ["llm-models"] });
@@ -231,13 +267,14 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     queryFn: () => fetchJson<RuntimeModelSettings>(runtimeModelSettingsUrl),
     enabled: canManageRuntimeModels,
   });
-  useEffect(() => {
-    if (!runtimeModelSettings) return;
-    setRuntimeModelForm({
-      planning_model_id: runtimeModelSettings.planning_model_id || "",
-      compact_model_id: runtimeModelSettings.compact_model_id || "",
-    });
-  }, [runtimeModelSettings]);
+  const runtimeModelForm =
+    runtimeModelDraft ??
+    (runtimeModelSettings
+      ? {
+          planning_model_id: runtimeModelSettings.planning_model_id || "",
+          compact_model_id: runtimeModelSettings.compact_model_id || "",
+        }
+      : { planning_model_id: "", compact_model_id: "" });
   const saveRuntimeModelSettings = useMutation({
     mutationFn: () =>
       fetchJson<RuntimeModelSettings>(runtimeModelSettingsUrl, {
@@ -246,22 +283,23 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
       }),
     onSuccess: (data) => {
       qc.setQueryData(["runtime-model-settings", selectedTenantId], data);
+      setRuntimeModelDraft(null);
       toast.success(
         t("enterprise.llm.runtimeModelsSaved", "运行时模型配置已更新"),
       );
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       toast.error(
         t("enterprise.llm.runtimeModelsSaveFailed", "运行时模型配置保存失败"),
         {
-          details: String(err?.message || err),
+          details: caughtErrorMessage(err) || String(err),
         },
       );
     },
   });
 
   const addModel = useMutation({
-    mutationFn: (data: any) =>
+    mutationFn: (data: LLMModelWrite) =>
       fetchJson(
         `/enterprise/llm-models${selectedTenantId ? `?tenant_id=${selectedTenantId}` : ""}`,
         { method: "POST", body: JSON.stringify(data) },
@@ -273,7 +311,7 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     },
   });
   const updateModel = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) =>
+    mutationFn: ({ id, data }: { id: string; data: LLMModelWrite }) =>
       fetchJson(`/enterprise/llm-models/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
@@ -288,7 +326,7 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     {
       queryKey: ["tenant-default-model", selectedTenantId],
       queryFn: () =>
-        fetchJson<{ default_model_id: string | null }>(
+        fetchJson<TenantDefaultModel>(
           !selectedTenantId || selectedTenantId === currentUser?.tenant_id
             ? "/tenants/me"
             : `/tenants/${selectedTenantId}`,
@@ -303,7 +341,7 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     onSuccess: (_data, modelId) => {
       qc.setQueryData(
         ["tenant-default-model", selectedTenantId],
-        (old: any) => ({
+        (old: TenantDefaultModel | undefined) => ({
           ...(old || {}),
           default_model_id: modelId,
         }),
@@ -320,11 +358,11 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
       qc.invalidateQueries({ queryKey: ["agent"] });
       toast.success(t("enterprise.llm.defaultSaved", "Default model updated"));
     },
-    onError: (err: any) => {
+    onError: (err: unknown) => {
       toast.error(
         t("enterprise.llm.defaultSaveFailed", "Failed to update default model"),
         {
-          details: String(err?.message || err),
+          details: caughtErrorMessage(err) || String(err),
         },
       );
     },
@@ -338,9 +376,9 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
       invalidateModelCaches();
       toast.success(t("enterprise.llm.deleteDone", "Model disabled"));
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       toast.error(t("enterprise.llm.deleteFailed", "Failed to delete model"), {
-        details: String(error?.message || error),
+        details: caughtErrorMessage(error) || String(error),
       });
     },
   });
@@ -384,12 +422,15 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
     modelId?: string | null,
     requireApiKey = false,
   ) => {
-    const btn = document.activeElement as HTMLButtonElement;
+    const btn =
+      document.activeElement instanceof HTMLButtonElement
+        ? document.activeElement
+        : null;
     const origText = btn?.textContent || "";
     if (btn) btn.textContent = t("enterprise.llm.testing");
     try {
       const token = localStorage.getItem("token");
-      const testData: any = {
+      const testData: ConnectivityTestRequest = {
         provider: modelForm.provider,
         model: modelForm.model,
         base_url: modelForm.base_url || undefined,
@@ -405,7 +446,7 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
         },
         body: JSON.stringify(testData),
       });
-      const result = await res.json();
+      const result: ConnectivityTestResult = await res.json();
       if (result.capability_recorded) invalidateModelCaches();
       if (result.connection_success && result.tool_calling_supported === true) {
         if (btn) {
@@ -520,8 +561,8 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
                   className="form-input"
                   value={runtimeModelForm.planning_model_id}
                   onChange={(event) =>
-                    setRuntimeModelForm((current) => ({
-                      ...current,
+                    setRuntimeModelDraft((current) => ({
+                      ...(current ?? runtimeModelForm),
                       planning_model_id: event.target.value,
                     }))
                   }
@@ -544,8 +585,8 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
                   className="form-input"
                   value={runtimeModelForm.compact_model_id}
                   onChange={(event) =>
-                    setRuntimeModelForm((current) => ({
-                      ...current,
+                    setRuntimeModelDraft((current) => ({
+                      ...(current ?? runtimeModelForm),
                       compact_model_id: event.target.value,
                     }))
                   }
@@ -613,11 +654,14 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
                   const spec = providerOptions.find(
                     (p) => p.provider === newProvider,
                   );
-                  const updates: any = { provider: newProvider };
-                  updates.base_url = spec?.default_base_url || "";
-                  if (spec)
-                    updates.max_output_tokens = String(spec.default_max_tokens);
-                  setModelForm((f) => ({ ...f, ...updates }));
+                  setModelForm((current) => ({
+                    ...current,
+                    provider: newProvider,
+                    base_url: spec?.default_base_url || "",
+                    max_output_tokens: spec
+                      ? String(spec.default_max_tokens)
+                      : current.max_output_tokens,
+                  }));
                 }}
               >
                 {providerOptions.map((p) => (
