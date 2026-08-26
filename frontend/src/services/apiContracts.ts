@@ -383,6 +383,22 @@ export interface Skill {
   created_at?: string | null;
 }
 
+export interface SkillDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string;
+  icon: string | null;
+  folder_name: string;
+  is_builtin: boolean;
+  files: Array<{ path: string; content: string }>;
+}
+
+export interface SkillMutationResult {
+  id: string;
+  name: string;
+}
+
 export interface SkillMutationRequest {
   name: string;
   description?: string;

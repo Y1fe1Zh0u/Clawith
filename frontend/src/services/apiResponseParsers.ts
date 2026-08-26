@@ -30,7 +30,9 @@ import type {
   ScheduleHistoryItem,
   ScheduleRunResponse,
   Skill,
+  SkillDetail,
   SkillImportResult,
+  SkillMutationResult,
   SkillUrlPreview,
   Tenant,
   TenantChoice,
@@ -280,6 +282,18 @@ function assertUser(value: unknown, path: string): asserts value is User {
   assertOptionalBoolean(value.email_verified, `${path}.email_verified`);
 }
 
+function parseUserAt(value: unknown, path: string): User {
+  assertRecord(value, path);
+  const normalized: Record<string, unknown> = { ...value };
+  if (normalized.username === null) normalized.username = "";
+  if (normalized.email === null) normalized.email = "";
+  ["avatar_url", "tenant_id", "title", "feishu_open_id"].forEach((key) => {
+    if (normalized[key] === null) delete normalized[key];
+  });
+  assertUser(normalized, path);
+  return normalized;
+}
+
 function assertAgentStatus(
   value: unknown,
   path: string,
@@ -289,6 +303,7 @@ function assertAgentStatus(
     value !== "running" &&
     value !== "idle" &&
     value !== "stopped" &&
+    value !== "paused" &&
     value !== "error"
   ) {
     invalid(path, "agent status");
@@ -370,6 +385,28 @@ function assertAgent(value: unknown, path: string): asserts value is Agent {
   }
 }
 
+function parseAgentAt(value: unknown, path: string): Agent {
+  assertRecord(value, path);
+  const normalized: Record<string, unknown> = { ...value };
+  [
+    "avatar_url",
+    "bio",
+    "primary_model_id",
+    "fallback_model_id",
+    "last_heartbeat_at",
+    "timezone",
+    "openclaw_last_seen",
+    "last_active_at",
+  ].forEach((key) => {
+    if (normalized[key] === null) delete normalized[key];
+  });
+  ["max_tokens_per_day", "max_tokens_per_month"].forEach((key) => {
+    if (normalized[key] === null) delete normalized[key];
+  });
+  assertAgent(normalized, path);
+  return normalized;
+}
+
 function assertTenant(value: unknown, path: string): asserts value is Tenant {
   assertRecord(value, path);
   assertString(value.id, `${path}.id`);
@@ -396,26 +433,25 @@ function parseWithAssertion<T>(
 }
 
 export const parseUserResponse: ResponseParser<User> = (value) =>
-  parseWithAssertion(value, assertUser);
+  parseUserAt(value, "response");
 
 export const parseAgentResponse: ResponseParser<Agent> = (value) =>
-  parseWithAssertion(value, assertAgent);
+  parseAgentAt(value, "response");
 
 export const parseCreatedAgentResponse: ResponseParser<CreatedAgent> = (
   value,
 ) => {
   assertRecord(value, "response");
   assertOptionalString(value.api_key, "response.api_key");
-  assertAgent(value, "response");
+  const agent = parseAgentAt(value, "response");
   return value.api_key === undefined
-    ? value
-    : { ...value, api_key: value.api_key };
+    ? agent
+    : { ...agent, api_key: value.api_key };
 };
 
 export const parseAgentListResponse: ResponseParser<Agent[]> = (value) => {
   if (!Array.isArray(value)) invalid("response", "agent array");
-  value.forEach((item, index) => assertAgent(item, `response[${index}]`));
-  return value;
+  return value.map((item, index) => parseAgentAt(item, `response[${index}]`));
 };
 
 export const parseTenantResponse: ResponseParser<Tenant> = (value) =>
@@ -425,15 +461,23 @@ export const parseTenantChoicesResponse: ResponseParser<TenantChoice[]> = (
   value,
 ) => {
   if (!Array.isArray(value)) invalid("response", "tenant choice array");
-  value.forEach((item, index) => {
+  return value.flatMap((item, index) => {
     const path = `response[${index}]`;
     assertRecord(item, path);
+    if (item.tenant_id === null) return [];
     assertString(item.tenant_id, `${path}.tenant_id`);
     assertString(item.tenant_name, `${path}.tenant_name`);
     assertString(item.tenant_slug, `${path}.tenant_slug`);
     assertNullableString(item.logo_url, `${path}.logo_url`);
+    return [
+      {
+        tenant_id: item.tenant_id,
+        tenant_name: item.tenant_name,
+        tenant_slug: item.tenant_slug,
+        logo_url: item.logo_url,
+      },
+    ];
   });
-  return value;
 };
 
 export const parseTenantSetupResponse: ResponseParser<TenantSetupResponse> = (
@@ -926,7 +970,7 @@ export const parseTokenResponse: ResponseParser<TokenResponse> = (value) => {
   assertRecord(value, "response");
   assertString(value.access_token, "response.access_token");
   assertString(value.token_type, "response.token_type");
-  assertUser(value.user, "response.user");
+  const user = parseUserAt(value.user, "response.user");
   assertOptionalBoolean(
     value.needs_company_setup,
     "response.needs_company_setup",
@@ -934,7 +978,7 @@ export const parseTokenResponse: ResponseParser<TokenResponse> = (value) => {
   return {
     access_token: value.access_token,
     token_type: value.token_type,
-    user: value.user,
+    user,
     ...(value.needs_company_setup === undefined
       ? {}
       : { needs_company_setup: value.needs_company_setup }),
@@ -954,18 +998,27 @@ export const parseLoginResponse: ResponseParser<
     assertString(value.login_identifier, "response.login_identifier");
     if (!Array.isArray(value.tenants))
       invalid("response.tenants", "tenant array");
-    value.tenants.forEach((tenant, index) => {
+    const tenants = value.tenants.flatMap((tenant, index) => {
       const path = `response.tenants[${index}]`;
       assertRecord(tenant, path);
+      if (tenant.tenant_id === null) return [];
       assertString(tenant.tenant_id, `${path}.tenant_id`);
       assertString(tenant.tenant_name, `${path}.tenant_name`);
       assertString(tenant.tenant_slug, `${path}.tenant_slug`);
       assertNullableString(tenant.logo_url, `${path}.logo_url`);
+      return [
+        {
+          tenant_id: tenant.tenant_id,
+          tenant_name: tenant.tenant_name,
+          tenant_slug: tenant.tenant_slug,
+          ...(tenant.logo_url === null ? {} : { logo_url: tenant.logo_url }),
+        },
+      ];
     });
     return {
       requires_tenant_selection: true,
       login_identifier: value.login_identifier,
-      tenants: value.tenants,
+      tenants,
     };
   }
   return parseTokenResponse(value);
@@ -1010,14 +1063,17 @@ export const parseAuthRegisterResponse: ResponseParser<{
   needs_company_setup: boolean;
 }> = (value) => {
   assertRecord(value, "response");
-  if (value.user !== undefined) assertUser(value.user, "response.user");
+  const user =
+    value.user === undefined
+      ? undefined
+      : parseUserAt(value.user, "response.user");
   return {
     user_id: readString(value, "user_id", "response"),
     email: readString(value, "email", "response"),
     access_token: readString(value, "access_token", "response"),
     message: readString(value, "message", "response"),
     needs_company_setup: readBoolean(value, "needs_company_setup", "response"),
-    ...(value.user === undefined ? {} : { user: value.user }),
+    ...(user === undefined ? {} : { user }),
   };
 };
 
@@ -1029,12 +1085,12 @@ export const parseVerifyEmailResponse: ResponseParser<{
   needs_company_setup: boolean;
 }> = (value) => {
   assertRecord(value, "response");
-  assertUser(value.user, "response.user");
+  const user = parseUserAt(value.user, "response.user");
   return {
     ok: readBoolean(value, "ok", "response"),
     message: readString(value, "message", "response"),
     access_token: readString(value, "access_token", "response"),
-    user: value.user,
+    user,
     needs_company_setup: readBoolean(value, "needs_company_setup", "response"),
   };
 };
@@ -1045,12 +1101,16 @@ export const parseSwitchTenantResponse: ResponseParser<{
   message?: string;
 }> = (value) => {
   assertRecord(value, "response");
-  const redirectUrl = readOptionalString(value, "redirect_url", "response");
-  const message = readOptionalString(value, "message", "response");
+  const redirectUrl = readOptionalNullableString(
+    value,
+    "redirect_url",
+    "response",
+  );
+  const message = readOptionalNullableString(value, "message", "response");
   return {
     access_token: readString(value, "access_token", "response"),
-    ...(redirectUrl === undefined ? {} : { redirect_url: redirectUrl }),
-    ...(message === undefined ? {} : { message }),
+    ...(redirectUrl == null ? {} : { redirect_url: redirectUrl }),
+    ...(message == null ? {} : { message }),
   };
 };
 
@@ -1157,8 +1217,10 @@ function optionalStringFields(
 ): Record<string, string> {
   const result: Record<string, string> = {};
   keys.forEach((key) => {
-    const field = readOptionalString(value, key, path);
-    if (field !== undefined) result[key] = field;
+    const field = value[key];
+    if (field === undefined || field === null) return;
+    assertString(field, `${path}.${key}`);
+    result[key] = field;
   });
   return result;
 }
@@ -1422,6 +1484,39 @@ export const parseSkillResponse: ResponseParser<Skill> = (value) =>
   parseSkillAt(value, "response");
 export const parseSkillsResponse: ResponseParser<Skill[]> = (value) =>
   parseArray(value, "response", parseSkillAt);
+
+export const parseSkillDetailResponse: ResponseParser<SkillDetail> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  const files = parseArray(value.files, "response.files", (item, path) => {
+    assertRecord(item, path);
+    return {
+      path: readString(item, "path", path),
+      content: readString(item, "content", path),
+    };
+  });
+  return {
+    id: readString(value, "id", "response"),
+    name: readString(value, "name", "response"),
+    description: readNullableString(value, "description", "response"),
+    category: readString(value, "category", "response"),
+    icon: readNullableString(value, "icon", "response"),
+    folder_name: readString(value, "folder_name", "response"),
+    is_builtin: readBoolean(value, "is_builtin", "response"),
+    files,
+  };
+};
+
+export const parseSkillMutationResult: ResponseParser<SkillMutationResult> = (
+  value,
+) => {
+  assertRecord(value, "response");
+  return {
+    id: readString(value, "id", "response"),
+    name: readString(value, "name", "response"),
+  };
+};
 
 function parseClawhubSkillAt(
   value: unknown,

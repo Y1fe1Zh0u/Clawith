@@ -41,8 +41,10 @@ import type {
   ScheduleRunResponse,
   ScheduleUpdateRequest,
   Skill,
+  SkillDetail,
   SkillImportResult,
   SkillMutationRequest,
+  SkillMutationResult,
   SkillUrlPreview,
   TaskCreateRequest,
   TaskTriggerResponse,
@@ -117,7 +119,8 @@ import {
   parseScheduleRunResponse,
   parseSchedulesResponse,
   parseSkillImportResponse,
-  parseSkillResponse,
+  parseSkillDetailResponse,
+  parseSkillMutationResult,
   parseSkillsResponse,
   parseSkillUrlPreviewResponse,
   parseSwitchTenantResponse,
@@ -156,6 +159,49 @@ export type {
 
 const API_BASE = "/api";
 
+function isAuthEndpoint(url: string): boolean {
+  return (
+    url.startsWith("/auth/login") ||
+    url.startsWith("/auth/register") ||
+    url.startsWith("/auth/verify-email") ||
+    url.startsWith("/auth/resend-verification") ||
+    url.startsWith("/auth/forgot-password") ||
+    url.startsWith("/auth/reset-password")
+  );
+}
+
+async function fetchApiResponse(
+  url: string,
+  options: RequestInit,
+): Promise<Response> {
+  const token = localStorage.getItem("token");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${url}`, { ...options, headers });
+  } catch (error) {
+    throw normalizeUnknownError(error, {
+      code: "network_error",
+      source: "http",
+      retryable: true,
+    });
+  }
+
+  if (response.ok) return response;
+
+  const apiError = await parseHttpErrorResponse(response);
+  if (response.status === 401 && !isAuthEndpoint(url)) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    window.location.href = "/login";
+  }
+  throw apiError;
+}
+
 function fetchJsonImpl<T>(
   url: string,
   options?: RequestInit,
@@ -171,41 +217,7 @@ async function fetchJsonImpl(
   options: RequestInit = {},
   parser?: ResponseParser<unknown>,
 ): Promise<unknown> {
-  const token = localStorage.getItem("token");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}${url}`, { ...options, headers });
-  } catch (error) {
-    throw normalizeUnknownError(error, {
-      code: "network_error",
-      source: "http",
-      retryable: true,
-    });
-  }
-
-  if (!res.ok) {
-    const apiError = await parseHttpErrorResponse(res);
-    // Auto-logout on expired/invalid token (but not on auth endpoints — let them show errors)
-    const isAuthEndpoint =
-      url.startsWith("/auth/login") ||
-      url.startsWith("/auth/register") ||
-      url.startsWith("/auth/verify-email") ||
-      url.startsWith("/auth/resend-verification") ||
-      url.startsWith("/auth/forgot-password") ||
-      url.startsWith("/auth/reset-password");
-    if (res.status === 401 && !isAuthEndpoint) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-      window.location.href = "/login";
-      throw apiError;
-    }
-    throw apiError;
-  }
+  const res = await fetchApiResponse(url, options);
 
   if (res.status === 204) {
     if (!parser) return undefined;
@@ -235,42 +247,15 @@ async function requestVoid(
   url: string,
   options: RequestInit = {},
 ): Promise<void> {
-  await requestRaw(url, options, true);
-}
-
-async function requestRaw(
-  url: string,
-  options: RequestInit,
-  expectNoContent: boolean,
-): Promise<unknown> {
-  const token = localStorage.getItem("token");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}${url}`, { ...options, headers });
-  } catch (error) {
-    throw normalizeUnknownError(error, {
-      code: "network_error",
+  const response = await fetchApiResponse(url, options);
+  if (response.status !== 204) {
+    throw new AppError({
+      message: "API returned content where no content was expected",
+      code: "invalid_api_response",
       source: "http",
-      retryable: true,
+      retryable: false,
     });
   }
-  if (!res.ok) throw await parseHttpErrorResponse(res);
-  if (expectNoContent) {
-    if (res.status !== 204) {
-      throw new AppError({
-        message: "API returned content where no content was expected",
-        code: "invalid_api_response",
-        source: "http",
-        retryable: false,
-      });
-    }
-    return undefined;
-  }
-  return res.json();
 }
 
 /** Legacy/Internal generic fetcher */
@@ -1126,20 +1111,26 @@ export const scheduleApi = {
 // ─── Skills ───────────────────────────────────────────
 export const skillApi = {
   list: () => request<Skill[]>("/skills/", {}, parseSkillsResponse),
-  get: (id: string) => request<Skill>(`/skills/${id}`, {}, parseSkillResponse),
+  get: (id: string) =>
+    request<SkillDetail>(`/skills/${id}`, {}, parseSkillDetailResponse),
   create: (data: SkillMutationRequest) =>
-    request<Skill>(
+    request<SkillMutationResult>(
       "/skills/",
       { method: "POST", body: JSON.stringify(data) },
-      parseSkillResponse,
+      parseSkillMutationResult,
     ),
   update: (id: string, data: Partial<SkillMutationRequest>) =>
-    request<Skill>(
+    request<SkillMutationResult>(
       `/skills/${id}`,
       { method: "PUT", body: JSON.stringify(data) },
-      parseSkillResponse,
+      parseSkillMutationResult,
     ),
-  delete: (id: string) => requestVoid(`/skills/${id}`, { method: "DELETE" }),
+  delete: (id: string) =>
+    request<{ ok: boolean }>(
+      `/skills/${id}`,
+      { method: "DELETE" },
+      parseOkResponse,
+    ).then(() => undefined),
   // Path-based browse for FileBrowser
   browse: {
     list: (path: string) =>

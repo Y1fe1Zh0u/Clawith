@@ -215,7 +215,12 @@ test("normal requests and both upload transports use the shared parser", () => {
 
   assert.match(
     apiSource,
-    /const apiError = await parseHttpErrorResponse\(res\)/,
+    /const apiError = await parseHttpErrorResponse\(response\)/,
+  );
+  assert.match(apiSource, /const res = await fetchApiResponse\(url, options\)/);
+  assert.match(
+    apiSource,
+    /const response = await fetchApiResponse\(url, options\)/,
   );
   assert.match(apiSource, /throw await parseHttpErrorResponse\(res\)/);
   assert.match(apiSource, /reject\(\s*parseHttpError\(\{/);

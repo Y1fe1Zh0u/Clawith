@@ -5,6 +5,7 @@ import test from "node:test";
 import { AppError } from "../src/services/apiError.ts";
 import {
   parseActivityListResponse,
+  parseAgentListResponse,
   parseChannelConfigResponse,
   parseControlScreenshotResponse,
   parseCredentialsResponse,
@@ -20,6 +21,7 @@ import {
   parseTenantSetupResponse,
   parseTriggersResponse,
   parseUploadResponse,
+  parseUserResponse,
 } from "../src/services/apiResponseParsers.ts";
 import { parseGroupsResponse } from "../src/services/groupApiResponseParsers.ts";
 
@@ -350,4 +352,75 @@ test("remaining service contract families accept valid data and reject malformed
         error instanceof AppError && error.code === "invalid_api_response",
     );
   });
+});
+
+test("user and agent parsers normalize documented backend nulls", () => {
+  assert.deepEqual(
+    parseUserResponse({
+      id: "user-1",
+      username: null,
+      email: null,
+      display_name: "Mobile User",
+      avatar_url: null,
+      role: "member",
+      is_platform_admin: false,
+      tenant_id: null,
+      title: null,
+      is_active: true,
+      email_verified: true,
+      created_at: "2026-01-01T00:00:00Z",
+    }),
+    {
+      id: "user-1",
+      username: "",
+      email: "",
+      display_name: "Mobile User",
+      role: "member",
+      is_platform_admin: false,
+      is_active: true,
+      email_verified: true,
+      created_at: "2026-01-01T00:00:00Z",
+    },
+  );
+
+  const [agent] = parseAgentListResponse([
+    {
+      id: "agent-1",
+      name: "Paused agent",
+      avatar_url: null,
+      role_description: "Assistant",
+      bio: null,
+      status: "paused",
+      creator_id: "user-1",
+      primary_model_id: null,
+      fallback_model_id: null,
+      autonomy_policy: {},
+      tokens_used_today: 0,
+      tokens_used_month: 0,
+      tokens_used_total: 0,
+      cache_read_tokens_today: 0,
+      cache_read_tokens_month: 0,
+      cache_read_tokens_total: 0,
+      cache_creation_tokens_today: 0,
+      cache_creation_tokens_month: 0,
+      cache_creation_tokens_total: 0,
+      max_tokens_per_day: null,
+      max_tokens_per_month: null,
+      context_window_size: 100,
+      heartbeat_enabled: true,
+      heartbeat_interval_minutes: 240,
+      heartbeat_active_hours: "09:00-18:00",
+      last_heartbeat_at: null,
+      timezone: null,
+      agent_type: "native",
+      openclaw_last_seen: null,
+      unread_count: 0,
+      onboarded_for_me: true,
+      created_at: "2026-01-01T00:00:00Z",
+      last_active_at: null,
+    },
+  ]);
+  assert.equal(agent.status, "paused");
+  assert.equal(agent.avatar_url, undefined);
+  assert.equal(agent.max_tokens_per_day, undefined);
 });

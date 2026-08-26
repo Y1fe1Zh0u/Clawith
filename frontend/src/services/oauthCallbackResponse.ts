@@ -110,7 +110,9 @@ export function parseOAuthCallbackResponse(
     return {
       requires_tenant_selection: true,
       login_identifier: stringValue(value.login_identifier, "login_identifier"),
-      tenants: value.tenants.map(parseTenantChoice),
+      tenants: value.tenants
+        .filter((tenant) => !isRecord(tenant) || tenant.tenant_id !== null)
+        .map(parseTenantChoice),
       pending_token: requiredString(value.pending_token, "pending_token"),
     };
   }

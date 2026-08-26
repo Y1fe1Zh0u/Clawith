@@ -22,7 +22,7 @@ export interface Agent {
   avatar_url?: string;
   role_description: string;
   bio?: string;
-  status: "creating" | "running" | "idle" | "stopped" | "error";
+  status: "creating" | "running" | "idle" | "stopped" | "paused" | "error";
   creator_id: string;
   primary_model_id?: string;
   fallback_model_id?: string;
