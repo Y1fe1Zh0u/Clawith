@@ -115,7 +115,10 @@ import {
   shouldKickoffOnboarding,
 } from "./onboardingKickoff";
 import { fetchAuth } from "./utils/fetchAuth";
-import { caughtErrorMessage } from "../../services/apiError";
+import {
+  caughtErrorMessage,
+  parseHttpErrorResponse,
+} from "../../services/apiError";
 import {
   formatRuntimeErrorDiagnostics,
   normalizeRuntimeError,
@@ -162,7 +165,7 @@ type AgentDetailUpdatePayload = {
   welcome_message?: string;
 };
 
-type AgentUpdateResult = AgentDetailData & {
+type AgentUpdateResult = {
   _clamped_fields?: Array<{
     field: string;
     requested: unknown;
@@ -252,6 +255,25 @@ function unknownString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function agentUpdateResultFromUnknown(value: unknown): AgentUpdateResult {
+  if (!isUnknownRecord(value)) throw new Error("Invalid agent update response");
+  if (value._clamped_fields === undefined) return {};
+  if (!Array.isArray(value._clamped_fields)) {
+    throw new Error("Invalid agent update response");
+  }
+  const clampedFields = value._clamped_fields.map((item) => {
+    if (!isUnknownRecord(item) || typeof item.field !== "string") {
+      throw new Error("Invalid agent update response");
+    }
+    return {
+      field: item.field,
+      requested: item.requested,
+      applied: item.applied,
+    };
+  });
+  return { _clamped_fields: clampedFields };
+}
+
 function useMutableValue<T>(initialValue: T) {
   const valueRef = useRef(initialValue);
   const getValue = useCallback(() => valueRef.current, []);
@@ -328,6 +350,31 @@ function sessionMessageFromUnknown(value: unknown): SessionMessage | null {
     toolThinking: unknownString(value.toolThinking),
     runtime_error: value.runtime_error,
   };
+}
+
+async function requireOk(response: Response): Promise<void> {
+  if (!response.ok) throw await parseHttpErrorResponse(response);
+}
+
+function chatSessionsFromUnknown(value: unknown): ChatSession[] {
+  if (!Array.isArray(value)) throw new Error("Invalid session list response");
+  const sessions = value.map(chatSessionFromUnknown);
+  if (sessions.some((session) => session === null)) {
+    throw new Error("Invalid session list response");
+  }
+  return sessions.filter((session): session is ChatSession => session !== null);
+}
+
+function sessionMessagesFromUnknown(value: unknown): SessionMessage[] {
+  if (!Array.isArray(value))
+    throw new Error("Invalid session messages response");
+  const messages = value.map(sessionMessageFromUnknown);
+  if (messages.some((message) => message === null)) {
+    throw new Error("Invalid session messages response");
+  }
+  return messages.filter(
+    (message): message is SessionMessage => message !== null,
+  );
 }
 
 const WORKSPACE_TOOLS = new Set([
@@ -998,6 +1045,81 @@ type PermissionPayload = {
   user_access: AccessUser[];
 };
 
+function permissionDataFromUnknown(value: unknown): PermissionData {
+  if (!isUnknownRecord(value)) throw new Error("Invalid permissions response");
+  const rawUsers = value.user_access;
+  if (rawUsers !== undefined && !Array.isArray(rawUsers)) {
+    throw new Error("Invalid permissions response");
+  }
+  const userAccess = (rawUsers || []).map((item) => {
+    if (
+      !isUnknownRecord(item) ||
+      typeof item.id !== "string" ||
+      typeof item.name !== "string"
+    ) {
+      throw new Error("Invalid permissions response");
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      username: unknownString(item.username),
+      email: unknownString(item.email),
+      access_level: item.access_level === "manage" ? "manage" : "use",
+      is_required: item.is_required === true,
+      required_reason: unknownString(item.required_reason) || null,
+    } satisfies AccessUser;
+  });
+  return {
+    can_manage:
+      typeof value.can_manage === "boolean" ? value.can_manage : undefined,
+    is_owner: typeof value.is_owner === "boolean" ? value.is_owner : undefined,
+    creator_id:
+      typeof value.creator_id === "string" ||
+      typeof value.creator_id === "number"
+        ? value.creator_id
+        : undefined,
+    scope_type:
+      value.scope_type === "company" ||
+      value.scope_type === "user" ||
+      value.scope_type === "custom"
+        ? value.scope_type
+        : undefined,
+    access_level:
+      value.access_level === "manage" || value.access_level === "use"
+        ? value.access_level
+        : undefined,
+    user_access: userAccess,
+  };
+}
+
+function permissionCandidatesFromUnknown(value: unknown): {
+  users: AccessUserCandidate[];
+  agents: unknown[];
+} {
+  if (!isUnknownRecord(value) || !Array.isArray(value.users)) {
+    throw new Error("Invalid permission candidates response");
+  }
+  const users = value.users.map((item) => {
+    if (
+      !isUnknownRecord(item) ||
+      typeof item.id !== "string" ||
+      typeof item.name !== "string"
+    ) {
+      throw new Error("Invalid permission candidates response");
+    }
+    return {
+      id: item.id,
+      name: item.name,
+      username: unknownString(item.username),
+      email: unknownString(item.email),
+    };
+  });
+  return {
+    users,
+    agents: Array.isArray(value.agents) ? value.agents : [],
+  };
+}
+
 function AccessPermissionsPanel({
   agentId,
   permData,
@@ -1041,8 +1163,10 @@ function AccessPermissionsPanel({
   const { data: candidates } = useQuery({
     queryKey: ["agent-permission-candidates", agentId, userSearch],
     queryFn: () =>
-      fetchAuth<{ users: AccessUserCandidate[]; agents: unknown[] }>(
+      fetchAuth(
         `/agents/${agentId}/permissions/candidates${userSearch.trim() ? `?search=${encodeURIComponent(userSearch.trim())}` : ""}`,
+        undefined,
+        permissionCandidatesFromUnknown,
       ),
     enabled: !!agentId && canManagePermissions,
   });
@@ -2748,26 +2872,23 @@ export default function AgentDetailPage() {
   });
 
   // ── Aware tab data: reflection sessions (trigger monologues) ──
-  const { data: reflectionSessions = [] } = useQuery<ChatSession[]>({
-    queryKey: ["reflection-sessions", id],
-    queryFn: async () => {
-      const tkn = localStorage.getItem("token");
-      const res = await fetch(`/api/agents/${id}/sessions?scope=all`, {
-        headers: { Authorization: `Bearer ${tkn}` },
-      });
-      if (!res.ok) return [];
-      const all: unknown = await res.json();
-      if (!Array.isArray(all)) return [];
-      return all
-        .map(chatSessionFromUnknown)
-        .filter(
-          (session): session is ChatSession =>
-            session !== null && session.source_channel === "trigger",
+  const { data: reflectionSessions = [], error: reflectionSessionsError } =
+    useQuery<ChatSession[]>({
+      queryKey: ["reflection-sessions", id],
+      queryFn: async () => {
+        const tkn = localStorage.getItem("token");
+        const res = await fetch(`/api/agents/${id}/sessions?scope=all`, {
+          headers: { Authorization: `Bearer ${tkn}` },
+        });
+        await requireOk(res);
+        const all: unknown = await res.json();
+        return chatSessionsFromUnknown(all).filter(
+          (session) => session.source_channel === "trigger",
         );
-    },
-    enabled: !!id && awareDataActive,
-    refetchInterval: awareDataActive ? 10000 : false,
-  });
+      },
+      enabled: !!id && awareDataActive,
+      refetchInterval: awareDataActive ? 10000 : false,
+    });
 
   // ── Aware tab state ──
   const [expandedFocusIds, setExpandedFocusIds] = useState<Set<string>>(
@@ -2778,6 +2899,9 @@ export default function AgentDetailPage() {
   );
   const [reflectionMessages, setReflectionMessages] = useState<
     Record<string, SessionMessage[]>
+  >({});
+  const [reflectionMessageErrors, setReflectionMessageErrors] = useState<
+    Record<string, string | undefined>
   >({});
   const [showAllFocus, setShowAllFocus] = useState(false);
   const [showCompletedFocus, setShowCompletedFocus] = useState(false);
@@ -2807,6 +2931,10 @@ export default function AgentDetailPage() {
 
   const loadReflectionMessages = async (sessionId: string) => {
     if (!id || reflectionMessages[sessionId]) return;
+    setReflectionMessageErrors((current) => ({
+      ...current,
+      [sessionId]: undefined,
+    }));
     try {
       const tkn = localStorage.getItem("token");
       const res = await fetch(
@@ -2815,17 +2943,16 @@ export default function AgentDetailPage() {
           headers: { Authorization: `Bearer ${tkn}` },
         },
       );
-      if (res.ok) {
-        const data: unknown = await res.json();
-        const messages = Array.isArray(data)
-          ? data
-              .map(sessionMessageFromUnknown)
-              .filter((message): message is SessionMessage => message !== null)
-          : [];
-        setReflectionMessages((prev) => ({ ...prev, [sessionId]: messages }));
-      }
-    } catch {
-      // Reflection details are informational; keep the list usable if loading fails.
+      await requireOk(res);
+      const data: unknown = await res.json();
+      const messages = sessionMessagesFromUnknown(data);
+      setReflectionMessages((prev) => ({ ...prev, [sessionId]: messages }));
+    } catch (error) {
+      setReflectionMessageErrors((current) => ({
+        ...current,
+        [sessionId]:
+          caughtErrorMessage(error) || "Failed to load reflection messages",
+      }));
     }
   };
 
@@ -2867,6 +2994,11 @@ export default function AgentDetailPage() {
   const [chatHistoryLoadingMore, setChatHistoryLoadingMore] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [allSessionsLoading, setAllSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [allSessionsError, setAllSessionsError] = useState<string | null>(null);
+  const [sessionMessagesError, setSessionMessagesError] = useState<
+    string | null
+  >(null);
   const [agentExpired, setAgentExpired] = useState(false);
   // Websocket chat state (for 'me' conversation)
   const token = useAuthStore((s) => s.token);
@@ -2938,13 +3070,9 @@ export default function AgentDetailPage() {
         `/api/agents/${agentId}/sessions/${sessionId}/messages?limit=${HISTORY_PAGE_SIZE}`,
         { headers: { Authorization: `Bearer ${tkn}` } },
       );
-      if (!response.ok) return;
+      await requireOk(response);
       const payload: unknown = await response.json();
-      const messages = Array.isArray(payload)
-        ? payload
-            .map(sessionMessageFromUnknown)
-            .filter((message): message is SessionMessage => message !== null)
-        : [];
+      const messages = sessionMessagesFromUnknown(payload);
       if (
         currentAgentIdRef.current !== agentId ||
         activeSessionIdRef.current !== sessionId
@@ -3000,8 +3128,11 @@ export default function AgentDetailPage() {
       );
       setChatHistoryHasMore(messages.length >= HISTORY_PAGE_SIZE);
       setMessagesLoadedRuntimeKey(buildSessionRuntimeKey(agentId, sessionId));
-    } catch {
-      // Runtime-state polling will retry; keep the current local messages.
+      setSessionMessagesError(null);
+    } catch (error) {
+      setSessionMessagesError(
+        caughtErrorMessage(error) || "Failed to load session messages",
+      );
     }
   };
 
@@ -3075,7 +3206,7 @@ export default function AgentDetailPage() {
         );
         return null;
       }
-      const payload = await response.json();
+      const payload: unknown = await response.json();
       const next = sessionActiveRunFromResponse(payload);
       if (!sessionRuntimeStateResponseIsValid(payload, next)) {
         applySessionActiveRun(
@@ -3255,8 +3386,8 @@ export default function AgentDetailPage() {
   const fetchMySessions = async (
     silent = false,
     agentId: string | undefined = id,
-  ) => {
-    if (!agentId) return [];
+  ): Promise<ChatSession[] | null> => {
+    if (!agentId) return null;
     if (!silent && currentAgentIdRef.current === agentId)
       setSessionsLoading(true);
     try {
@@ -3264,24 +3395,30 @@ export default function AgentDetailPage() {
       const res = await fetch(`/api/agents/${agentId}/sessions?scope=mine`, {
         headers: { Authorization: `Bearer ${tkn}` },
       });
-      if (res.ok) {
-        const payload: unknown = await res.json();
-        const data = Array.isArray(payload)
-          ? payload
-              .map(normalizeChatSession)
-              .filter((session): session is ChatSession => session !== null)
-          : [];
-        if (currentAgentIdRef.current === agentId) setSessions(data);
-        if (!silent && currentAgentIdRef.current === agentId)
-          setSessionsLoading(false);
-        return data;
+      await requireOk(res);
+      const payload: unknown = await res.json();
+      const data = chatSessionsFromUnknown(payload).map((session) =>
+        normalizeChatSession(session),
+      );
+      const normalized = data.filter(
+        (session): session is ChatSession => session !== null,
+      );
+      if (currentAgentIdRef.current === agentId) {
+        setSessions(normalized);
+        setSessionsError(null);
       }
-    } catch {
-      /* The existing empty-session fallback below remains authoritative. */
+      return normalized;
+    } catch (error) {
+      if (currentAgentIdRef.current === agentId) {
+        setSessionsError(
+          caughtErrorMessage(error) || "Failed to load sessions",
+        );
+      }
+      return null;
+    } finally {
+      if (!silent && currentAgentIdRef.current === agentId)
+        setSessionsLoading(false);
     }
-    if (!silent && currentAgentIdRef.current === agentId)
-      setSessionsLoading(false);
-    return [];
   };
 
   const fetchAllSessions = async () => {
@@ -3292,33 +3429,26 @@ export default function AgentDetailPage() {
       const res = await fetch(`/api/agents/${id}/sessions?scope=all`, {
         headers: { Authorization: `Bearer ${tkn}` },
       });
-      if (!currentAgentIdRef.current || currentAgentIdRef.current !== id)
-        return;
-      if (res.ok) {
-        const payload: unknown = await res.json();
-        const all = Array.isArray(payload)
-          ? payload
-              .map(normalizeChatSession)
-              .filter(
-                (session): session is ChatSession =>
-                  session !== null &&
-                  String(session.source_channel || "direct").toLowerCase() !==
-                    "trigger",
-              )
-          : [];
-        setAllSessions(all);
-      } else {
-        setAllSessions([]);
-        if (res.status === 403) {
-          console.warn(
-            "[chat] scope=all sessions forbidden (need org/platform/agent admin)",
-          );
-        }
+      await requireOk(res);
+      const payload: unknown = await res.json();
+      const all = chatSessionsFromUnknown(payload)
+        .map((session) => normalizeChatSession(session))
+        .filter(
+          (session): session is ChatSession =>
+            session !== null &&
+            session.source_channel.toLowerCase() !== "trigger",
+        );
+      if (currentAgentIdRef.current !== id) return;
+      setAllSessions(all);
+      setAllSessionsError(null);
+    } catch (error) {
+      if (currentAgentIdRef.current === id) {
+        setAllSessionsError(
+          caughtErrorMessage(error) || "Failed to load sessions",
+        );
       }
-    } catch {
-      if (currentAgentIdRef.current === id) setAllSessions([]);
     } finally {
-      setAllSessionsLoading(false);
+      if (currentAgentIdRef.current === id) setAllSessionsLoading(false);
     }
   };
 
@@ -3375,13 +3505,9 @@ export default function AgentDetailPage() {
           signal: controller.signal,
         },
       );
-      if (!res.ok) return;
+      await requireOk(res);
       const payload: unknown = await res.json();
-      const msgs = Array.isArray(payload)
-        ? payload
-            .map(sessionMessageFromUnknown)
-            .filter((message): message is SessionMessage => message !== null)
-        : [];
+      const msgs = sessionMessagesFromUnknown(payload);
       if (controller.signal.aborted || loadSeq !== sessionLoadSeqRef.current)
         return;
       if (currentAgentIdRef.current !== targetAgentId) return;
@@ -3434,8 +3560,12 @@ export default function AgentDetailPage() {
       // immediately in local state so unread badges clear without waiting for the next poll.
       clearUnreadForSession(String(sess.id));
       queryClient.invalidateQueries({ queryKey: ["agents"] });
+      setSessionMessagesError(null);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return;
+      setSessionMessagesError(
+        caughtErrorMessage(error) || "Failed to load session messages",
+      );
       console.error("Failed to load session messages:", error);
     }
   };
@@ -3453,22 +3583,16 @@ export default function AgentDetailPage() {
         body: JSON.stringify({}),
       });
       if (res.ok) {
-        const newSess = normalizeChatSession(await res.json());
+        const payload: unknown = await res.json();
+        const [newSession] = chatSessionsFromUnknown([payload]);
+        const newSess = normalizeChatSession(newSession);
         if (!newSess) throw new Error("Invalid session response");
         setChatScope("mine");
         setSessions((prev) => [newSess, ...prev]);
         setIsStreaming(false);
         setIsWaiting(false);
         await selectSession(newSess, "mine");
-      } else {
-        const err = await res
-          .json()
-          .catch(() => ({ detail: `HTTP ${res.status}` }));
-        console.error("Failed to create session:", err);
-        toast.error(t("common.error.sessionCreateFailed", "创建会话失败"), {
-          details: String(err.detail || `HTTP ${res.status}`),
-        });
-      }
+      } else throw await parseHttpErrorResponse(res);
     } catch (error) {
       console.error("Failed to create session:", error);
       toast.error(t("common.error.sessionCreateFailed", "创建会话失败"), {
@@ -3492,10 +3616,11 @@ export default function AgentDetailPage() {
     if (!ok) return;
     const tkn = localStorage.getItem("token");
     try {
-      await fetch(`/api/agents/${id}/sessions/${sessionId}`, {
+      const response = await fetch(`/api/agents/${id}/sessions/${sessionId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${tkn}` },
       });
+      await requireOk(response);
       if (id) closeSessionSocket(buildSessionRuntimeKey(id, sessionId), true);
       // If deleted the active session, clear it
       if (activeSession?.id === sessionId) {
@@ -3551,7 +3676,7 @@ export default function AgentDetailPage() {
               ? new Date(expiryValue).toISOString()
               : null,
           };
-      await fetch(`/api/agents/${id}`, {
+      const response = await fetch(`/api/agents/${id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -3559,6 +3684,7 @@ export default function AgentDetailPage() {
         },
         body: JSON.stringify(body),
       });
+      await requireOk(response);
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
       setShowExpiryModal(false);
     } catch (error) {
@@ -3809,10 +3935,14 @@ export default function AgentDetailPage() {
         min_poll_interval_min: settingsForm.min_poll_interval_min,
         webhook_rate_limit: settingsForm.webhook_rate_limit,
       };
-      const result = await fetchAuth<AgentUpdateResult>(`/agents/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify(updatePayload),
-      });
+      const result = await fetchAuth(
+        `/agents/${id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(updatePayload),
+        },
+        agentUpdateResultFromUnknown,
+      );
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
       settingsInitRef.current = false;
       const clamped = result?._clamped_fields;
@@ -3856,10 +3986,14 @@ export default function AgentDetailPage() {
       const updatePayload: AgentDetailUpdatePayload = {
         welcome_message: wmDraft,
       };
-      await fetchAuth<AgentUpdateResult>(`/agents/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify(updatePayload),
-      });
+      await fetchAuth(
+        `/agents/${id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(updatePayload),
+        },
+        agentUpdateResultFromUnknown,
+      );
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
       setWmSaved(true);
       setTimeout(() => setWmSaved(false), 2000);
@@ -4021,7 +4155,7 @@ export default function AgentDetailPage() {
     const data = await fetchMySessions(false, agentId);
     if (currentAgentIdRef.current !== agentId) return;
     setSessionsLoading(false);
-    if (data.length > 0) await selectSession(data[0], "mine");
+    if (data && data.length > 0) await selectSession(data[0], "mine");
   });
 
   useEffect(() => {
@@ -4765,10 +4899,7 @@ export default function AgentDetailPage() {
           }),
         },
       );
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body?.detail || `HTTP ${response.status}`);
-      }
+      await requireOk(response);
 
       if (reconciliation.workspaceResolution) {
         await fetchSessionRuntimeState(id, sessionId);
@@ -5060,9 +5191,9 @@ export default function AgentDetailPage() {
               headers: { Authorization: `Bearer ${tkn}` },
             },
           );
-          if (!response.ok)
-            throw new Error(`History request failed with ${response.status}`);
-          return response.json();
+          await requireOk(response);
+          const payload: unknown = await response.json();
+          return sessionMessagesFromUnknown(payload);
         },
       });
       if (
@@ -5145,9 +5276,9 @@ export default function AgentDetailPage() {
               headers: { Authorization: `Bearer ${tkn}` },
             },
           );
-          if (!response.ok)
-            throw new Error(`History request failed with ${response.status}`);
-          return response.json();
+          await requireOk(response);
+          const payload: unknown = await response.json();
+          return sessionMessagesFromUnknown(payload);
         },
       });
       if (
@@ -6119,7 +6250,12 @@ export default function AgentDetailPage() {
 
   const { data: permData } = useQuery({
     queryKey: ["agent-permissions", id],
-    queryFn: () => fetchAuth<PermissionData>(`/agents/${id}/permissions`),
+    queryFn: () =>
+      fetchAuth(
+        `/agents/${id}/permissions`,
+        undefined,
+        permissionDataFromUnknown,
+      ),
     enabled: !!id && activeTab === "settings",
   });
 
@@ -7090,7 +7226,12 @@ export default function AgentDetailPage() {
           <div className="aware-side-section-title">
             {t("agent.aware.reflections")}
           </div>
-          {reflectionSessions.length === 0 ? (
+          {reflectionSessionsError ? (
+            <div className="aware-side-empty">
+              {caughtErrorMessage(reflectionSessionsError) ||
+                "Failed to load reflection sessions"}
+            </div>
+          ) : reflectionSessions.length === 0 ? (
             <div className="aware-side-empty">
               {isZh ? "暂无自主思考记录" : "No reflections yet"}
             </div>
@@ -7137,7 +7278,11 @@ export default function AgentDetailPage() {
                   </button>
                   {isExpanded && (
                     <div className="aware-side-reflection-detail">
-                      {msgs.length === 0 ? (
+                      {reflectionMessageErrors[session.id] ? (
+                        <div className="aware-side-empty compact">
+                          {reflectionMessageErrors[session.id]}
+                        </div>
+                      ) : msgs.length === 0 ? (
                         <div className="aware-side-empty compact">
                           {isZh ? "正在加载..." : "Loading..."}
                         </div>
@@ -8998,7 +9143,17 @@ export default function AgentDetailPage() {
                                         "1px solid var(--border-subtle)",
                                     }}
                                   >
-                                    {msgs.length === 0 ? (
+                                    {reflectionMessageErrors[session.id] ? (
+                                      <div
+                                        style={{
+                                          padding: "12px 0",
+                                          fontSize: "12px",
+                                          color: "var(--error)",
+                                        }}
+                                      >
+                                        {reflectionMessageErrors[session.id]}
+                                      </div>
+                                    ) : msgs.length === 0 ? (
                                       <div
                                         style={{
                                           padding: "12px 0",
@@ -9710,6 +9865,16 @@ export default function AgentDetailPage() {
                         >
                           {t("common.loading")}
                         </div>
+                      ) : sessionsError ? (
+                        <div
+                          style={{
+                            padding: "20px 12px",
+                            fontSize: "12px",
+                            color: "var(--error)",
+                          }}
+                        >
+                          {sessionsError}
+                        </div>
                       ) : sessions.length === 0 ? (
                         <div
                           style={{
@@ -9963,6 +10128,16 @@ export default function AgentDetailPage() {
                               />
                             </div>
                           ))}
+                        </div>
+                      ) : allSessionsError ? (
+                        <div
+                          style={{
+                            padding: "20px 12px",
+                            fontSize: "12px",
+                            color: "var(--error)",
+                          }}
+                        >
+                          {allSessionsError}
                         </div>
                       ) : othersListForPicker.length === 0 ? (
                         <div
@@ -10246,6 +10421,17 @@ export default function AgentDetailPage() {
                       style={{ padding: "48px 16px 12px" }}
                       tabIndex={0}
                     >
+                      {sessionMessagesError && (
+                        <div
+                          style={{
+                            padding: "8px 12px",
+                            color: "var(--error)",
+                            fontSize: "12px",
+                          }}
+                        >
+                          {sessionMessagesError}
+                        </div>
+                      )}
                       {historyLoadingMore && (
                         <div
                           style={{
@@ -10566,6 +10752,17 @@ export default function AgentDetailPage() {
                       style={{ padding: "12px 16px" }}
                       tabIndex={0}
                     >
+                      {sessionMessagesError && (
+                        <div
+                          style={{
+                            padding: "8px 12px",
+                            color: "var(--error)",
+                            fontSize: "12px",
+                          }}
+                        >
+                          {sessionMessagesError}
+                        </div>
+                      )}
                       {chatHistoryLoadingMore && (
                         <div
                           style={{

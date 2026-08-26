@@ -69,6 +69,124 @@ type CustomHumanCandidate = Omit<
 type CustomAgentCandidate = CustomAgentEntry;
 type CustomTab = "human" | "agent";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const optionalString = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+
+function directoryMemberFromUnknown(value: unknown): DirectoryMember {
+  if (
+    !isRecord(value) ||
+    (value.member_type !== "human" && value.member_type !== "agent")
+  ) {
+    throw new Error("Invalid directory member response");
+  }
+  return {
+    member_type: value.member_type,
+    target_member_id: optionalString(value.target_member_id),
+    platform_user_id: optionalString(value.platform_user_id),
+    target_agent_id: optionalString(value.target_agent_id),
+    display_name: optionalString(value.display_name),
+    title: optionalString(value.title),
+    role_description: optionalString(value.role_description),
+    access_mode: optionalString(value.access_mode),
+    can_contact: value.can_contact === true,
+    contact_tools: Array.isArray(value.contact_tools)
+      ? value.contact_tools.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [],
+    unavailable_reason: optionalString(value.unavailable_reason),
+  };
+}
+
+function directoryResponseFromUnknown(value: unknown): DirectoryResponse {
+  if (!isRecord(value) || !Array.isArray(value.members)) {
+    throw new Error("Invalid directory response");
+  }
+  return {
+    ok: value.ok === true,
+    source_agent_id: optionalString(value.source_agent_id) || "",
+    query: optionalString(value.query) || "",
+    member_type:
+      value.member_type === "human" || value.member_type === "agent"
+        ? value.member_type
+        : "all",
+    include_uncontactable: value.include_uncontactable === true,
+    returned_count:
+      typeof value.returned_count === "number" ? value.returned_count : 0,
+    limit: typeof value.limit === "number" ? value.limit : 0,
+    offset: typeof value.offset === "number" ? value.offset : 0,
+    has_more: value.has_more === true,
+    members: value.members.map(directoryMemberFromUnknown),
+  };
+}
+
+function customHumanFromUnknown(value: unknown): CustomHumanEntry {
+  if (!isRecord(value) || typeof value.user_id !== "string") {
+    throw new Error("Invalid custom human response");
+  }
+  return {
+    user_id: value.user_id,
+    member_id: optionalString(value.member_id),
+    display_name: optionalString(value.display_name),
+    email: optionalString(value.email),
+    title: optionalString(value.title),
+    department: optionalString(value.department),
+    access_level: value.access_level === "manage" ? "manage" : "use",
+    removable: value.removable === true,
+  };
+}
+
+function customAgentFromUnknown(value: unknown): CustomAgentEntry {
+  if (!isRecord(value) || typeof value.target_agent_id !== "string") {
+    throw new Error("Invalid custom agent response");
+  }
+  return {
+    target_agent_id: value.target_agent_id,
+    display_name: optionalString(value.display_name),
+    role_description: optionalString(value.role_description),
+    access_mode: optionalString(value.access_mode),
+    status: optionalString(value.status),
+  };
+}
+
+function objectArrayFromUnknown<T>(
+  value: unknown,
+  key: string,
+  parser: (item: unknown) => T,
+): T[] {
+  if (!isRecord(value) || !Array.isArray(value[key])) {
+    throw new Error(`Invalid ${key} response`);
+  }
+  return value[key].map(parser);
+}
+
+function customCandidatesFromUnknown(value: unknown): {
+  candidates: Array<CustomHumanCandidate | CustomAgentCandidate>;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+} {
+  if (!isRecord(value) || !Array.isArray(value.candidates)) {
+    throw new Error("Invalid directory candidates response");
+  }
+  return {
+    candidates: value.candidates.map((candidate) =>
+      isRecord(candidate) && "user_id" in candidate
+        ? customHumanFromUnknown({
+            ...candidate,
+            access_level: "use",
+            removable: false,
+          })
+        : customAgentFromUnknown(candidate),
+    ),
+    limit: typeof value.limit === "number" ? value.limit : 0,
+    offset: typeof value.offset === "number" ? value.offset : 0,
+    has_more: value.has_more === true,
+  };
+}
+
 const primaryId = (member: DirectoryMember) =>
   (member.member_type === "agent"
     ? member.target_agent_id
@@ -147,9 +265,10 @@ export default function AgentDirectory({
         include_uncontactable: includeUnavailable ? "true" : "false",
       });
       if (debouncedSearch) params.set("query", debouncedSearch);
-      const data = await fetchAuth<DirectoryResponse>(
+      const data = await fetchAuth(
         `/agents/${agentId}/directory?${params.toString()}`,
         { signal },
+        directoryResponseFromUnknown,
       );
       if (!signal.aborted) {
         setLoadedMembers((current) => {
@@ -178,8 +297,16 @@ export default function AgentDirectory({
   const customHumansQuery = useQuery({
     queryKey: ["agent-directory-custom-humans", agentId],
     queryFn: () =>
-      fetchAuth<{ members: CustomHumanEntry[] }>(
+      fetchAuth(
         `/agents/${agentId}/directory/custom/humans`,
+        undefined,
+        (value) => ({
+          members: objectArrayFromUnknown(
+            value,
+            "members",
+            customHumanFromUnknown,
+          ),
+        }),
       ),
     enabled: showCustomMaintenance,
   });
@@ -187,8 +314,16 @@ export default function AgentDirectory({
   const customAgentsQuery = useQuery({
     queryKey: ["agent-directory-custom-agents", agentId],
     queryFn: () =>
-      fetchAuth<{ agents: CustomAgentEntry[] }>(
+      fetchAuth(
         `/agents/${agentId}/directory/custom/agents`,
+        undefined,
+        (value) => ({
+          agents: objectArrayFromUnknown(
+            value,
+            "agents",
+            customAgentFromUnknown,
+          ),
+        }),
       ),
     enabled: showCustomMaintenance,
   });
@@ -209,14 +344,11 @@ export default function AgentDirectory({
       if (debouncedCustomSearch) params.set("query", debouncedCustomSearch);
       const path =
         customTab === "human" ? "human-candidates" : "agent-candidates";
-      const data = await fetchAuth<{
-        candidates: Array<CustomHumanCandidate | CustomAgentCandidate>;
-        limit: number;
-        offset: number;
-        has_more: boolean;
-      }>(`/agents/${agentId}/directory/custom/${path}?${params.toString()}`, {
-        signal,
-      });
+      const data = await fetchAuth(
+        `/agents/${agentId}/directory/custom/${path}?${params.toString()}`,
+        { signal },
+        customCandidatesFromUnknown,
+      );
       if (!signal.aborted) {
         setLoadedCandidates((current) => {
           if (data.offset === 0 || current.scope !== candidateScope) {
