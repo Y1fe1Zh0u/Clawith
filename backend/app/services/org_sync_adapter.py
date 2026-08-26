@@ -33,15 +33,11 @@ def _anyascii(value: str) -> str:
 
 
 try:
-    from pypinyin import Style as _PinyinStyle
     from pypinyin import lazy_pinyin as _lazy_pinyin_impl
     from pypinyin import pinyin as _pinyin_impl
-
-    _FIRST_LETTER_STYLE: object = _PinyinStyle.FIRST_LETTER
 except ImportError:  # pragma: no cover - lightweight fallback for minimal test envs
     _lazy_pinyin_impl = None
     _pinyin_impl = None
-    _FIRST_LETTER_STYLE = "first_letter"
 
 
 def lazy_pinyin(value: str, errors: str = "default") -> list[str]:

@@ -12175,15 +12175,25 @@ async def _execute_code_outcome(
             gateway_publish=gateway_publish,
         )
 
+        output_metadata: dict[str, str] = {}
         try:
             summary = backend._format_result(result)
-        except Exception:
+        except Exception as exc:
+            formatter_error = type(exc).__name__
+            output_metadata["formatter_error"] = formatter_error
+            logger.warning(
+                "[Sandbox] Result formatter failed after execution: "
+                "backend={} error={} exit_code={} success={}",
+                backend.__class__.__name__,
+                formatter_error,
+                result.exit_code,
+                result.success,
+            )
             summary = (
                 "Code executed successfully."
                 if result.success and result.exit_code == 0
                 else f"Code execution failed with exit code {result.exit_code}."
             )
-        output_metadata: dict[str, str] = {}
         if sandbox_config.workspace_mode == "isolated_output" and publish_paths:
             output_path = normalize_workspace_path(publish_paths[0])
             output_metadata["workspace_path"] = output_path
@@ -12211,26 +12221,12 @@ async def _execute_code_outcome(
                 "Sandbox execution outcome is unknown after ValueError; reconcile before retrying.",
                 "sandbox_execution_outcome_unknown",
             )
-        # Sandbox disabled or misconfigured
-        if is_e2b_tool:
-            # Do not silently fall back — surface the config error to the user
-            return _typed_failure(
-                f"E2B sandbox configuration error: {str(e)[:300]}",
-                "sandbox_configuration_invalid",
-            )
-        if fallback_config is None:
-            return _typed_failure(
-                f"Sandbox configuration error: {str(e)[:300]}",
-                "sandbox_configuration_invalid",
-            )
-        logger.warning(f"[Sandbox] Config issue, falling back to legacy subprocess: {e}")
-        return await _execute_code_legacy_outcome(
-            ws,
-            arguments,
-            allow_network=fallback_config.allow_network,
-            default_timeout=fallback_config.default_timeout,
-            max_timeout=fallback_config.max_timeout,
-            on_output=on_output,
+        # A configured or platform-resolved backend owns the execution venue.
+        # Invalid configuration must fail before dispatch, never switch to a
+        # legacy subprocess with different isolation and network semantics.
+        return _typed_failure(
+            f"Sandbox configuration error: {str(e)[:300]}",
+            "sandbox_configuration_invalid",
         )
 
     except Exception as e:

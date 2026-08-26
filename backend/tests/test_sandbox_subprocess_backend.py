@@ -2,13 +2,17 @@
 
 import asyncio
 import signal
-from types import SimpleNamespace
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from app.services.sandbox.config import SandboxConfig
+from app.services.sandbox.config import (
+    SandboxConfig,
+    SandboxConfigurationError,
+    SandboxType,
+)
 from app.services.sandbox.local import subprocess_backend
 from app.services.sandbox.local.subprocess_backend import (
     SANDBOX_VENV_PATH,
@@ -285,6 +289,46 @@ def test_sandbox_config_proxy_parsing() -> None:
     assert config.http_proxy == "http://10.0.0.1:3128"
     assert config.https_proxy == "http://10.0.0.1:3128"
     assert config.no_proxy == ".local,10.0.0.0/8"
+
+
+def test_sandbox_config_uses_valid_fallback_type() -> None:
+    fallback = SandboxConfig(type=SandboxType.DOCKER)
+
+    config = SandboxConfig.from_dict({}, fallback)
+
+    assert config.type == SandboxType.DOCKER
+
+
+@pytest.mark.parametrize("sandbox_type", ["invalid", 42, {"type": "docker"}])
+def test_sandbox_config_rejects_invalid_configured_type(sandbox_type) -> None:
+    with pytest.raises(SandboxConfigurationError, match="sandbox_type"):
+        SandboxConfig.from_dict({"sandbox_type": sandbox_type})
+
+
+def test_sandbox_config_rejects_configured_secret_decryption_failure(
+    monkeypatch,
+) -> None:
+    def fail_decrypt(_value, _secret):
+        raise ValueError("invalid ciphertext")
+
+    monkeypatch.setattr("app.core.security.decrypt_data", fail_decrypt)
+
+    with pytest.raises(SandboxConfigurationError, match="could not be decrypted"):
+        SandboxConfig.from_dict(
+            {"api_key": "broken-ciphertext"},
+            SandboxConfig(api_key="fallback-key"),
+        )
+
+
+def test_sandbox_config_accepts_decrypted_configured_secret(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.core.security.decrypt_data",
+        lambda value, _secret: f"decrypted:{value}",
+    )
+
+    config = SandboxConfig.from_dict({"api_key": "ciphertext"})
+
+    assert config.api_key == "decrypted:ciphertext"
 
 
 @pytest.mark.asyncio

@@ -7,10 +7,9 @@ import pytest
 
 from app.services import agent_tools
 from app.services.agent_runtime.tool_execution import ToolExecutionOutcome
-from app.services.workspace_reconciliation import CandidateChange
-from app.services.sandbox.config import SandboxConfig
-from app.services.sandbox.base import ExecutionResult
 from app.services.sandbox import execution_lease
+from app.services.sandbox.base import ExecutionResult
+from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.execution_lease import SandboxExecutionLeaseStore
 from app.services.sandbox.local.run_workspace import close_run_workspace
 from app.services.sandbox.run_scope import sandbox_run_scope_id
@@ -19,6 +18,7 @@ from app.services.sandbox.workspace_policy import (
     build_workspace_policy,
     parse_canonical_uuid,
 )
+from app.services.workspace_reconciliation import CandidateChange
 
 
 class FakeRedis:
@@ -202,6 +202,87 @@ async def test_isolated_execute_result_returns_agent_relative_output_path(
     assert output_path in (outcome.result_summary or "")
     assert f"/{output_path}" not in (outcome.result_summary or "")
     assert outcome.metadata["workspace_path"] == output_path
+
+
+@pytest.mark.asyncio
+async def test_configured_backend_error_never_switches_to_legacy_subprocess(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    async def tool_config(*_args):
+        return {"sandbox_type": "docker"}
+
+    async def forbidden_legacy(*_args, **_kwargs):
+        raise AssertionError("configured Sandbox must not switch execution venue")
+
+    monkeypatch.setattr(agent_tools, "_get_tool_config", tool_config)
+    monkeypatch.setattr(
+        "app.config.get_sandbox_config",
+        lambda: SandboxConfig(type="subprocess"),
+    )
+    monkeypatch.setattr(
+        "app.services.sandbox.registry.get_sandbox_backend",
+        lambda _config: (_ for _ in ()).throw(ValueError("docker unavailable")),
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "_execute_code_legacy_outcome",
+        forbidden_legacy,
+    )
+
+    outcome = await agent_tools._execute_code_outcome(
+        uuid.uuid4(),
+        tmp_path,
+        {"language": "python", "code": "print('ok')"},
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.error_code == "sandbox_configuration_invalid"
+    assert "docker unavailable" in (outcome.result_summary or "")
+
+
+@pytest.mark.asyncio
+async def test_formatter_failure_preserves_primary_result_and_evidence(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    warnings: list[tuple[str, tuple[object, ...]]] = []
+
+    class Backend:
+        name = "subprocess"
+
+        async def execute(self, **_kwargs):
+            return ExecutionResult(True, "primary output", "", 0, 1)
+
+        def _format_result(self, _result):
+            raise RuntimeError("formatter broke")
+
+    async def tool_config(*_args):
+        return {}
+
+    monkeypatch.setattr(agent_tools, "_get_tool_config", tool_config)
+    monkeypatch.setattr(
+        "app.services.sandbox.registry.get_sandbox_backend",
+        lambda _config: Backend(),
+    )
+    monkeypatch.setattr(
+        agent_tools.logger,
+        "warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
+
+    outcome = await agent_tools._execute_code_outcome(
+        uuid.uuid4(),
+        tmp_path,
+        {"language": "python", "code": "print('ok')"},
+        sandbox_config=SandboxConfig(),
+    )
+
+    assert outcome.status == "succeeded"
+    assert outcome.result_summary == "Code executed successfully."
+    assert outcome.metadata["formatter_error"] == "RuntimeError"
+    assert warnings
+    assert warnings[0][1][1] == "RuntimeError"
 
 
 def test_session_uuid_must_be_canonical() -> None:

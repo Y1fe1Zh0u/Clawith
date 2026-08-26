@@ -11,6 +11,10 @@ CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS = 180
 CODE_EXECUTION_MAX_TIMEOUT_SECONDS = 300
 
 
+class SandboxConfigurationError(ValueError):
+    """Configured Sandbox values are invalid at their owning boundary."""
+
+
 class SandboxType(str, Enum):
     """Supported sandbox backend types."""
 
@@ -92,7 +96,8 @@ class SandboxConfig(BaseModel):
         ) -> object:
             """获取配置值，优先从 config 读取，缺失则使用 fallback。"""
             value = config.get(key)
-            if value is None or value == "":
+            configured = value is not None and value != ""
+            if not configured:
                 if fallback_config:
                     value = getattr(fallback_config, key, default)
                 else:
@@ -101,7 +106,11 @@ class SandboxConfig(BaseModel):
                 logger.info(f"[SandboxConfig] allow_network: raw={config.get(key)!r}, resolved={value!r}")
 
             # 解密敏感字段
-            if encrypt and isinstance(value, str):
+            if encrypt and configured:
+                if not isinstance(value, str):
+                    raise SandboxConfigurationError(
+                        f"Configured {key} must be an encrypted string"
+                    )
                 try:
                     from app.config import get_settings
                     from app.core.security import decrypt_data
@@ -109,26 +118,32 @@ class SandboxConfig(BaseModel):
                     settings = get_settings()
                     decrypted = decrypt_data(value, settings.SECRET_KEY)
                     value = decrypted
-                except Exception as e:
-                    logger.warning(f"[SandboxConfig] Failed to decrypt {key}: {e}")
-                    # 解密失败，使用 fallback
-                    if fallback_config:
-                        value = getattr(fallback_config, key, default)
-                    else:
-                        value = default
+                except Exception as exc:
+                    raise SandboxConfigurationError(
+                        f"Configured {key} could not be decrypted"
+                    ) from exc
             return value
 
         # Map config key names to SandboxConfig attributes
-        sandbox_type_value = get_value("sandbox_type", "subprocess")
-        sandbox_type_str = (
-            sandbox_type_value
-            if isinstance(sandbox_type_value, str)
-            else SandboxType.SUBPROCESS.value
-        )
+        configured_sandbox_type = config.get("sandbox_type")
+        if configured_sandbox_type is None or configured_sandbox_type == "":
+            sandbox_type_value = (
+                fallback_config.type
+                if fallback_config is not None
+                else SandboxType.SUBPROCESS.value
+            )
+        else:
+            sandbox_type_value = configured_sandbox_type
+        if not isinstance(sandbox_type_value, (str, SandboxType)):
+            raise SandboxConfigurationError(
+                "Configured sandbox_type must be a supported string"
+            )
         try:
-            sandbox_type = SandboxType(sandbox_type_str)
-        except ValueError:
-            sandbox_type = SandboxType.SUBPROCESS
+            sandbox_type = SandboxType(sandbox_type_value)
+        except ValueError as exc:
+            raise SandboxConfigurationError(
+                f"Unsupported sandbox_type: {sandbox_type_value!r}"
+            ) from exc
 
         resolved: dict[str, object] = {
             "type": sandbox_type,
