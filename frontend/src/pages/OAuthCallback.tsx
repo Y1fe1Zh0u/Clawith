@@ -3,14 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { fetchJson } from "../services/api";
 import { caughtErrorMessage } from "../services/apiError";
+import {
+  parseOAuthCallbackResponse,
+  type OAuthTenantChoice,
+} from "../services/oauthCallbackResponse";
 import { useAuthStore } from "../stores";
-
-interface TenantChoice {
-  tenant_id: string;
-  tenant_name: string;
-  tenant_slug: string;
-  logo_url?: string;
-}
 
 export default function OAuthCallback() {
   const { t } = useTranslation();
@@ -18,7 +15,7 @@ export default function OAuthCallback() {
   const { provider = "" } = useParams();
   const setAuth = useAuthStore((s) => s.setAuth);
   const [error, setError] = useState("");
-  const [tenants, setTenants] = useState<TenantChoice[] | null>(null);
+  const [tenants, setTenants] = useState<OAuthTenantChoice[] | null>(null);
   const [pendingToken, setPendingToken] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -39,7 +36,7 @@ export default function OAuthCallback() {
       return;
     }
 
-    fetchJson<any>(`/auth/${provider}/callback`, {
+    fetchJson<unknown>(`/auth/${provider}/callback`, {
       method: "POST",
       body: JSON.stringify({
         code,
@@ -47,9 +44,10 @@ export default function OAuthCallback() {
         redirect_uri: `${window.location.origin}/oauth/callback/${provider}`,
       }),
     })
+      .then(parseOAuthCallbackResponse)
       .then((res) => {
         // Step 1 result: multi-tenant selection needed
-        if (res.requires_tenant_selection) {
+        if ("requires_tenant_selection" in res) {
           setTenants(res.tenants);
           setPendingToken(res.pending_token);
           return;
@@ -74,14 +72,23 @@ export default function OAuthCallback() {
       const state =
         new URLSearchParams(window.location.search).get("state") || "";
       // Step 2: re-call the same callback endpoint — no code, just pending_token + tenant_id
-      const res = await fetchJson<any>(`/auth/${provider}/callback`, {
-        method: "POST",
-        body: JSON.stringify({
-          state,
-          pending_token: pendingToken,
-          tenant_id: tenantId,
-        }),
-      });
+      const rawResponse = await fetchJson<unknown>(
+        `/auth/${provider}/callback`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            state,
+            pending_token: pendingToken,
+            tenant_id: tenantId,
+          }),
+        },
+      );
+      const res = parseOAuthCallbackResponse(rawResponse);
+      if ("requires_tenant_selection" in res) {
+        throw new Error(
+          "OAuth tenant selection did not return an access token",
+        );
+      }
       setAuth(res.user, res.access_token);
       if (res.needs_company_setup || !res.user?.tenant_id) {
         navigate("/setup-company", { replace: true });
