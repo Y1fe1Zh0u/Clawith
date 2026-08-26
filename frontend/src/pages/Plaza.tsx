@@ -99,7 +99,8 @@ export default function Plaza() {
       .get(id)
       .then((e) => {
         if (draftParam) setEditing(e);
-        else e.status === "draft" ? setEditing(e) : setOpenId(e.id);
+        else if (e.status === "draft") setEditing(e);
+        else setOpenId(e.id);
       })
       .catch(() => {});
     params.delete("draft");
