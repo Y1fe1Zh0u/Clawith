@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { controlApi } from "../services/api";
+import { normalizeUnknownError } from "../services/apiError";
 
 /* ── Props ── */
 interface Props {
@@ -158,9 +159,11 @@ export default function TakeControlPanel({
             // Non-fatal — user can type it manually
           }
         }
-      } catch (e: any) {
+      } catch (error) {
         if (mountedRef.current) {
-          setStatusText(t("takeControl.lockFailed", { message: e.message }));
+          setStatusText(t("takeControl.lockFailed", {
+            message: normalizeUnknownError(error).message,
+          }));
         }
       }
     })();
@@ -316,8 +319,10 @@ export default function TakeControlPanel({
           if (res.status === "error")
             throw new Error(res.detail || "Drag failed");
           flashStatus(t("takeControl.dragComplete"));
-        } catch (err: any) {
-          flashStatus(t("takeControl.dragFailed", { message: err.message }));
+        } catch (error) {
+          flashStatus(t("takeControl.dragFailed", {
+            message: normalizeUnknownError(error).message,
+          }));
         }
       } else {
         // --- CLICK (no significant movement) ---
@@ -333,8 +338,10 @@ export default function TakeControlPanel({
           if (res.status === "error")
             throw new Error(res.detail || "Click failed");
           flashStatus(t("takeControl.clickedAt", { x: coords.x, y: coords.y }));
-        } catch (err: any) {
-          flashStatus(t("takeControl.clickFailed", { message: err.message }));
+        } catch (error) {
+          flashStatus(t("takeControl.clickFailed", {
+            message: normalizeUnknownError(error).message,
+          }));
         }
       }
     },
@@ -363,8 +370,10 @@ export default function TakeControlPanel({
       if (res.status === "error") throw new Error(res.detail || "Type failed");
       flashStatus(t("takeControl.textSent"));
       setTextInput("");
-    } catch (err: any) {
-      flashStatus(t("takeControl.typeFailed", { message: err.message }));
+    } catch (error) {
+      flashStatus(t("takeControl.typeFailed", {
+        message: normalizeUnknownError(error).message,
+      }));
     }
   }, [textInput, locked, agentId, sessionId, flashStatus]);
 
@@ -381,8 +390,10 @@ export default function TakeControlPanel({
         if (res.status === "error")
           throw new Error(res.detail || "Press failed");
         flashStatus(t("takeControl.pressed", { keys: keys.join("+") }));
-      } catch (err: any) {
-        flashStatus(t("takeControl.pressFailed", { message: err.message }));
+      } catch (error) {
+        flashStatus(t("takeControl.pressFailed", {
+          message: normalizeUnknownError(error).message,
+        }));
       }
     },
     [locked, agentId, sessionId, flashStatus],
@@ -435,8 +446,10 @@ export default function TakeControlPanel({
         );
       }
       setTimeout(onClose, 1200);
-    } catch (err: any) {
-      flashStatus(t("takeControl.unlockFailed", { message: err.message }));
+    } catch (error) {
+      flashStatus(t("takeControl.unlockFailed", {
+        message: normalizeUnknownError(error).message,
+      }));
       // Re-enable lock state if unlock request failed so user can try again
       setLocked(true);
       lockedRef.current = true;
