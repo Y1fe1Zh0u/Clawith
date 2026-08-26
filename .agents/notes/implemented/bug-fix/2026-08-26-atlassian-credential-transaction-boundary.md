@@ -14,6 +14,8 @@ Atlassian discovery, Tool upsert, AgentTool assignment, and ChannelConfig mutati
 
 Deleting either Atlassian configuration surface removes the owning `ChannelConfig` and that Agent's Atlassian `AgentTool` assignments in the same transaction. Shared `Tool` discovery records remain available for other Agents. Cleanup failure rolls back both sides, so configuration deletion cannot leave an enabled orphan assignment.
 
+Deployments that may contain pre-fix AgentTool secrets use `scripts/remove_legacy_atlassian_agent_tool_secrets.py`. The out-of-band job defaults to dry-run, processes Atlassian assignments in bounded batches, and removes only `api_key` and `atlassian_api_key` from assignment config. It is idempotent and preserves unrelated config and shared Tool records. Applying the cleanup is intentionally irreversible because legacy plaintext and corrupt ciphertext cannot be distinguished or restored safely; the authoritative encrypted ChannelConfig is retained.
+
 ## Alternatives considered
 
 - Preserve background synchronization and report eventual status separately. Rejected because no durable synchronization object or consumer currently owns that lifecycle.
@@ -26,4 +28,4 @@ Atlassian configuration may take as long as provider discovery, but success mean
 
 ## Verification
 
-Regression coverage verifies missing-key rejection before database work, encrypted AgentTool persistence, shared-session sync before the single commit, rollback on synchronization failure, corrupt-ciphertext rejection before MCP dispatch, and atomic assignment cleanup through both deletion routes. Backend Pyright and the focused Atlassian, dynamic MCP, and LLM capability tests must remain green.
+Regression coverage verifies missing-key rejection before database work, encrypted AgentTool persistence, shared-session sync before the single commit, rollback on synchronization failure, corrupt-ciphertext rejection before MCP dispatch, atomic assignment cleanup through both deletion routes, and dry-run/idempotent/rollback behavior for legacy-row cleanup. Backend Pyright and the focused Atlassian, dynamic MCP, and LLM capability tests must remain green.
