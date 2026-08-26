@@ -132,10 +132,10 @@ import {
   parseTenantResponse,
   parseTenantSetupResponse,
   parseTenantTokenUsageResponse,
+  parseTokenResponse,
   parseTriggersResponse,
   parseUploadResponse,
   parseUserResponse,
-  parseVerifyEmailResponse,
   parseExperienceListResponse,
   parseExperienceResponse,
   parseExperienceDistillResponse,
@@ -490,16 +490,10 @@ export const authApi = {
     ),
 
   verifyEmail: (token: string) =>
-    request<{
-      ok: boolean;
-      message: string;
-      access_token: string;
-      user: User;
-      needs_company_setup: boolean;
-    }>(
+    request<TokenResponse>(
       "/auth/verify-email",
       { method: "POST", body: JSON.stringify({ token }) },
-      parseVerifyEmailResponse,
+      parseTokenResponse,
     ),
 
   resendVerification: (email: string) =>

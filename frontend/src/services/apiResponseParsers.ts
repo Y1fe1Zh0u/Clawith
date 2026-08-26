@@ -1063,6 +1063,17 @@ export const parseAuthRegisterResponse: ResponseParser<{
   needs_company_setup: boolean;
 }> = (value) => {
   assertRecord(value, "response");
+  if (value.user_id === undefined) {
+    const token = parseTokenResponse(value);
+    return {
+      user_id: token.user.id,
+      email: token.user.email,
+      access_token: token.access_token,
+      message: "",
+      user: token.user,
+      needs_company_setup: token.needs_company_setup ?? false,
+    };
+  }
   const user =
     value.user === undefined
       ? undefined
@@ -1074,24 +1085,6 @@ export const parseAuthRegisterResponse: ResponseParser<{
     message: readString(value, "message", "response"),
     needs_company_setup: readBoolean(value, "needs_company_setup", "response"),
     ...(user === undefined ? {} : { user }),
-  };
-};
-
-export const parseVerifyEmailResponse: ResponseParser<{
-  ok: boolean;
-  message: string;
-  access_token: string;
-  user: User;
-  needs_company_setup: boolean;
-}> = (value) => {
-  assertRecord(value, "response");
-  const user = parseUserAt(value.user, "response.user");
-  return {
-    ok: readBoolean(value, "ok", "response"),
-    message: readString(value, "message", "response"),
-    access_token: readString(value, "access_token", "response"),
-    user,
-    needs_company_setup: readBoolean(value, "needs_company_setup", "response"),
   };
 };
 
