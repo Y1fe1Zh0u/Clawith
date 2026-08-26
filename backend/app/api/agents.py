@@ -3,6 +3,7 @@
 import hashlib
 import secrets
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -95,7 +96,7 @@ async def _lazy_reset_token_counters(agent: Agent, db: AsyncSession) -> bool:
 
 async def _build_unread_count_by_agent(
     db: AsyncSession,
-    agents: list[Agent],
+    agents: Sequence[Agent],
     current_user: User,
 ) -> dict[str, int]:
     """Return unread assistant/system/tool message counts for the current user per agent.
@@ -656,13 +657,11 @@ async def get_agent_permissions(
             if perm.scope_type == "user" and perm.scope_id
         }
         ordered_user_ids = [str(uid) for uid in display_user_ids]
-        ordered_user_ids.sort(
-            key=lambda sid: (
-                (users_by_id.get(sid).display_name or users_by_id.get(sid).username or "")
-                if users_by_id.get(sid)
-                else ""
-            )
-        )
+        def user_sort_key(user_id: str) -> str:
+            user = users_by_id.get(user_id)
+            return (user.display_name or user.username or "") if user else ""
+
+        ordered_user_ids.sort(key=user_sort_key)
         for perm in perms:
             if perm.scope_type != "user" or not perm.scope_id:
                 continue

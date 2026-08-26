@@ -8,6 +8,7 @@ distillation flow (`POST /drafts`, LLM draft generation). The AI-side retrieval
 import json
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -146,7 +147,7 @@ def _can_retire(current_user: User, entry: ExperienceEntry, agent_creator: uuid.
     )
 
 
-async def _serialize_entries(db, entries: list[ExperienceEntry]) -> list[EntryOut]:
+async def _serialize_entries(db, entries: Sequence[ExperienceEntry]) -> list[EntryOut]:
     """EntryOut list with the publisher + source-agent names resolved (display only)."""
     user_ids = {e.created_by for e in entries if e.created_by}
     agent_ids = {e.origin_agent_id for e in entries if e.origin_agent_id}

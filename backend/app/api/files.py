@@ -391,8 +391,9 @@ def _extract_document_text(target: Path, kind: str) -> str:
             for idx, slide in enumerate(prs.slides, start=1):
                 texts = []
                 for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        texts.append(shape.text.strip())
+                    shape_text = getattr(shape, "text", None)
+                    if isinstance(shape_text, str) and shape_text.strip():
+                        texts.append(shape_text.strip())
                 slides.append(f"Slide {idx}\n" + "\n".join(texts))
             return "\n\n".join(slides)
     except ImportError as exc:
@@ -411,7 +412,7 @@ def _detect_csv_delimiter(text: str) -> str:
         candidate: sum(line.count(candidate) for line in lines)
         for candidate in candidates
     }
-    return max(scores, key=scores.get) if any(scores.values()) else ","
+    return max(scores, key=lambda candidate: scores[candidate]) if any(scores.values()) else ","
 
 
 def _parse_csv_rows(text: str) -> list[list[str]]:

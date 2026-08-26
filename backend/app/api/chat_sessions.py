@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import String, and_, cast, func, or_, select, tuple_
+from sqlalchemy import String, and_, cast, func, literal, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import check_agent_access
@@ -570,7 +570,7 @@ async def get_session_runtime_state(
         workspace_resolution = isinstance(candidate_ref, str) and bool(candidate_ref)
         resolution_status = None
         counts = {"applied": 0, "not_saved": 0, "conflict": 0, "unverified": 0}
-        if workspace_resolution:
+        if isinstance(candidate_ref, str) and candidate_ref:
             try:
                 verification = await workspace_reconciler.verify_current(
                     ReconciliationScope(
@@ -747,7 +747,7 @@ async def reconcile_direct_tool_execution(
         execution_id=str(execution_id),
     )
     workspace_reconciler = WorkspaceReconciliationService(get_storage_backend())
-    if workspace_resolution and body.outcome == "applied":
+    if isinstance(candidate_ref, str) and candidate_ref and body.outcome == "applied":
         try:
             application = await workspace_reconciler.apply_candidate(
                 reconciliation_scope,
@@ -764,7 +764,7 @@ async def reconcile_direct_tool_execution(
                 status_code=409,
                 detail=f"workspace_candidate_{application.status}",
             )
-    elif workspace_resolution:
+    elif isinstance(candidate_ref, str) and candidate_ref:
         try:
             await workspace_reconciler.preserve_conflicts_and_apply_safe_changes(
                 reconciliation_scope,
@@ -818,7 +818,7 @@ async def reconcile_direct_tool_execution(
             },
         )
     )
-    if workspace_resolution:
+    if isinstance(candidate_ref, str) and candidate_ref:
         resume_content = (
             "用户已选择使用 Agent 的文件结果，请继续当前任务，且不要重新执行原工具。"
             if body.outcome == "applied"
@@ -837,7 +837,7 @@ async def reconcile_direct_tool_execution(
         "confirmation_text": note,
         "tool_execution_id": str(execution_id),
     }
-    if workspace_resolution:
+    if isinstance(candidate_ref, str) and candidate_ref:
         resume_payload["workspace_resolution_action"] = expected_action
     await RuntimeCommandIntake(db).resume_run(
         ResumeRunCommand(
@@ -855,7 +855,7 @@ async def reconcile_direct_tool_execution(
         )
     )
     await db.commit()
-    if workspace_resolution:
+    if isinstance(candidate_ref, str) and candidate_ref:
         try:
             await workspace_reconciler.discard_candidate(
                 reconciliation_scope,
@@ -918,6 +918,8 @@ async def delete_session(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     _authorize_session_owner(current_user, agent, session)
+    if session.user_id is None:
+        raise HTTPException(status_code=409, detail="Session has no owner")
 
     deleted = await soft_delete_direct_session(
         db,
@@ -976,10 +978,11 @@ def _runtime_error_from_delivery_event(event: AgentRunEvent) -> tuple[str, dict]
     message_id = payload.get("message_id")
     error_code = payload.get("failure_code")
     error_message = payload.get("failure_message")
-    if not all(
-        isinstance(value, str) and value.strip()
-        for value in (message_id, error_code, error_message)
-    ):
+    if not isinstance(message_id, str) or not message_id.strip():
+        return None
+    if not isinstance(error_code, str) or not error_code.strip():
+        return None
+    if not isinstance(error_message, str) or not error_message.strip():
         return None
     error = {
         "code": error_code.strip(),
@@ -1040,7 +1043,10 @@ async def get_session_messages(
     )
     if before:
         before_created_at, before_id = _parse_message_cursor(before)
-        query = query.where(tuple_(ChatMessage.created_at, ChatMessage.id) < tuple_(before_created_at, before_id))
+        query = query.where(
+            tuple_(ChatMessage.created_at, ChatMessage.id)
+            < tuple_(literal(before_created_at), literal(before_id))
+        )
     message_result = await db.execute(query)
     messages = list(reversed(message_result.scalars().all()))
 

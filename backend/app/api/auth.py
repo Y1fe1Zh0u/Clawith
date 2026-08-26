@@ -99,6 +99,10 @@ async def _send_verification_email_task(
             logger.warning(f"No identity found for user {user.id} ({user.email}). Cannot send verification.")
             return
 
+        if identity.email is None:
+            logger.warning(f"Identity {identity.id} has no email; skipping verification email")
+            return
+
         raw_code, expires_at = await email_verification_service.create_email_verification_token(
             identity.id, identity.email
         )
@@ -244,6 +248,9 @@ async def register_init(
     # 6. Send verification email if not verified (outside transaction)
     if not identity.email_verified:
         await _send_verification_email_task(user, background_tasks, settings)
+
+    if identity.email is None:
+        raise RuntimeError("Registered identity has no email")
 
     return RegisterInitResponse(
         user_id=user.id,
@@ -420,6 +427,8 @@ async def _handle_normal_register(data: UserRegister, background_tasks: Backgrou
 async def _handle_sso_register(data: UserRegister):
     """Legacy SSO registration handler - delegates to new SSO endpoint logic."""
     # Redirect to new SSO flow
+    if data.provider is None or data.provider_code is None:
+        raise HTTPException(status_code=400, detail="SSO provider and code are required")
     sso_data = SSORegisterRequest(provider=data.provider, code=data.provider_code, invitation_code=data.invitation_code)
     return await register_sso(sso_data)
 
@@ -476,6 +485,9 @@ async def login(data: UserLogin, background_tasks: BackgroundTasks):
             logger.warning(
                 f"[LOGIN] Invalid credentials for {data.login_identifier} identity_id={identity.id if identity else 'None'}"
             )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+        if identity is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
         # 2. Check Global Activity & Verification
@@ -670,6 +682,9 @@ async def forgot_password(
 
         reset_url = await build_password_reset_url(raw_token)
         expiry_minutes = int((expires_at - datetime.now(timezone.utc)).total_seconds() // 60)
+        if identity.email is None:
+            return generic_response
+
         background_tasks.add_task(
             send_password_reset_email,
             identity.email,
@@ -1160,6 +1175,8 @@ async def bind_identity(
         async with transaction() as session:
             # Check if identity is already linked to another user
             lookup_provider_user_id = user_info.provider_user_id
+            if lookup_provider_user_id is None:
+                raise HTTPException(status_code=400, detail="Provider user ID is missing")
             existing_user = await sso_service.check_duplicate_identity(
                 session,
                 provider,
@@ -1249,21 +1266,23 @@ async def verify_email(data: VerifyEmailRequest):
 
     # 3. Find a representative user outside transaction (read-only)
     user = await user_dao.get_representative_user_for_identity(identity.id)
+    if user is None:
+        raise RuntimeError("Verified identity has no associated user")
 
     # 4. Generate token and return full response outside transaction
-    effective_id = str(user.id) if user else str(identity.id)
-    effective_role = user.role if user else "user"
+    effective_id = str(user.id)
+    effective_role = user.role
     token = create_access_token(
         effective_id,
         effective_role,
-        tenant_id=str(user.tenant_id) if user and user.tenant_id else None,
+        tenant_id=str(user.tenant_id) if user.tenant_id else None,
     )
 
     return TokenResponse(
         access_token=token,
-        user=UserOut.model_validate(user) if user else None,
+        user=UserOut.model_validate(user),
         identity=IdentityOut.model_validate(identity),
-        needs_company_setup=user.tenant_id is None if user else True,
+        needs_company_setup=user.tenant_id is None,
     )
 
 

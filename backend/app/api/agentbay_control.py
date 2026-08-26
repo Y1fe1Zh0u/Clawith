@@ -610,9 +610,22 @@ let browser;
             "output": f"Dragged ({from_x},{from_y}) -> ({to_x},{to_y})" if "TC_OK" in res.get("output", "") else res.get("output", "Unknown error"),
         }
 
-
-
-
+    try:
+        steps = 20
+        for i in range(1, steps + 1):
+            t = i / steps
+            ix = int(from_x + (to_x - from_x) * t)
+            iy = int(from_y + (to_y - from_y) * t)
+            await asyncio.to_thread(client._session.computer.move_mouse, ix, iy)
+            await asyncio.sleep(duration_ms / 1000 / steps)
+        return {
+            "success": True,
+            "method": "computer_drag",
+            "output": f"Dragged ({from_x},{from_y}) -> ({to_x},{to_y})",
+        }
+    except Exception as e:
+        logger.warning(f"[TakeControl] Computer drag failed: {e}")
+        return {"success": False, "output": f"Drag failed: {str(e)[:200]}"}
 # ── Endpoints ──
 
 
@@ -823,6 +836,8 @@ async def control_screenshot(
         # screenshot dimensions and computer.click_mouse() coordinates
         screen_size = None
         try:
+            if client._session is None:
+                raise RuntimeError("AgentBay session is unavailable")
             size_result = await asyncio.to_thread(
                 client._session.computer.get_screen_size
             )

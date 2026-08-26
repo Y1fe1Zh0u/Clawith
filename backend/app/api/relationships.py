@@ -245,21 +245,27 @@ async def search_human_relationship_candidates(
 
     result = await db.execute(query.order_by(OrgMember.name).limit(200))
     rows = result.all()
-    deduped_filtered = []
+    deduped_filtered: list[tuple[OrgMember, str | None, str | None, uuid.UUID | None]] = []
     by_user_id: dict[uuid.UUID, tuple[OrgMember, str | None, str | None, uuid.UUID | None]] = {}
     for row in rows:
         member, provider_name, provider_type, linked_user_id = row
+        normalized_row = (
+            member,
+            provider_name,
+            provider_type.value if provider_type is not None else None,
+            linked_user_id,
+        )
         if not linked_user_id:
-            deduped_filtered.append(row)
+            deduped_filtered.append(normalized_row)
             continue
         existing = by_user_id.get(linked_user_id)
         if not existing:
-            by_user_id[linked_user_id] = row
+            by_user_id[linked_user_id] = normalized_row
             continue
         existing_type = (existing[2] or "").lower()
         current_type = (provider_type or "").lower()
         if existing_type in ("", "web", "platform") and current_type not in ("", "web", "platform"):
-            by_user_id[linked_user_id] = row
+            by_user_id[linked_user_id] = normalized_row
     filtered = [*deduped_filtered, *by_user_id.values()]
 
     filtered = sorted(filtered, key=lambda row: (row[0].name or "").lower())[:100]
@@ -425,7 +431,7 @@ async def search_visible_agents(
     agents = [
         agent
         for agent in result.scalars().all()
-        if await _can_manage_agent(current_user.id, agent)
+        if await _can_manage_agent(db, current_user.id, agent)
     ]
     return [
         {
@@ -518,7 +524,7 @@ async def save_agent_relationships(
         target_agent = target_result.scalar_one_or_none()
         if not target_agent:
             raise HTTPException(status_code=403, detail="Target agent is not visible to the current user")
-        if not await _can_manage_agent(current_user.id, target_agent):
+        if not await _can_manage_agent(db, current_user.id, target_agent):
             raise HTTPException(status_code=403, detail="You must manage both agents to create this relationship")
         existing = existing_by_target.get(target_id)
         db.add(AgentAgentRelationship(

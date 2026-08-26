@@ -270,11 +270,11 @@ async def process_dingtalk_message(
 @router.get("/auth/dingtalk/callback")
 async def dingtalk_callback(
     authCode: str, # DingTalk uses authCode parameter
-    state: str = None,
+    state: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Callback for DingTalk OAuth2 login."""
-    from app.models.identity import SSOScanSession
+    from app.models.identity import AuthProviderType, SSOScanSession
     from app.core.security import create_access_token
     from fastapi.responses import HTMLResponse
     from app.services.auth_registry import auth_provider_registry
@@ -332,7 +332,7 @@ async def dingtalk_callback(
             session = s_res.scalar_one_or_none()
             if session:
                 session.status = "authorized"
-                session.provider_type = "dingtalk"
+                session.provider_type = AuthProviderType.DINGTALK
                 session.user_id = user.id
                 session.access_token = token
                 session.error_msg = None

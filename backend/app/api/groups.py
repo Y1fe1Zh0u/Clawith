@@ -373,7 +373,7 @@ async def _pending_group_tool_reconciliations(
         workspace_resolution = isinstance(candidate_ref, str) and bool(candidate_ref)
         resolution_status = None
         counts = {"applied": 0, "not_saved": 0, "conflict": 0, "unverified": 0}
-        if workspace_resolution:
+        if isinstance(candidate_ref, str) and candidate_ref:
             try:
                 verification = await workspace_reconciler.verify_current(
                     ReconciliationScope(
@@ -1161,13 +1161,13 @@ async def create_group_message(
         )
     error = None
     if intake.error_code is not None:
-        error = GroupErrorOut(
-            **build_error_object(
+        error = GroupErrorOut.model_validate(
+            build_error_object(
                 code=intake.error_code,
                 message=intake.error_message or "多 Agent 任务规划暂时不可用",
                 trace_id=get_request_trace_id(request),
-            ),
-            stage="planning",
+                stage="planning",
+            )
         )
     return GroupMessageIntakeOut(
         message=messages[0],

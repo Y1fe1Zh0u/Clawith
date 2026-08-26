@@ -99,7 +99,7 @@ async def create_credential(
                 detail=f"Invalid cookies_json format: {e}",
             )
 
-    obj_in = {
+    obj_in: dict[str, object] = {
         "credential_type": data.credential_type,
         "platform": data.platform,
         "display_name": data.display_name or "",

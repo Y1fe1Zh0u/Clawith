@@ -1,10 +1,12 @@
 """Read-only agent directory API."""
 
 import uuid
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete, exists, or_, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -364,12 +366,14 @@ async def remove_custom_directory_agent(
 ):
     """Remove a digital employee from a custom Directory."""
     await _require_custom_directory_manager(db, current_user, agent_id)
-    result = await db.execute(
-        delete(AgentAgentRelationship)
-        .where(
-            AgentAgentRelationship.agent_id == agent_id,
-            AgentAgentRelationship.target_agent_id == target_agent_id,
-        )
+    result = cast(
+        CursorResult[tuple[()]],
+        await db.execute(
+            delete(AgentAgentRelationship).where(
+                AgentAgentRelationship.agent_id == agent_id,
+                AgentAgentRelationship.target_agent_id == target_agent_id,
+            )
+        ),
     )
     await db.commit()
     if result.rowcount == 0:

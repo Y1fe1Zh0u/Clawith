@@ -192,8 +192,8 @@ async def _handle_google_admin_sync_callback(
 @router.get(GOOGLE_CALLBACK_PATH)
 async def google_workspace_callback(
     code: str,
+    request: Request,
     state: str | None = None,
-    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Unified callback for Google Workspace SSO login and admin authorization."""

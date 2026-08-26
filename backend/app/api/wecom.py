@@ -26,7 +26,7 @@ from app.core.security import create_access_token, get_current_user
 from app.database import async_session, get_db
 from app.models.agent import Agent as AgentModel
 from app.models.channel_config import ChannelConfig
-from app.models.identity import IdentityProvider, SSOScanSession
+from app.models.identity import AuthProviderType, IdentityProvider, SSOScanSession
 from app.models.user import User
 from app.services.agent_runtime.channel_chat import (
     channel_message_id,
@@ -450,7 +450,7 @@ async def wecom_event_webhook(
     return Response(content="success", media_type="text/plain")
 
 
-async def _process_wecom_kf_event(agent_id: uuid.UUID, config_obj: ChannelConfig, token: str, open_kfid: str = None):
+async def _process_wecom_kf_event(agent_id: uuid.UUID, config_obj: ChannelConfig, token: str, open_kfid: str | None = None):
     """Sync WeCom Customer Service (KF) messages in background."""
     try:
         # Short transaction: load config only
@@ -475,7 +475,7 @@ async def _process_wecom_kf_event(agent_id: uuid.UUID, config_obj: ChannelConfig
             current_ts = int(time.time())
 
             while has_more:
-                payload = {"limit": 20}
+                payload: dict[str, object] = {"limit": 20}
                 if open_kfid:
                     payload["open_kfid"] = open_kfid
 
@@ -585,8 +585,8 @@ async def _process_wecom_text(
     from_user: str,
     user_text: str,
     is_kf: bool = False,
-    open_kfid: str = None,
-    kf_msg_id: str = None,
+    open_kfid: str | None = None,
+    kf_msg_id: str | None = None,
     chat_id: str = "",
 ):
     """Accept a WeCom message; the durable outbox delivers its Runtime result."""
@@ -606,7 +606,7 @@ async def _process_wecom_text(
 @router.get("/auth/wecom/callback")
 async def wecom_callback(
     code: str,
-    state: str = None,
+    state: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     # 1. Resolve session to get tenant context
@@ -655,7 +655,9 @@ async def wecom_callback(
             
         # Find or Create User (handles Identity and OrgMember linking)
         user, _is_new = await auth_provider.find_or_create_user(
-            db, user_info, tenant_id=tenant_id or provider.tenant_id
+            db,
+            user_info,
+            tenant_id=str(tenant_id or provider.tenant_id) if tenant_id or provider.tenant_id else None,
         )
     except Exception as e:
         logger.exception(f"WeCom login/register error: {e}")
@@ -672,7 +674,7 @@ async def wecom_callback(
             session = s_res.scalar_one_or_none()
             if session:
                 session.status = "authorized"
-                session.provider_type = "wecom"
+                session.provider_type = AuthProviderType.WECOM
                 session.user_id = user.id
                 session.access_token = token
                 session.error_msg = None

@@ -1146,7 +1146,8 @@ async def update_category_config(
         import asyncio
         # Need plaintext key for sync
         plaintext_key = data.config.get("api_key") or data.config.get("api_secret") or data.config.get("app_secret")
-        asyncio.create_task(_sync_atlassian_tools_for_agent(agent_id, plaintext_key))
+        if isinstance(plaintext_key, str) and plaintext_key:
+            asyncio.create_task(_sync_atlassian_tools_for_agent(agent_id, plaintext_key))
 
     return {"ok": True}
 

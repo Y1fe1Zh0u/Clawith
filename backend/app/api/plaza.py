@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update, func, desc, exists, and_
+from sqlalchemy import select, update, func, desc, exists, and_, true
 
 from app.dao import query_dao
 from app.api.auth import get_current_user
@@ -197,7 +197,7 @@ async def plaza_stats(
             (PlazaPost.author_type == "agent")
             & _hidden_agent_exists_for_author(PlazaPost.author_id)
         )
-        post_filter = (PlazaPost.tenant_id == effective_tenant_id) if effective_tenant_id else True
+        post_filter = (PlazaPost.tenant_id == effective_tenant_id) if effective_tenant_id else true()
         post_filter = post_filter & ~private_or_system_post
         # Total posts
         total_posts = (await query_dao.execute(db, 
@@ -269,7 +269,8 @@ async def create_post(body: PostCreate, current_user: User = Depends(get_current
         await query_dao.flush(db)
 
         try:
-            await _notify_mentions(db, body.content, body.author_id, body.author_name, post.id, effective_tenant_id)
+            mention_tenant_id = uuid.UUID(effective_tenant_id) if effective_tenant_id else None
+            await _notify_mentions(db, body.content, body.author_id, body.author_name, post.id, mention_tenant_id)
         except Exception:
             pass
 

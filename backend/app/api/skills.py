@@ -522,6 +522,9 @@ async def install_from_clawhub(body: ClawhubInstallIn, current_user: User = Depe
                 continue
             raise HTTPException(502, f"Failed to connect to ClawHub: {e}")
 
+    if meta is None:
+        raise HTTPException(502, "ClawHub returned no skill metadata")
+
     skill_info = meta.get("skill", {})
     owner_info = meta.get("owner", {})
     moderation = meta.get("moderation") or {}

@@ -511,7 +511,7 @@ async def send_message(
         if not config:
             # Try to find any feishu config in the org
             config_result = await db.execute(
-                select(ChannelConfig).where(ChannelConfig.channel == "feishu").limit(1)
+                select(ChannelConfig).where(ChannelConfig.channel_type == "feishu").limit(1)
             )
             config = config_result.scalar_one_or_none()
 
@@ -522,6 +522,9 @@ async def send_message(
         # Extract config values and release connection before Feishu HTTP calls
         _cfg_app_id = config.app_id
         _cfg_app_secret = config.app_secret
+        if _cfg_app_id is None or _cfg_app_secret is None:
+            await db.commit()
+            raise HTTPException(status_code=400, detail="Feishu channel credentials are incomplete")
         await db.commit()
         await db.close()
 

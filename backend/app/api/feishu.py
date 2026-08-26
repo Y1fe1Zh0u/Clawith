@@ -51,6 +51,12 @@ _USER_RESOLUTION_ERROR_TIP = (
 _FEISHU_MENTION_PLACEHOLDER_RE = re.compile(r"@_user_\d+")
 
 
+def _require_feishu_credentials(config: ChannelConfig) -> tuple[str, str]:
+    if config.app_id is None or config.app_secret is None:
+        raise RuntimeError("Feishu channel credentials are incomplete")
+    return config.app_id, config.app_secret
+
+
 def _feishu_mention_label(value: object) -> str:
     if not isinstance(value, str):
         return ""
@@ -121,12 +127,12 @@ def _verify_and_decode_feishu_callback(
 @router.post("/auth/feishu/callback", response_model=TokenResponse)
 async def feishu_oauth_callback(
     code: str, 
-    state: str = None, 
+    state: str | None = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Handle Feishu OAuth callback — exchange code for user session."""
     # Parse state if it's a UUID (session ID) or other context
-    from app.models.identity import SSOScanSession
+    from app.models.identity import AuthProviderType, SSOScanSession
     tenant_id = None
     if state:
         try:
@@ -165,7 +171,8 @@ async def feishu_oauth_callback(
         auth_provider = FeishuAuthProvider(provider=provider, config=feishu_config)
 
         # Ensure provider exists (will create if not)
-        await auth_provider._ensure_provider(db, tenant_id)
+        tenant_id_str = str(tenant_id) if tenant_id else None
+        await auth_provider._ensure_provider(db, tenant_id_str)
         provider = auth_provider.provider
 
         # Exchange code for user info
@@ -174,7 +181,7 @@ async def feishu_oauth_callback(
         user_info = await auth_provider.get_user_info(access_token)
 
         # Find or create user
-        user, is_new = await auth_provider.find_or_create_user(db, user_info, tenant_id=tenant_id)
+        user, is_new = await auth_provider.find_or_create_user(db, user_info, tenant_id=tenant_id_str)
 
         # Generate JWT token
         from app.core.security import create_access_token
@@ -191,7 +198,7 @@ async def feishu_oauth_callback(
             session = s_res.scalar_one_or_none()
             if session:
                 session.status = "authorized"
-                session.provider_type = "feishu"
+                session.provider_type = AuthProviderType.FEISHU
                 session.user_id = user.id
                 session.access_token = token
                 session.error_msg = None
@@ -243,7 +250,7 @@ async def configure_channel(
         import asyncio
         mode = existing.extra_config.get("connection_mode", "webhook")
         if mode == "websocket":
-            asyncio.create_task(feishu_ws_manager.start_client(agent_id, existing.app_id, existing.app_secret))
+            asyncio.create_task(feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret))
         else:
             asyncio.create_task(feishu_ws_manager.stop_client(agent_id))
         
@@ -267,7 +274,7 @@ async def configure_channel(
     import asyncio
     mode = config.extra_config.get("connection_mode", "webhook")
     if mode == "websocket":
-        asyncio.create_task(feishu_ws_manager.start_client(agent_id, config.app_id, config.app_secret))
+        asyncio.create_task(feishu_ws_manager.start_client(agent_id, data.app_id, data.app_secret))
 
     return ChannelConfigOut.model_validate(config)
 
@@ -535,6 +542,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict):
         config = result.scalar_one_or_none()
     if not config:
         return {"code": 1, "msg": "Channel not found"}
+    app_id, app_secret = _require_feishu_credentials(config)
 
     # Handle events
     event = body.get("event", {})
@@ -605,7 +613,7 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict):
                 for _ik in _post_image_keys:
                     try:
                         _img_bytes = await feishu_service.download_message_resource(
-                            config.app_id, config.app_secret, _msg_id, _ik, "image"
+                            app_id, app_secret, _msg_id, _ik, "image"
                         )
                         _, _workspace_path, _save_path = await store_agent_upload(
                             agent_id,
@@ -688,8 +696,8 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict):
             reply_target = chat_id if chat_type == "group" else sender_open_id
             receive_id_type = "chat_id" if chat_type == "group" else "open_id"
             await feishu_service.send_message(
-                config.app_id,
-                config.app_secret,
+                app_id,
+                app_secret,
                 reply_target,
                 "text",
                 json.dumps({"text": _USER_RESOLUTION_ERROR_TIP}),
@@ -720,6 +728,8 @@ async def _accept_feishu_file_runtime(
     import base64
     import json
 
+    app_id, app_secret = _require_feishu_credentials(config)
+
     message_type = message.get("message_type", "file")
     provider_message_id = message.get("message_id", "")
     content = json.loads(message.get("content", "{}"))
@@ -737,8 +747,8 @@ async def _accept_feishu_file_runtime(
 
     try:
         file_bytes = await feishu_service.download_message_resource(
-            config.app_id,
-            config.app_secret,
+            app_id,
+            app_secret,
             provider_message_id,
             file_key,
             resource_type,
@@ -754,8 +764,8 @@ async def _accept_feishu_file_runtime(
         reply_target = chat_id if chat_type == "group" else sender_open_id
         receive_id_type = "chat_id" if chat_type == "group" else "open_id"
         await feishu_service.send_message(
-            config.app_id,
-            config.app_secret,
+            app_id,
+            app_secret,
             reply_target,
             "text",
             json.dumps(
@@ -806,8 +816,8 @@ async def _accept_feishu_file_runtime(
         reply_target = chat_id if chat_type == "group" else sender_open_id
         receive_id_type = "chat_id" if chat_type == "group" else "open_id"
         await feishu_service.send_message(
-            config.app_id,
-            config.app_secret,
+            app_id,
+            app_secret,
             reply_target,
             "text",
             json.dumps({"text": _USER_RESOLUTION_ERROR_TIP}),

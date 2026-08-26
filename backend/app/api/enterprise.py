@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
+from typing import Protocol, runtime_checkable
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -55,6 +56,11 @@ _CAPABILITY_PROBE_TOOL_DEFINITION = {
         },
     },
 }
+
+
+@runtime_checkable
+class _AsyncClosable(Protocol):
+    async def close(self) -> None: ...
 
 
 def _has_valid_capability_probe(tool_calls: list[dict]) -> bool:
@@ -378,7 +384,7 @@ async def test_llm_model(
             "error": str(e)[:500],
         }
     finally:
-        if client is not None:
+        if isinstance(client, _AsyncClosable):
             await client.close()
 
 
@@ -1419,6 +1425,8 @@ async def create_identity_provider(
         raise HTTPException(status_code=400, detail="tenant_id is required to create an identity provider")
         
     if data.sso_login_enabled:
+        if tid is None:
+            raise HTTPException(status_code=400, detail="tenant_id is required to enable SSO")
         if not await sso_service.validate_sso_enablement(db, tid):
              raise HTTPException(
                 status_code=400,
@@ -1598,6 +1606,8 @@ async def update_identity_provider(
     if data.sso_login_enabled is not None:
         if data.sso_login_enabled is True and not provider.sso_login_enabled:
             # Pre-check IP restriction before writing anything
+            if provider.tenant_id is None:
+                raise HTTPException(status_code=400, detail="tenant_id is required to enable SSO")
             if not await sso_service.validate_sso_enablement(db, provider.tenant_id):
                 raise HTTPException(
                     status_code=400,

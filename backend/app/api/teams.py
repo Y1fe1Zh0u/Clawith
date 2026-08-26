@@ -1,6 +1,7 @@
 """Microsoft Teams Bot Channel API routes."""
 
 import hmac
+import importlib
 import json
 import os
 import time
@@ -105,14 +106,12 @@ async def _get_teams_access_token(config: ChannelConfig) -> str | None:
     if use_managed_identity:
         # Use Azure Managed Identity
         try:
-            from azure.identity.aio import DefaultAzureCredential
-            from azure.core.credentials import AccessToken
-            
-            credential = DefaultAzureCredential()
+            azure_identity = importlib.import_module("azure.identity.aio")
+            credential = azure_identity.DefaultAzureCredential()
             # For Bot Framework, we need the token for the Bot Framework API
             # Managed identity needs to be granted permissions to the Bot Framework API
             scope = "https://api.botframework.com/.default"
-            token: AccessToken = await credential.get_token(scope)
+            token = await credential.get_token(scope)
             
             _teams_tokens[agent_id] = {
                 "access_token": token.token,

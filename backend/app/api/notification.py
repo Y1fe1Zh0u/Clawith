@@ -136,6 +136,10 @@ async def broadcast_notification(
 
     from app.models.agent import Agent
     from app.services.notification_service import send_notification
+    from app.services.system_email_service import (
+        BroadcastEmailRecipient,
+        deliver_broadcast_emails,
+    )
 
     tenant_id = current_user.tenant_id
     sender_name = current_user.display_name or current_user.username or "Admin"
@@ -185,11 +189,6 @@ async def broadcast_notification(
         count_agents += 1
 
     if req.send_email:
-        from app.services.system_email_service import (
-            BroadcastEmailRecipient,
-            deliver_broadcast_emails,
-        )
-
         for user in users:
             if not user.email:
                 continue

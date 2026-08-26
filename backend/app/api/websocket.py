@@ -81,7 +81,7 @@ class ConnectionManager:
         # agent_id_str -> list of (WebSocket, session_id_str | None, user_id_str | None)
         self.active_connections: dict[str, list[tuple]] = {}
 
-    async def connect(self, agent_id: str, websocket: WebSocket, session_id: str = None, user_id: str | None = None):
+    async def connect(self, agent_id: str, websocket: WebSocket, session_id: str | None = None, user_id: str | None = None):
         if agent_id not in self.active_connections:
             self.active_connections[agent_id] = []
         self.active_connections[agent_id].append((websocket, session_id, user_id))
@@ -334,6 +334,9 @@ class WebSocketChatHandler:
                     await self.websocket.close(code=4001)
                     return False
 
+                if self.user.tenant_id is None:
+                    raise RuntimeError("Authenticated user has no tenant")
+
                 with tenant_context(self.user.tenant_id):
                     logger.info(f"[WS] Checking agent access for {self.agent_id}")
                     self.agent, _ = await check_agent_access(self.user, self.agent_id)
@@ -398,6 +401,8 @@ class WebSocketChatHandler:
 
     async def _load_models(self, db: AsyncSession):
         """Loads primary and fallback models for the agent."""
+        if self.agent is None:
+            raise RuntimeError("Agent is not loaded")
         candidates = await active_agent_model_candidates(db, self.agent)
         self.llm_model = candidates[0] if candidates else None
         self.fallback_llm_model = candidates[1] if len(candidates) > 1 else None
@@ -1026,6 +1031,11 @@ class WebSocketChatHandler:
                         "chat_cancel_not_lane_holder",
                         "Cancel target is no longer the active Direct Chat Run",
                     )
+                if agent.tenant_id is None:
+                    raise ChatRuntimeIntakeError(
+                        "chat_agent_tenant_missing",
+                        "Chat agent has no tenant",
+                    )
                 return await RuntimeCommandIntake(db).cancel_run(
                     CancelRunCommand(
                         tenant_id=agent.tenant_id,
@@ -1334,6 +1344,8 @@ class WebSocketChatHandler:
 
     async def _check_quotas(self) -> bool:
         """Checks conversation and agent LLM quotas. Sends message and returns False if exceeded."""
+        if self.user is None:
+            raise RuntimeError("Authenticated user is not loaded")
         try:
             await check_conversation_quota(self.user.id)
             await check_agent_expired(self.agent_id)
@@ -1365,6 +1377,8 @@ class WebSocketChatHandler:
 
     async def _save_user_message(self, content: str, display_content: str, file_name: str, is_onboarding_trigger: bool):
         """Saves user message to the database and updates session title/time."""
+        if self.user is None or self.conv_id is None:
+            raise RuntimeError("Chat session is not ready")
         has_image_marker = "[image_data:" in content
         if has_image_marker:
             saved_content = f"[file:{file_name}]\n{content}" if file_name else content
@@ -1410,6 +1424,9 @@ class WebSocketChatHandler:
         """Enqueues message for OpenClaw edge node poll."""
         from app.models.gateway_message import GatewayMessage as GwMsg
 
+        if self.user is None:
+            raise RuntimeError("Authenticated user is not loaded")
+
         async with async_session() as db:
             gw_msg = GwMsg(
                 agent_id=self.agent_id,
@@ -1431,6 +1448,8 @@ class WebSocketChatHandler:
 
     async def _update_activity_and_quota(self, assistant_response: str):
         """Update last_active_at, conversation/agent LLM usage, and log activity."""
+        if self.user is None:
+            raise RuntimeError("Authenticated user is not loaded")
         try:
             async with async_session() as _db:
                 _ar = await _db.execute(

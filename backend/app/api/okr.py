@@ -18,6 +18,7 @@ POST      /api/okr/trigger-member-outreach         (P4 onboarding: fire OKR Agen
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -40,6 +41,16 @@ from app.models.okr import (
 )
 
 router = APIRouter(prefix="/api/okr", tags=["okr"])
+
+
+@dataclass(frozen=True, slots=True)
+class _OKRMemberCandidate:
+    id: uuid.UUID
+    name: str
+    user_id: uuid.UUID | None
+    external_id: str | None
+    avatar_url: str | None
+    provider_name: str | None
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -834,6 +845,7 @@ async def list_objectives(
 async def create_objective(body: ObjectiveCreate, user=Depends(get_current_user)):
     """Create a new Objective."""
     from app.models.org import OrgMember
+    from app.models.user import User
 
     if not _is_okr_admin(user):
         raise _dashboard_write_forbidden()
@@ -1419,7 +1431,7 @@ async def members_without_okr(user=Depends(get_current_user)):
             # whether they have a platform account (user_id) or not.
             # This includes members from any channel (Feishu, Slack, etc.) and
             # members who haven't joined the platform yet (user_id=NULL).
-            all_member_rows = (await db.execute(
+            member_rows = (await db.execute(
                 select(
                     OrgMember.id,
                     OrgMember.name,
@@ -1435,6 +1447,17 @@ async def members_without_okr(user=Depends(get_current_user)):
                     OrgMember.status == "active",
                 )
             )).fetchall()
+            all_member_rows = [
+                _OKRMemberCandidate(
+                    id=row.id,
+                    name=row.name,
+                    user_id=row.user_id,
+                    external_id=row.external_id,
+                    avatar_url=row.avatar_url,
+                    provider_name=row.provider_name,
+                )
+                for row in member_rows
+            ]
 
             # ── Canonicalize: one record per logical person ───────────────────
             # A "logical person" may have multiple OrgMember rows:
@@ -1450,8 +1473,8 @@ async def members_without_okr(user=Depends(get_current_user)):
             #      (handles case a: same person has accounts on different channels)
 
             # Rule 1 — best OrgMember per external_id (prefer user_id != NULL)
-            best_by_ext: dict[str, object] = {}
-            unkeyed: list[object] = []  # rows with no external_id
+            best_by_ext: dict[str, _OKRMemberCandidate] = {}
+            unkeyed: list[_OKRMemberCandidate] = []  # rows with no external_id
             for row in all_member_rows:
                 if not row.external_id:
                     unkeyed.append(row)
@@ -1467,7 +1490,7 @@ async def members_without_okr(user=Depends(get_current_user)):
 
             # Rule 2 — deduplicate by user_id (one entry per platform account)
             seen_user_ids: set[uuid.UUID] = set()
-            canonical_members: list[object] = []
+            canonical_members: list[_OKRMemberCandidate] = []
             for row in candidates:
                 if row.user_id is not None:
                     if row.user_id in seen_user_ids:
@@ -1731,14 +1754,14 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
         company_okrs = company_okr_result.scalars().all()
 
         # Fetch KRs for each company OKR
-        company_okr_krs: dict[uuid.UUID, list] = {}
+        company_okr_krs: dict[uuid.UUID, list[OKRKeyResult]] = {}
         for co in company_okrs:
             kr_result = await db.execute(
                 select(OKRKeyResult)
                 .where(OKRKeyResult.objective_id == co.id)
                 .order_by(OKRKeyResult.created_at)
             )
-            company_okr_krs[co.id] = kr_result.scalars().all()
+            company_okr_krs[co.id] = list(kr_result.scalars().all())
 
         # ── Fetch tracked human members from AgentRelationship ────────────────
         rel_result = await db.execute(
@@ -1790,7 +1813,9 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
                         member_user_ids[org_member.id] = found
 
         # ── Fetch recent 3 messages per member (for context) ─────────────────
-        async def _recent_msgs(target_user_id: uuid.UUID | None) -> list[tuple]:
+        async def _recent_msgs(
+            target_user_id: uuid.UUID | None,
+        ) -> list[tuple[str, str, datetime]]:
             """Return up to 3 recent chat_messages between OKR Agent and user."""
             if not target_user_id:
                 return []
@@ -1803,7 +1828,10 @@ async def trigger_member_outreach(user=Depends(get_current_user)):
                 .order_by(ChatMessage.created_at.desc())
                 .limit(3)
             )
-            return list(reversed(msgs_result.all()))  # chronological order
+            return [
+                (row.role, row.content, row.created_at)
+                for row in reversed(msgs_result.all())
+            ]  # chronological order
 
         # ── Build prompt context for each member without OKR ─────────────────
         # Also resolve admin username for the final summary message
