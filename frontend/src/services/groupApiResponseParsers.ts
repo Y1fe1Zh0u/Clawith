@@ -230,6 +230,7 @@ function groupError(value: unknown, path: string): GroupError {
   const retryable = item.retryable;
   if (retryable !== null && typeof retryable !== "boolean")
     invalid(`${path}.retryable`, "boolean or null");
+  structuredValue(item.details, `${path}.details`);
   return {
     code: string(item.code, `${path}.code`),
     message: string(item.message, `${path}.message`),
@@ -355,11 +356,20 @@ export const parseGroupSessionSummaryResponse: ResponseParser<
 
 function structuredValue(value: unknown, path: string): unknown {
   if (
-    value === undefined ||
-    typeof value === "function" ||
-    typeof value === "symbol"
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
   )
-    invalid(path, "JSON value");
+    return value;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => structuredValue(item, `${path}[${index}]`));
+    return value;
+  }
+  const item = record(value, path);
+  Object.entries(item).forEach(([key, nested]) =>
+    structuredValue(nested, `${path}.${key}`),
+  );
   return value;
 }
 

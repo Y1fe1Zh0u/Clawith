@@ -66,7 +66,7 @@ import {
   parseHttpError,
   parseHttpErrorResponse,
   normalizeUnknownError,
-} from "./apiError";
+} from "./apiError.ts";
 import {
   parseActivityListResponse,
   parseAgentCollaboratorsResponse,
@@ -145,10 +145,14 @@ import {
   parseWebhookUrlResponse,
   parseWorkspaceUploadResponse,
   type ResponseParser,
-} from "./apiResponseParsers";
+} from "./apiResponseParsers.ts";
 
-export { ApiError, AppError } from "./apiError";
-export type { ApiErrorContext, AppErrorContext, ErrorSource } from "./apiError";
+export { ApiError, AppError } from "./apiError.ts";
+export type {
+  ApiErrorContext,
+  AppErrorContext,
+  ErrorSource,
+} from "./apiError.ts";
 
 const API_BASE = "/api";
 
@@ -943,7 +947,7 @@ export const channelApi = {
       `/agents/${agentId}/channel`,
       {},
       parseChannelConfigResponse,
-    ).catch(() => null),
+    ),
 
   create: (agentId: string, data: ChannelConfigRequest) =>
     request<ChannelConfig>(
@@ -967,7 +971,7 @@ export const channelApi = {
       `/agents/${agentId}/channel/webhook-url`,
       {},
       parseWebhookUrlResponse,
-    ).catch(() => null),
+    ),
 };
 
 // ─── Enterprise ───────────────────────────────────────
