@@ -1,6 +1,7 @@
 /** API service layer */
 
 import type { Agent, TokenResponse, User, Task } from "../types";
+import type { OAuthTenantChoice } from "./oauthCallbackResponse";
 import {
   AppError,
   parseHttpError,
@@ -191,7 +192,7 @@ export const authApi = {
       email: string;
       access_token: string;
       message: string;
-      user?: any;
+      user?: User;
       needs_company_setup: boolean;
     }>("/auth/register", { method: "POST", body: JSON.stringify(data) }),
 
@@ -205,7 +206,7 @@ export const authApi = {
       | {
           requires_tenant_selection: boolean;
           login_identifier: string;
-          tenants: any[];
+          tenants: OAuthTenantChoice[];
         }
     >("/auth/login", { method: "POST", body: JSON.stringify(data) }),
 

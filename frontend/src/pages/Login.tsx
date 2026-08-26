@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../stores";
 import { authApi, tenantApi, fetchJson } from "../services/api";
 import { ApiError, caughtErrorMessage } from "../services/apiError";
+import type { OAuthTenantChoice } from "../services/oauthCallbackResponse";
 import type { TokenResponse } from "../types";
 import {
   IconAlertTriangle,
@@ -56,7 +57,9 @@ export default function Login() {
   const [oauthLoading, setOauthLoading] = useState(false);
   const [ssoError, setSsoError] = useState("");
   const [oauthError, setOauthError] = useState("");
-  const [tenantSelection, setTenantSelection] = useState<any[] | null>(null);
+  const [tenantSelection, setTenantSelection] = useState<
+    OAuthTenantChoice[] | null
+  >(null);
   const [showVerification, setShowVerification] = useState(false);
   const [verificationEmail, setVerificationEmail] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
@@ -1058,7 +1061,7 @@ export default function Login() {
                           marginRight: "-4px",
                         }}
                       >
-                        {tenantSelection.map((tenant: any) => (
+                        {tenantSelection.map((tenant) => (
                           <button
                             key={tenant.tenant_id}
                             onClick={() => handleTenantSelect(tenant.tenant_id)}
