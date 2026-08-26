@@ -166,6 +166,11 @@ interface TenantDeleteResponse {
   fallback_tenant_id: string;
 }
 
+interface LoadState {
+  status: "idle" | "ready" | "error";
+  error: string;
+}
+
 function getTabFromHash(): TabKey {
   const hash = window.location.hash.replace("#", "");
   return VALID_TABS.find((tab) => tab === hash) ?? "info";
@@ -326,16 +331,28 @@ export default function EnterpriseSettings() {
   });
   const [quotaSaving, setQuotaSaving] = useState(false);
   const [quotaSaved, setQuotaSaved] = useState(false);
+  const [quotaLoadState, setQuotaLoadState] = useState<LoadState>({
+    status: "idle",
+    error: "",
+  });
+  const [quotaLoadAttempt, setQuotaLoadAttempt] = useState(0);
   useEffect(() => {
     if (activeTab === "quotas") {
       fetchJson<Partial<TenantQuotas>>("/enterprise/tenant-quotas")
         .then((d) => {
           if (d && Object.keys(d).length) setQuotaForm((f) => ({ ...f, ...d }));
+          setQuotaLoadState({ status: "ready", error: "" });
         })
-        .catch(() => {});
+        .catch((error: unknown) => {
+          setQuotaLoadState({
+            status: "error",
+            error: caughtErrorMessage(error) || "Failed to load tenant quotas.",
+          });
+        });
     }
-  }, [activeTab]);
+  }, [activeTab, quotaLoadAttempt]);
   const saveQuotas = async () => {
+    if (quotaLoadState.status !== "ready") return;
     setQuotaSaving(true);
     try {
       await fetchJson("/enterprise/tenant-quotas", {
@@ -357,6 +374,10 @@ export default function EnterpriseSettings() {
   });
   const [companyIntroSaving, setCompanyIntroSaving] = useState(false);
   const [companyIntroSaved, setCompanyIntroSaved] = useState(false);
+  const [companyIntroLoadState, setCompanyIntroLoadState] = useState<
+    LoadState & { tenantId: string }
+  >({ tenantId: "", status: "idle", error: "" });
+  const [companyIntroLoadAttempt, setCompanyIntroLoadAttempt] = useState(0);
 
   // Company intro key: always per-tenant scoped
   const companyIntroKey = selectedTenantId
@@ -366,6 +387,9 @@ export default function EnterpriseSettings() {
     companyIntroDraft.tenantId === selectedTenantId
       ? companyIntroDraft.content
       : "";
+  const companyIntroUnavailable =
+    companyIntroLoadState.tenantId !== selectedTenantId ||
+    companyIntroLoadState.status !== "ready";
 
   // Load Company Intro (tenant-scoped only, no fallback to global)
   useEffect(() => {
@@ -379,15 +403,33 @@ export default function EnterpriseSettings() {
           tenantId: selectedTenantId,
           content: d.value?.content ?? "",
         });
+        setCompanyIntroLoadState({
+          tenantId: selectedTenantId,
+          status: "ready",
+          error: "",
+        });
         // No fallback — each company starts empty with placeholder watermark
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (!active) return;
+        setCompanyIntroLoadState({
+          tenantId: selectedTenantId,
+          status: "error",
+          error:
+            caughtErrorMessage(error) || "Failed to load the company intro.",
+        });
+      });
     return () => {
       active = false;
     };
-  }, [selectedTenantId]);
+  }, [selectedTenantId, companyIntroLoadAttempt]);
 
   const saveCompanyIntro = async () => {
+    if (
+      companyIntroLoadState.tenantId !== selectedTenantId ||
+      companyIntroLoadState.status !== "ready"
+    )
+      return;
     setCompanyIntroSaving(true);
     try {
       await fetchJson(`/enterprise/system-settings/${companyIntroKey}`, {
@@ -396,8 +438,10 @@ export default function EnterpriseSettings() {
       });
       setCompanyIntroSaved(true);
       setTimeout(() => setCompanyIntroSaved(false), 2000);
-    } catch {
-      /* Keep the edited introduction in place so the user can retry. */
+    } catch (error) {
+      toast.error("Failed to save the company intro.", {
+        details: caughtErrorMessage(error) || String(error),
+      });
     }
     setCompanyIntroSaving(false);
   };
@@ -1054,9 +1098,46 @@ export default function EnterpriseSettings() {
                   "Describe your company's mission, products, and culture. This information is included in every agent conversation as context.",
                 )}
               </div>
+              {companyIntroUnavailable && (
+                <div
+                  role={companyIntroLoadState.error ? "alert" : "status"}
+                  style={{
+                    padding: "10px 12px",
+                    marginBottom: "12px",
+                    borderRadius: "6px",
+                    background: companyIntroLoadState.error
+                      ? "rgba(239,68,68,0.08)"
+                      : "var(--bg-secondary)",
+                    color: companyIntroLoadState.error
+                      ? "var(--error)"
+                      : "var(--text-secondary)",
+                    fontSize: "12px",
+                  }}
+                >
+                  {companyIntroLoadState.error || "Loading company intro..."}
+                  {companyIntroLoadState.error && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ marginLeft: "12px" }}
+                      onClick={() => {
+                        setCompanyIntroLoadState({
+                          tenantId: selectedTenantId,
+                          status: "idle",
+                          error: "",
+                        });
+                        setCompanyIntroLoadAttempt((attempt) => attempt + 1);
+                      }}
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )}
               <textarea
                 className="form-input"
                 value={companyIntro}
+                disabled={companyIntroUnavailable}
                 onChange={(e) =>
                   setCompanyIntroDraft({
                     tenantId: selectedTenantId,
@@ -1084,7 +1165,7 @@ export default function EnterpriseSettings() {
                 <button
                   className="btn btn-primary"
                   onClick={saveCompanyIntro}
-                  disabled={companyIntroSaving}
+                  disabled={companyIntroSaving || companyIntroUnavailable}
                 >
                   {companyIntroSaving
                     ? t("common.loading")
@@ -1265,7 +1346,43 @@ export default function EnterpriseSettings() {
             >
               {t("enterprise.quotas.defaultsApply")}
             </p>
-            <div className="card" style={{ padding: "16px" }}>
+            {quotaLoadState.status !== "ready" && (
+              <div
+                role={quotaLoadState.error ? "alert" : "status"}
+                style={{
+                  padding: "10px 12px",
+                  marginBottom: "12px",
+                  borderRadius: "6px",
+                  background: quotaLoadState.error
+                    ? "rgba(239,68,68,0.08)"
+                    : "var(--bg-secondary)",
+                  color: quotaLoadState.error
+                    ? "var(--error)"
+                    : "var(--text-secondary)",
+                  fontSize: "12px",
+                }}
+              >
+                {quotaLoadState.error || "Loading tenant quotas..."}
+                {quotaLoadState.error && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ marginLeft: "12px" }}
+                    onClick={() => {
+                      setQuotaLoadState({ status: "idle", error: "" });
+                      setQuotaLoadAttempt((attempt) => attempt + 1);
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+            <fieldset
+              className="card"
+              disabled={quotaLoadState.status !== "ready"}
+              style={{ padding: "16px", border: 0, minWidth: 0 }}
+            >
               {/* ── Conversation Limits ── */}
               <div
                 style={{
@@ -1641,7 +1758,7 @@ export default function EnterpriseSettings() {
                 <button
                   className="btn btn-primary"
                   onClick={saveQuotas}
-                  disabled={quotaSaving}
+                  disabled={quotaSaving || quotaLoadState.status !== "ready"}
                 >
                   {quotaSaving ? t("common.loading") : t("common.save", "Save")}
                 </button>
@@ -1659,7 +1776,7 @@ export default function EnterpriseSettings() {
                   </span>
                 )}
               </div>
-            </div>
+            </fieldset>
           </div>
         )}
 

@@ -16,6 +16,14 @@ import {
   Legend,
   type TooltipContentProps,
 } from "recharts";
+import { caughtErrorMessage } from "../services/apiError";
+import {
+  platformMetricsApi,
+  type AgentLeaderboardEntry,
+  type EnhancedMetrics,
+  type LeaderboardEntry,
+  type TimeSeriesPoint,
+} from "../services/platformMetricsApi";
 
 // ─── Helpers ───────────────────────────────────────────────
 
@@ -47,250 +55,6 @@ const CHART_COLORS = [
   "#f97316",
   "#6366f1",
 ];
-
-interface TimeSeriesPoint {
-  date: string;
-  total_companies: number;
-  new_companies: number;
-  total_users: number;
-  new_users: number;
-  total_tokens: number;
-  new_tokens: number;
-  total_sessions: number;
-  new_sessions: number;
-  dau: number;
-  wau: number;
-  mau: number;
-}
-
-interface LeaderboardEntry {
-  name: string;
-  tokens: number;
-  cache_read_tokens?: number;
-  cache_hit_rate?: number;
-}
-
-interface AgentLeaderboardEntry extends LeaderboardEntry {
-  company: string;
-}
-
-interface ChannelDistribution {
-  channel: string;
-  count: number;
-}
-
-interface ToolCategoryCount {
-  category: string;
-  count: number;
-}
-
-interface ChurnWarning {
-  name: string;
-  total_tokens: number;
-  last_active: string | null;
-  days_inactive: number | null;
-}
-
-interface EnhancedMetrics {
-  avg_tokens_per_session_30d: number;
-  retention_rate_7d: number;
-  retained_companies: number;
-  last_week_active_companies: number;
-  channel_distribution: ChannelDistribution[];
-  tool_category_top10: ToolCategoryCount[];
-  churn_warnings: ChurnWarning[];
-}
-
-interface LeaderboardsResponse {
-  top_companies?: LeaderboardEntry[];
-  top_agents?: AgentLeaderboardEntry[];
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isTimeSeriesPoint(value: unknown): value is TimeSeriesPoint {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "date" in value &&
-    typeof value.date === "string" &&
-    "total_companies" in value &&
-    isNumber(value.total_companies) &&
-    "new_companies" in value &&
-    isNumber(value.new_companies) &&
-    "total_users" in value &&
-    isNumber(value.total_users) &&
-    "new_users" in value &&
-    isNumber(value.new_users) &&
-    "total_tokens" in value &&
-    isNumber(value.total_tokens) &&
-    "new_tokens" in value &&
-    isNumber(value.new_tokens) &&
-    "total_sessions" in value &&
-    isNumber(value.total_sessions) &&
-    "new_sessions" in value &&
-    isNumber(value.new_sessions) &&
-    "dau" in value &&
-    isNumber(value.dau) &&
-    "wau" in value &&
-    isNumber(value.wau) &&
-    "mau" in value &&
-    isNumber(value.mau)
-  );
-}
-
-function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "name" in value &&
-    typeof value.name === "string" &&
-    "tokens" in value &&
-    isNumber(value.tokens) &&
-    (!("cache_read_tokens" in value) ||
-      value.cache_read_tokens === undefined ||
-      isNumber(value.cache_read_tokens)) &&
-    (!("cache_hit_rate" in value) ||
-      value.cache_hit_rate === undefined ||
-      isNumber(value.cache_hit_rate))
-  );
-}
-
-function isAgentLeaderboardEntry(
-  value: unknown,
-): value is AgentLeaderboardEntry {
-  return (
-    isLeaderboardEntry(value) &&
-    "company" in value &&
-    typeof value.company === "string"
-  );
-}
-
-function isChannelDistribution(value: unknown): value is ChannelDistribution {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "channel" in value &&
-    typeof value.channel === "string" &&
-    "count" in value &&
-    isNumber(value.count)
-  );
-}
-
-function isToolCategoryCount(value: unknown): value is ToolCategoryCount {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "category" in value &&
-    typeof value.category === "string" &&
-    "count" in value &&
-    isNumber(value.count)
-  );
-}
-
-function isChurnWarning(value: unknown): value is ChurnWarning {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "name" in value &&
-    typeof value.name === "string" &&
-    "total_tokens" in value &&
-    isNumber(value.total_tokens) &&
-    "last_active" in value &&
-    (value.last_active === null || typeof value.last_active === "string") &&
-    "days_inactive" in value &&
-    (value.days_inactive === null || isNumber(value.days_inactive))
-  );
-}
-
-function isEnhancedMetrics(value: unknown): value is EnhancedMetrics {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "avg_tokens_per_session_30d" in value &&
-    isNumber(value.avg_tokens_per_session_30d) &&
-    "retention_rate_7d" in value &&
-    isNumber(value.retention_rate_7d) &&
-    "retained_companies" in value &&
-    isNumber(value.retained_companies) &&
-    "last_week_active_companies" in value &&
-    isNumber(value.last_week_active_companies) &&
-    "channel_distribution" in value &&
-    Array.isArray(value.channel_distribution) &&
-    value.channel_distribution.every(isChannelDistribution) &&
-    "tool_category_top10" in value &&
-    Array.isArray(value.tool_category_top10) &&
-    value.tool_category_top10.every(isToolCategoryCount) &&
-    "churn_warnings" in value &&
-    Array.isArray(value.churn_warnings) &&
-    value.churn_warnings.every(isChurnWarning)
-  );
-}
-
-function isLeaderboardsResponse(value: unknown): value is LeaderboardsResponse {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (!("top_companies" in value) ||
-      value.top_companies === undefined ||
-      (Array.isArray(value.top_companies) &&
-        value.top_companies.every(isLeaderboardEntry))) &&
-    (!("top_agents" in value) ||
-      value.top_agents === undefined ||
-      (Array.isArray(value.top_agents) &&
-        value.top_agents.every(isAgentLeaderboardEntry)))
-  );
-}
-
-function authHeaders(): HeadersInit {
-  const token = localStorage.getItem("token");
-  return {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
-
-async function requestTimeSeries(
-  days: number,
-  signal: AbortSignal,
-): Promise<TimeSeriesPoint[]> {
-  const end = new Date();
-  const start = new Date();
-  start.setDate(start.getDate() - days);
-  const response = await fetch(
-    `/api/admin/metrics/timeseries?start_date=${start.toISOString()}&end_date=${end.toISOString()}`,
-    { headers: authHeaders(), signal },
-  );
-  if (!response.ok) return [];
-  const data: unknown = await response.json();
-  return Array.isArray(data) && data.every(isTimeSeriesPoint) ? data : [];
-}
-
-async function requestLeaderboards(
-  signal: AbortSignal,
-): Promise<LeaderboardsResponse> {
-  const response = await fetch("/api/admin/metrics/leaderboards", {
-    headers: authHeaders(),
-    signal,
-  });
-  if (!response.ok) return {};
-  const data: unknown = await response.json();
-  return isLeaderboardsResponse(data) ? data : {};
-}
-
-async function requestEnhancedMetrics(
-  signal: AbortSignal,
-): Promise<EnhancedMetrics | null> {
-  const response = await fetch("/api/admin/metrics/enhanced", {
-    headers: authHeaders(),
-    signal,
-  });
-  if (!response.ok) return null;
-  const data: unknown = await response.json();
-  return isEnhancedMetrics(data) ? data : null;
-}
 
 // ─── InfoTooltip ─────────────────────────────────────────
 
@@ -426,6 +190,9 @@ export default function PlatformDashboard() {
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingLeaders, setLoadingLeaders] = useState(true);
   const [loadingEnhanced, setLoadingEnhanced] = useState(true);
+  const [statsError, setStatsError] = useState("");
+  const [leadersError, setLeadersError] = useState("");
+  const [enhancedError, setEnhancedError] = useState("");
 
   const [timeSeriesData, setTimeSeriesData] = useState<TimeSeriesPoint[]>([]);
   const [topCompanies, setTopCompanies] = useState<LeaderboardEntry[]>([]);
@@ -434,11 +201,17 @@ export default function PlatformDashboard() {
 
   useEffect(() => {
     const controller = new AbortController();
-    requestTimeSeries(timeRange, controller.signal)
-      .then(setTimeSeriesData)
+    platformMetricsApi
+      .timeSeries(timeRange, controller.signal)
+      .then((data) => {
+        setTimeSeriesData(data);
+        setStatsError("");
+      })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
-          console.error("Failed to load metrics:", error);
+          setStatsError(
+            caughtErrorMessage(error) || "Failed to load platform trends.",
+          );
         }
       })
       .finally(() => {
@@ -449,24 +222,34 @@ export default function PlatformDashboard() {
 
   useEffect(() => {
     const controller = new AbortController();
-    requestLeaderboards(controller.signal)
+    platformMetricsApi
+      .leaderboards(controller.signal)
       .then((data) => {
-        setTopCompanies(data.top_companies ?? []);
-        setTopAgents(data.top_agents ?? []);
+        setTopCompanies(data.top_companies);
+        setTopAgents(data.top_agents);
+        setLeadersError("");
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
-          console.error("Failed to load leaderboards:", error);
+          setLeadersError(
+            caughtErrorMessage(error) || "Failed to load platform rankings.",
+          );
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoadingLeaders(false);
       });
-    requestEnhancedMetrics(controller.signal)
-      .then(setEnhanced)
+    platformMetricsApi
+      .enhanced(controller.signal)
+      .then((data) => {
+        setEnhanced(data);
+        setEnhancedError("");
+      })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
-          console.error("Failed to load enhanced metrics:", error);
+          setEnhancedError(
+            caughtErrorMessage(error) || "Failed to load platform health data.",
+          );
         }
       })
       .finally(() => {
@@ -1131,6 +914,7 @@ export default function PlatformDashboard() {
   );
 
   // ─── Render ───────────────────────────────────────────
+  const loadErrors = [statsError, leadersError, enhancedError].filter(Boolean);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
@@ -1176,6 +960,22 @@ export default function PlatformDashboard() {
           ))}
         </div>
       </div>
+
+      {loadErrors.length > 0 && (
+        <div
+          role="alert"
+          style={{
+            padding: "12px 16px",
+            borderRadius: "8px",
+            border: "1px solid rgba(239,68,68,0.35)",
+            background: "rgba(239,68,68,0.08)",
+            color: "var(--error)",
+            fontSize: "12px",
+          }}
+        >
+          {loadErrors.join(" ")} Previously loaded data remains visible.
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>

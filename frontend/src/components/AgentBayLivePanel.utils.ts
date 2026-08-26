@@ -1,4 +1,4 @@
-export const MAX_LIVE_CODE_OUTPUT_CHARS = 120_000;
+const MAX_LIVE_CODE_OUTPUT_CHARS = 120_000;
 const LIVE_CODE_TRUNCATED_NOTICE =
   "\n\n[... older live output truncated ...]\n";
 

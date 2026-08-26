@@ -231,6 +231,10 @@ function PlatformTab() {
   // Platform settings toggles
   const [settings, setSettings] = useState<Partial<PlatformSettings>>({});
   const [settingsLoading, setSettingsLoading] = useState(false);
+  const [platformConfigReady, setPlatformConfigReady] = useState(false);
+  const [platformConfigLoading, setPlatformConfigLoading] = useState(true);
+  const [platformConfigLoadError, setPlatformConfigLoadError] = useState("");
+  const [platformConfigLoadAttempt, setPlatformConfigLoadAttempt] = useState(0);
 
   // Notification bar
   const [nbEnabled, setNbEnabled] = useState(false);
@@ -299,111 +303,141 @@ function PlatformTab() {
   };
 
   useEffect(() => {
+    let active = true;
     // Load platform toggles
-    adminApi
+    const platformSettingsRequest = adminApi
       .getPlatformSettings()
-      .then(setSettings)
-      .catch(() => {});
+      .then((data) => {
+        if (active) setSettings(data);
+      });
     // Load notification bar
-    fetchJson<SystemSettingResponse<NotificationBarValue>>(
-      "/enterprise/system-settings/notification_bar",
-    )
-      .then((d) => {
-        if (d?.value) {
-          setNbEnabled(!!d.value.enabled);
-          setNbText(d.value.text || "");
-        }
-      })
-      .catch(() => {});
+    const notificationRequest = fetchJson<
+      SystemSettingResponse<NotificationBarValue>
+    >("/enterprise/system-settings/notification_bar").then((d) => {
+      if (!active) return;
+      if (d?.value) {
+        setNbEnabled(!!d.value.enabled);
+        setNbText(d.value.text || "");
+      }
+    });
 
     // Load System Email
-    fetchJson<SystemSettingResponse<SystemEmailConfig>>(
-      "/enterprise/system-settings/system_email_platform",
-    )
-      .then((d) => {
-        if (d?.value) {
-          setSystemEmailConfig({
-            SYSTEM_EMAIL_ENABLED:
-              d.value.SYSTEM_EMAIL_ENABLED !== undefined
-                ? !!d.value.SYSTEM_EMAIL_ENABLED
-                : !!(
-                    d.value.SYSTEM_EMAIL_FROM_ADDRESS &&
-                    d.value.SYSTEM_SMTP_HOST
-                  ),
-            SYSTEM_EMAIL_FROM_ADDRESS: d.value.SYSTEM_EMAIL_FROM_ADDRESS || "",
-            SYSTEM_EMAIL_FROM_NAME: d.value.SYSTEM_EMAIL_FROM_NAME || "Clawith",
-            SYSTEM_SMTP_HOST: d.value.SYSTEM_SMTP_HOST || "",
-            SYSTEM_SMTP_PORT: d.value.SYSTEM_SMTP_PORT || 465,
-            SYSTEM_SMTP_USERNAME: d.value.SYSTEM_SMTP_USERNAME || "",
-            SYSTEM_SMTP_PASSWORD: d.value.SYSTEM_SMTP_PASSWORD || "",
-            SYSTEM_SMTP_SSL:
-              d.value.SYSTEM_SMTP_SSL !== undefined
-                ? d.value.SYSTEM_SMTP_SSL
-                : true,
-            SYSTEM_SMTP_TIMEOUT_SECONDS:
-              d.value.SYSTEM_SMTP_TIMEOUT_SECONDS || 15,
-          });
-        }
-      })
-      .catch(() => {});
+    const emailConfigRequest = fetchJson<
+      SystemSettingResponse<SystemEmailConfig>
+    >("/enterprise/system-settings/system_email_platform").then((d) => {
+      if (!active) return;
+      if (d?.value) {
+        setSystemEmailConfig({
+          SYSTEM_EMAIL_ENABLED:
+            d.value.SYSTEM_EMAIL_ENABLED !== undefined
+              ? !!d.value.SYSTEM_EMAIL_ENABLED
+              : !!(
+                  d.value.SYSTEM_EMAIL_FROM_ADDRESS && d.value.SYSTEM_SMTP_HOST
+                ),
+          SYSTEM_EMAIL_FROM_ADDRESS: d.value.SYSTEM_EMAIL_FROM_ADDRESS || "",
+          SYSTEM_EMAIL_FROM_NAME: d.value.SYSTEM_EMAIL_FROM_NAME || "Clawith",
+          SYSTEM_SMTP_HOST: d.value.SYSTEM_SMTP_HOST || "",
+          SYSTEM_SMTP_PORT: d.value.SYSTEM_SMTP_PORT || 465,
+          SYSTEM_SMTP_USERNAME: d.value.SYSTEM_SMTP_USERNAME || "",
+          SYSTEM_SMTP_PASSWORD: d.value.SYSTEM_SMTP_PASSWORD || "",
+          SYSTEM_SMTP_SSL:
+            d.value.SYSTEM_SMTP_SSL !== undefined
+              ? d.value.SYSTEM_SMTP_SSL
+              : true,
+          SYSTEM_SMTP_TIMEOUT_SECONDS:
+            d.value.SYSTEM_SMTP_TIMEOUT_SECONDS || 15,
+        });
+      }
+    });
 
     // Load email templates
-    fetchJson<EmailTemplatesResponse>("/enterprise/email-templates")
-      .then((d) => {
-        if (d.templates) setEmailTemplates(d.templates);
-        if (d.variables) setEmailTemplateVars(d.variables);
-        if (d.defaults) setEmailTemplateDefaults(d.defaults);
-      })
-      .catch(() => {});
+    const templatesRequest = fetchJson<EmailTemplatesResponse>(
+      "/enterprise/email-templates",
+    ).then((d) => {
+      if (!active) return;
+      if (d.templates) setEmailTemplates(d.templates);
+      if (d.variables) setEmailTemplateVars(d.variables);
+      if (d.defaults) setEmailTemplateDefaults(d.defaults);
+    });
 
-    fetchJson<IdentityProviderResponse[]>(
+    const identityProvidersRequest = fetchJson<IdentityProviderResponse[]>(
       "/enterprise/identity-providers?global_only=true",
-    )
-      .then((items) => {
-        const mapped: Partial<Record<SocialProviderType, OAuthProvider>> = {};
-        items.forEach((item) => {
-          if (!isSocialProviderType(item.provider_type)) return;
-          mapped[item.provider_type] = {
-            id: item.id,
-            provider_type: item.provider_type,
-            name: item.name || SOCIAL_PROVIDER_META[item.provider_type].name,
-            is_active: !!item.is_active,
-            config: item.config || {},
-            client_id: item.config?.client_id || item.config?.app_id || "",
-            client_secret:
-              item.config?.client_secret || item.config?.app_secret || "",
-            scope:
-              item.config?.scope ||
-              SOCIAL_PROVIDER_META[item.provider_type].scope,
-          };
-        });
+    ).then((items) => {
+      if (!active) return;
+      const mapped: Partial<Record<SocialProviderType, OAuthProvider>> = {};
+      items.forEach((item) => {
+        if (!isSocialProviderType(item.provider_type)) return;
+        mapped[item.provider_type] = {
+          id: item.id,
+          provider_type: item.provider_type,
+          name: item.name || SOCIAL_PROVIDER_META[item.provider_type].name,
+          is_active: !!item.is_active,
+          config: item.config || {},
+          client_id: item.config?.client_id || item.config?.app_id || "",
+          client_secret:
+            item.config?.client_secret || item.config?.app_secret || "",
+          scope:
+            item.config?.scope ||
+            SOCIAL_PROVIDER_META[item.provider_type].scope,
+        };
+      });
 
-        setOauthProviders({
-          google: mapped.google || {
-            provider_type: "google",
-            name: SOCIAL_PROVIDER_META.google.name,
-            is_active: false,
-            client_id: "",
-            client_secret: "",
-            scope: SOCIAL_PROVIDER_META.google.scope,
-          },
-          github: mapped.github || {
-            provider_type: "github",
-            name: SOCIAL_PROVIDER_META.github.name,
-            is_active: false,
-            client_id: "",
-            client_secret: "",
-            scope: SOCIAL_PROVIDER_META.github.scope,
-          },
-        });
+      setOauthProviders({
+        google: mapped.google || {
+          provider_type: "google",
+          name: SOCIAL_PROVIDER_META.google.name,
+          is_active: false,
+          client_id: "",
+          client_secret: "",
+          scope: SOCIAL_PROVIDER_META.google.scope,
+        },
+        github: mapped.github || {
+          provider_type: "github",
+          name: SOCIAL_PROVIDER_META.github.name,
+          is_active: false,
+          client_id: "",
+          client_secret: "",
+          scope: SOCIAL_PROVIDER_META.github.scope,
+        },
+      });
+    });
+
+    void Promise.all([
+      platformSettingsRequest,
+      notificationRequest,
+      emailConfigRequest,
+      templatesRequest,
+      identityProvidersRequest,
+    ])
+      .then(() => {
+        if (!active) return;
+        setPlatformConfigReady(true);
+        setPlatformConfigLoading(false);
+        setPlatformConfigLoadError("");
       })
-      .catch(() => {});
-  }, []);
+      .catch((error: unknown) => {
+        if (!active) return;
+        setPlatformConfigReady(false);
+        setPlatformConfigLoading(false);
+        setPlatformConfigLoadError(
+          caughtErrorMessage(error) || "Failed to load platform configuration.",
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, [platformConfigLoadAttempt]);
+
+  const requirePlatformConfig = (): boolean => {
+    if (!platformConfigReady) return false;
+    return true;
+  };
 
   const handleToggleSetting = async (
     key: keyof PlatformSettings,
     value: boolean,
   ) => {
+    if (!requirePlatformConfig()) return;
     setSettingsLoading(true);
     try {
       await adminApi.updatePlatformSettings({ [key]: value });
@@ -419,6 +453,7 @@ function PlatformTab() {
     nextEnabled = nbEnabled,
     nextText = nbText,
   ) => {
+    if (!requirePlatformConfig()) return false;
     setNbSaving(true);
     try {
       const payload = await fetchJson<
@@ -462,6 +497,7 @@ function PlatformTab() {
   };
 
   const saveEmailConfig = async () => {
+    if (!requirePlatformConfig()) return;
     setEmailConfigSaving(true);
     try {
       await fetchJson("/enterprise/system-settings/system_email_platform", {
@@ -508,6 +544,7 @@ function PlatformTab() {
   };
 
   const saveEmailTemplates = async () => {
+    if (!requirePlatformConfig()) return;
     setTemplatesSaving(true);
     try {
       await fetchJson("/enterprise/email-templates", {
@@ -550,6 +587,7 @@ function PlatformTab() {
   };
 
   const saveOauthProvider = async (providerType: SocialProviderType) => {
+    if (!requirePlatformConfig()) return;
     const provider = oauthProviders[providerType];
     if (!provider?.client_id?.trim() || !provider?.client_secret?.trim()) {
       showToast(
@@ -666,244 +704,327 @@ function PlatformTab() {
         </div>
       )}
 
-      {/* Allow self-create company and SSO redirect toggle */}
-      <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          {(
-            [
-              {
-                key: "allow_self_create_company",
-                label: t(
-                  "admin.allowSelfCreate",
-                  "Allow users to create their own companies",
-                ),
-                desc: t(
-                  "admin.allowSelfCreateDesc",
-                  "When disabled, only platform admins can create companies.",
-                ),
-              },
-              {
-                key: "sso_custom_domain_redirect_enabled",
-                label: t(
-                  "admin.ssoCustomDomainRedirect",
-                  "Enable tenant SSO custom domain redirect",
-                ),
-                desc: t(
-                  "admin.ssoCustomDomainRedirectDesc",
-                  "When disabled, all tenants will be blocked from using custom domains or dedicated links to redirect to SSO providers.",
-                ),
-              },
-            ] satisfies {
-              key: keyof PlatformSettings;
-              label: string;
-              desc: string;
-            }[]
-          ).map((s) => (
-            <div
-              key={s.key}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "8px 0",
+      {(platformConfigLoading || platformConfigLoadError) && (
+        <div
+          role={platformConfigLoadError ? "alert" : "status"}
+          style={{
+            padding: "12px 16px",
+            marginBottom: "16px",
+            borderRadius: "8px",
+            border: `1px solid ${platformConfigLoadError ? "rgba(239,68,68,0.35)" : "var(--border-subtle)"}`,
+            background: platformConfigLoadError
+              ? "rgba(239,68,68,0.08)"
+              : "var(--bg-secondary)",
+            color: platformConfigLoadError
+              ? "var(--error)"
+              : "var(--text-secondary)",
+            fontSize: "13px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+          }}
+        >
+          <span>
+            {platformConfigLoadError || "Loading platform configuration..."}
+          </span>
+          {platformConfigLoadError && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setPlatformConfigReady(false);
+                setPlatformConfigLoading(true);
+                setPlatformConfigLoadError("");
+                setPlatformConfigLoadAttempt((attempt) => attempt + 1);
               }}
             >
-              <div>
-                <div style={{ fontSize: "13px", fontWeight: 500 }}>
-                  {s.label}
-                </div>
-                <div
-                  style={{
-                    fontSize: "11px",
-                    color: "var(--text-tertiary)",
-                    marginTop: "2px",
-                  }}
-                >
-                  {s.desc}
-                </div>
-              </div>
-              <label style={switchStyle(!!settings[s.key], settingsLoading)}>
-                <input
-                  type="checkbox"
-                  checked={!!settings[s.key]}
-                  onChange={(e) => handleToggleSetting(s.key, e.target.checked)}
-                  disabled={settingsLoading}
-                  style={{ opacity: 0, width: 0, height: 0 }}
-                />
-                <span style={switchTrack(!!settings[s.key])}>
-                  <span style={switchThumb(!!settings[s.key])} />
-                </span>
-              </label>
-            </div>
-          ))}
+              Retry
+            </button>
+          )}
         </div>
-      </div>
+      )}
 
-      <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
-        <div
-          style={{
-            fontSize: "13px",
-            fontWeight: 600,
-            marginBottom: "4px",
-            color: "var(--text-secondary)",
-          }}
-        >
-          OAuth Login
-        </div>
-        <p
-          style={{
-            fontSize: "12px",
-            color: "var(--text-tertiary)",
-            marginBottom: "16px",
-          }}
-        >
-          Configure platform-wide social login providers. Once enabled, users
-          can sign in from the main login page with Google or GitHub.
-        </p>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-            gap: "16px",
-          }}
-        >
-          {(["google", "github"] as const).map((providerType) => {
-            const provider = oauthProviders[providerType];
-            const meta = SOCIAL_PROVIDER_META[providerType];
-            const callbackUrl = `${window.location.origin}/oauth/callback/${providerType}`;
-            return (
+      <fieldset
+        disabled={!platformConfigReady}
+        style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+      >
+        {/* Allow self-create company and SSO redirect toggle */}
+        <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "12px" }}
+          >
+            {(
+              [
+                {
+                  key: "allow_self_create_company",
+                  label: t(
+                    "admin.allowSelfCreate",
+                    "Allow users to create their own companies",
+                  ),
+                  desc: t(
+                    "admin.allowSelfCreateDesc",
+                    "When disabled, only platform admins can create companies.",
+                  ),
+                },
+                {
+                  key: "sso_custom_domain_redirect_enabled",
+                  label: t(
+                    "admin.ssoCustomDomainRedirect",
+                    "Enable tenant SSO custom domain redirect",
+                  ),
+                  desc: t(
+                    "admin.ssoCustomDomainRedirectDesc",
+                    "When disabled, all tenants will be blocked from using custom domains or dedicated links to redirect to SSO providers.",
+                  ),
+                },
+              ] satisfies {
+                key: keyof PlatformSettings;
+                label: string;
+                desc: string;
+              }[]
+            ).map((s) => (
               <div
-                key={providerType}
+                key={s.key}
                 style={{
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "12px",
-                  padding: "16px",
-                  background: "var(--bg-secondary)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "8px 0",
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: "12px",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: "14px", fontWeight: 600 }}>
-                      {meta.name}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "11px",
-                        color: "var(--text-tertiary)",
-                        marginTop: "4px",
-                      }}
-                    >
-                      Scope: {provider?.scope || meta.scope}
-                    </div>
-                  </div>
-                  <label
-                    style={switchStyle(
-                      !!provider?.is_active,
-                      oauthSaving[providerType],
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!provider?.is_active}
-                      onChange={(e) =>
-                        setOauthField(
-                          providerType,
-                          "is_active",
-                          e.target.checked,
-                        )
-                      }
-                      disabled={!!oauthSaving[providerType]}
-                      style={{ opacity: 0, width: 0, height: 0 }}
-                    />
-                    <span style={switchTrack(!!provider?.is_active)}>
-                      <span style={switchThumb(!!provider?.is_active)} />
-                    </span>
-                  </label>
-                </div>
-
-                <div style={{ display: "grid", gap: "12px" }}>
-                  <div>
-                    <label
-                      className="form-label"
-                      style={{ fontSize: "12px", marginBottom: "6px" }}
-                    >
-                      Client ID
-                    </label>
-                    <input
-                      className="form-input"
-                      value={provider?.client_id || ""}
-                      onChange={(e) =>
-                        setOauthField(providerType, "client_id", e.target.value)
-                      }
-                      placeholder={
-                        providerType === "google"
-                          ? "xxxxxxxx.apps.googleusercontent.com"
-                          : "GitHub OAuth App Client ID"
-                      }
-                      style={{ fontSize: "13px" }}
-                    />
-                  </div>
-                  <div>
-                    <label
-                      className="form-label"
-                      style={{ fontSize: "12px", marginBottom: "6px" }}
-                    >
-                      Client Secret
-                    </label>
-                    <input
-                      className="form-input"
-                      type="password"
-                      value={provider?.client_secret || ""}
-                      onChange={(e) =>
-                        setOauthField(
-                          providerType,
-                          "client_secret",
-                          e.target.value,
-                        )
-                      }
-                      placeholder={`${meta.name} Client Secret`}
-                      style={{ fontSize: "13px" }}
-                    />
-                  </div>
-                  <div>
-                    <label
-                      className="form-label"
-                      style={{ fontSize: "12px", marginBottom: "6px" }}
-                    >
-                      Scope
-                    </label>
-                    <input
-                      className="form-input"
-                      value={provider?.scope || meta.scope}
-                      onChange={(e) =>
-                        setOauthField(providerType, "scope", e.target.value)
-                      }
-                      style={{ fontSize: "13px" }}
-                    />
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: 500 }}>
+                    {s.label}
                   </div>
                   <div
                     style={{
-                      padding: "10px 12px",
-                      borderRadius: "8px",
-                      background: "var(--bg-primary)",
-                      border: "1px solid var(--border-subtle)",
+                      fontSize: "11px",
+                      color: "var(--text-tertiary)",
+                      marginTop: "2px",
                     }}
                   >
+                    {s.desc}
+                  </div>
+                </div>
+                <label style={switchStyle(!!settings[s.key], settingsLoading)}>
+                  <input
+                    type="checkbox"
+                    checked={!!settings[s.key]}
+                    onChange={(e) =>
+                      handleToggleSetting(s.key, e.target.checked)
+                    }
+                    disabled={settingsLoading}
+                    style={{ opacity: 0, width: 0, height: 0 }}
+                  />
+                  <span style={switchTrack(!!settings[s.key])}>
+                    <span style={switchThumb(!!settings[s.key])} />
+                  </span>
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
+          <div
+            style={{
+              fontSize: "13px",
+              fontWeight: 600,
+              marginBottom: "4px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            OAuth Login
+          </div>
+          <p
+            style={{
+              fontSize: "12px",
+              color: "var(--text-tertiary)",
+              marginBottom: "16px",
+            }}
+          >
+            Configure platform-wide social login providers. Once enabled, users
+            can sign in from the main login page with Google or GitHub.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: "16px",
+            }}
+          >
+            {(["google", "github"] as const).map((providerType) => {
+              const provider = oauthProviders[providerType];
+              const meta = SOCIAL_PROVIDER_META[providerType];
+              const callbackUrl = `${window.location.origin}/oauth/callback/${providerType}`;
+              return (
+                <div
+                  key={providerType}
+                  style={{
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "12px",
+                    padding: "16px",
+                    background: "var(--bg-secondary)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: "12px",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: "14px", fontWeight: 600 }}>
+                        {meta.name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "11px",
+                          color: "var(--text-tertiary)",
+                          marginTop: "4px",
+                        }}
+                      >
+                        Scope: {provider?.scope || meta.scope}
+                      </div>
+                    </div>
+                    <label
+                      style={switchStyle(
+                        !!provider?.is_active,
+                        oauthSaving[providerType],
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!provider?.is_active}
+                        onChange={(e) =>
+                          setOauthField(
+                            providerType,
+                            "is_active",
+                            e.target.checked,
+                          )
+                        }
+                        disabled={!!oauthSaving[providerType]}
+                        style={{ opacity: 0, width: 0, height: 0 }}
+                      />
+                      <span style={switchTrack(!!provider?.is_active)}>
+                        <span style={switchThumb(!!provider?.is_active)} />
+                      </span>
+                    </label>
+                  </div>
+
+                  <div style={{ display: "grid", gap: "12px" }}>
+                    <div>
+                      <label
+                        className="form-label"
+                        style={{ fontSize: "12px", marginBottom: "6px" }}
+                      >
+                        Client ID
+                      </label>
+                      <input
+                        className="form-input"
+                        value={provider?.client_id || ""}
+                        onChange={(e) =>
+                          setOauthField(
+                            providerType,
+                            "client_id",
+                            e.target.value,
+                          )
+                        }
+                        placeholder={
+                          providerType === "google"
+                            ? "xxxxxxxx.apps.googleusercontent.com"
+                            : "GitHub OAuth App Client ID"
+                        }
+                        style={{ fontSize: "13px" }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="form-label"
+                        style={{ fontSize: "12px", marginBottom: "6px" }}
+                      >
+                        Client Secret
+                      </label>
+                      <input
+                        className="form-input"
+                        type="password"
+                        value={provider?.client_secret || ""}
+                        onChange={(e) =>
+                          setOauthField(
+                            providerType,
+                            "client_secret",
+                            e.target.value,
+                          )
+                        }
+                        placeholder={`${meta.name} Client Secret`}
+                        style={{ fontSize: "13px" }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="form-label"
+                        style={{ fontSize: "12px", marginBottom: "6px" }}
+                      >
+                        Scope
+                      </label>
+                      <input
+                        className="form-input"
+                        value={provider?.scope || meta.scope}
+                        onChange={(e) =>
+                          setOauthField(providerType, "scope", e.target.value)
+                        }
+                        style={{ fontSize: "13px" }}
+                      />
+                    </div>
                     <div
                       style={{
-                        fontSize: "11px",
-                        color: "var(--text-tertiary)",
-                        marginBottom: "6px",
+                        padding: "10px 12px",
+                        borderRadius: "8px",
+                        background: "var(--bg-primary)",
+                        border: "1px solid var(--border-subtle)",
                       }}
                     >
-                      {meta.authorizeLabel}
+                      <div
+                        style={{
+                          fontSize: "11px",
+                          color: "var(--text-tertiary)",
+                          marginBottom: "6px",
+                        }}
+                      >
+                        {meta.authorizeLabel}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px",
+                        }}
+                      >
+                        <code
+                          style={{
+                            flex: 1,
+                            fontSize: "11px",
+                            wordBreak: "break-all",
+                            color: "var(--text-primary)",
+                          }}
+                        >
+                          {callbackUrl}
+                        </code>
+                        <LinearCopyButton
+                          className="btn btn-ghost"
+                          style={{
+                            fontSize: "11px",
+                            padding: "4px 8px",
+                            whiteSpace: "nowrap",
+                          }}
+                          textToCopy={callbackUrl}
+                          label="Copy"
+                          copiedLabel="Copied"
+                        />
+                      </div>
                     </div>
                     <div
                       style={{
@@ -912,800 +1033,783 @@ function PlatformTab() {
                         gap: "8px",
                       }}
                     >
-                      <code
-                        style={{
-                          flex: 1,
-                          fontSize: "11px",
-                          wordBreak: "break-all",
-                          color: "var(--text-primary)",
-                        }}
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => saveOauthProvider(providerType)}
+                        disabled={!!oauthSaving[providerType]}
                       >
-                        {callbackUrl}
-                      </code>
-                      <LinearCopyButton
-                        className="btn btn-ghost"
-                        style={{
-                          fontSize: "11px",
-                          padding: "4px 8px",
-                          whiteSpace: "nowrap",
-                        }}
-                        textToCopy={callbackUrl}
-                        label="Copy"
-                        copiedLabel="Copied"
-                      />
+                        {oauthSaving[providerType]
+                          ? t("common.loading")
+                          : t("common.save", "Save")}
+                      </button>
+                      {provider?.id && (
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            color: "var(--text-tertiary)",
+                          }}
+                        >
+                          {provider.is_active
+                            ? "Enabled on login page"
+                            : "Saved but disabled"}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                    }}
-                  >
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => saveOauthProvider(providerType)}
-                      disabled={!!oauthSaving[providerType]}
-                    >
-                      {oauthSaving[providerType]
-                        ? t("common.loading")
-                        : t("common.save", "Save")}
-                    </button>
-                    {provider?.id && (
-                      <span
-                        style={{
-                          fontSize: "11px",
-                          color: "var(--text-tertiary)",
-                        }}
-                      >
-                        {provider.is_active
-                          ? "Enabled on login page"
-                          : "Saved but disabled"}
-                      </span>
-                    )}
-                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* Notification Bar */}
-      <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>
-            <div
-              style={{
-                fontSize: "13px",
-                fontWeight: 600,
-                color: "var(--text-secondary)",
-              }}
-            >
-              {t("enterprise.notificationBar.title", "Notification Bar")}
-            </div>
-            <div
-              style={{
-                fontSize: "11px",
-                color: "var(--text-tertiary)",
-                marginTop: "2px",
-              }}
-            >
-              {t(
-                "enterprise.notificationBar.description",
-                "Display a notification bar at the top of the page, visible to all users.",
-              )}
-            </div>
-          </div>
-          <label style={switchStyle(nbEnabled, nbSaving)}>
-            <input
-              type="checkbox"
-              checked={nbEnabled}
-              onChange={(e) => handleNotificationBarToggle(e.target.checked)}
-              disabled={nbSaving}
-              style={{ opacity: 0, width: 0, height: 0 }}
-            />
-            <span style={switchTrack(nbEnabled)}>
-              <span style={switchThumb(nbEnabled)} />
-            </span>
-          </label>
-        </div>
-        <div
-          style={{
-            maxHeight: nbEnabled ? "200px" : "0",
-            opacity: nbEnabled ? 1 : 0,
-            overflow: "hidden",
-            transition: "max-height 0.3s ease, opacity 0.25s ease",
-          }}
-        >
-          <div style={{ marginBottom: "12px", paddingTop: "16px" }}>
-            <label className="form-label">
-              {t("enterprise.notificationBar.text", "Notification text")}
-            </label>
-            <input
-              className="form-input"
-              value={nbText}
-              onChange={(e) => setNbText(e.target.value)}
-              placeholder={t(
-                "enterprise.notificationBar.textPlaceholder",
-                "e.g. v2.1 released with new features!",
-              )}
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <button
-              className="btn btn-primary"
-              onClick={() => saveNotificationBar()}
-              disabled={nbSaving}
-            >
-              {nbSaving ? t("common.loading") : t("common.save", "Save")}
-            </button>
-            {nbSaved && (
-              <span style={{ color: "var(--success)", fontSize: "12px" }}>
-                {t("enterprise.config.saved", "Saved")}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* System Email Configuration */}
-      <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "16px",
-            alignItems: "flex-start",
-            marginBottom: "4px",
-          }}
-        >
-          <div>
-            <div
-              style={{
-                fontSize: "13px",
-                fontWeight: 600,
-                color: "var(--text-secondary)",
-              }}
-            >
-              {t("enterprise.systemEmail.title", "System Email Configuration")}
-            </div>
-            <p
-              style={{
-                fontSize: "12px",
-                color: "var(--text-tertiary)",
-                margin: "4px 0 0",
-              }}
-            >
-              {t(
-                "enterprise.systemEmail.description",
-                "Configure SMTP settings for sending system emails such as password resets and notifications.",
-              )}
-            </p>
-          </div>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              cursor: "pointer",
-              paddingTop: "2px",
-              flexShrink: 0,
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={systemEmailConfig.SYSTEM_EMAIL_ENABLED}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_EMAIL_ENABLED: e.target.checked,
-                })
-              }
-              style={{ width: "16px", height: "16px" }}
-            />
-            <span
-              style={{
-                fontSize: "13px",
-                fontWeight: 500,
-                color: "var(--text-primary)",
-              }}
-            >
-              {t("enterprise.systemEmail.enabled", "Enable system email")}
-            </span>
-          </label>
-        </div>
-        <p
-          style={{
-            fontSize: "12px",
-            color: "var(--text-tertiary)",
-            marginBottom: "16px",
-          }}
-        >
-          {systemEmailConfig.SYSTEM_EMAIL_ENABLED
-            ? t(
-                "enterprise.systemEmail.enabledHint",
-                "System emails are enabled. New email/password registrations will require email verification.",
-              )
-            : t(
-                "enterprise.systemEmail.disabledHint",
-                "System emails are disabled. SMTP settings can be saved and tested, but registration email verification will be skipped.",
-              )}
-        </p>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "16px",
-          }}
-        >
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t("enterprise.systemEmail.fromAddress", "From Email Address")}
-            </label>
-            <input
-              className="form-input"
-              value={systemEmailConfig.SYSTEM_EMAIL_FROM_ADDRESS}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_EMAIL_FROM_ADDRESS: e.target.value,
-                })
-              }
-              placeholder="noreply@yourcompany.com"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t("enterprise.systemEmail.fromName", "From Name")}
-            </label>
-            <input
-              className="form-input"
-              value={systemEmailConfig.SYSTEM_EMAIL_FROM_NAME}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_EMAIL_FROM_NAME: e.target.value,
-                })
-              }
-              placeholder="Clawith"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t("enterprise.systemEmail.smtpHost", "SMTP Host")}
-            </label>
-            <input
-              className="form-input"
-              value={systemEmailConfig.SYSTEM_SMTP_HOST}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_SMTP_HOST: e.target.value,
-                })
-              }
-              placeholder="smtp.gmail.com"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t("enterprise.systemEmail.smtpPort", "SMTP Port")}
-            </label>
-            <input
-              className="form-input"
-              type="number"
-              value={systemEmailConfig.SYSTEM_SMTP_PORT}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_SMTP_PORT: parseInt(e.target.value) || 465,
-                })
-              }
-              placeholder="465"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t("enterprise.systemEmail.username", "SMTP Username")}
-            </label>
-            <input
-              className="form-input"
-              value={systemEmailConfig.SYSTEM_SMTP_USERNAME}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_SMTP_USERNAME: e.target.value,
-                })
-              }
-              placeholder="your-email@gmail.com"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t(
-                "enterprise.systemEmail.password",
-                "SMTP Password / App Password",
-              )}
-            </label>
-            <input
-              className="form-input"
-              type="password"
-              value={systemEmailConfig.SYSTEM_SMTP_PASSWORD}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_SMTP_PASSWORD: e.target.value,
-                })
-              }
-              placeholder="••••••••"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
-          <div>
-            <label
-              className="form-label"
-              style={{ fontSize: "12px", marginBottom: "6px" }}
-            >
-              {t("enterprise.systemEmail.timeout", "Timeout (seconds)")}
-            </label>
-            <input
-              className="form-input"
-              type="number"
-              value={systemEmailConfig.SYSTEM_SMTP_TIMEOUT_SECONDS}
-              onChange={(e) =>
-                setSystemEmailConfig({
-                  ...systemEmailConfig,
-                  SYSTEM_SMTP_TIMEOUT_SECONDS: parseInt(e.target.value) || 15,
-                })
-              }
-              placeholder="15"
-              style={{ fontSize: "13px" }}
-            />
-          </div>
+        {/* Notification Bar */}
+        <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
           <div
             style={{
               display: "flex",
               alignItems: "center",
-              paddingTop: "24px",
+              justifyContent: "space-between",
             }}
           >
+            <div>
+              <div
+                style={{
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                {t("enterprise.notificationBar.title", "Notification Bar")}
+              </div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "var(--text-tertiary)",
+                  marginTop: "2px",
+                }}
+              >
+                {t(
+                  "enterprise.notificationBar.description",
+                  "Display a notification bar at the top of the page, visible to all users.",
+                )}
+              </div>
+            </div>
+            <label style={switchStyle(nbEnabled, nbSaving)}>
+              <input
+                type="checkbox"
+                checked={nbEnabled}
+                onChange={(e) => handleNotificationBarToggle(e.target.checked)}
+                disabled={nbSaving}
+                style={{ opacity: 0, width: 0, height: 0 }}
+              />
+              <span style={switchTrack(nbEnabled)}>
+                <span style={switchThumb(nbEnabled)} />
+              </span>
+            </label>
+          </div>
+          <div
+            style={{
+              maxHeight: nbEnabled ? "200px" : "0",
+              opacity: nbEnabled ? 1 : 0,
+              overflow: "hidden",
+              transition: "max-height 0.3s ease, opacity 0.25s ease",
+            }}
+          >
+            <div style={{ marginBottom: "12px", paddingTop: "16px" }}>
+              <label className="form-label">
+                {t("enterprise.notificationBar.text", "Notification text")}
+              </label>
+              <input
+                className="form-input"
+                value={nbText}
+                onChange={(e) => setNbText(e.target.value)}
+                placeholder={t(
+                  "enterprise.notificationBar.textPlaceholder",
+                  "e.g. v2.1 released with new features!",
+                )}
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => saveNotificationBar()}
+                disabled={nbSaving}
+              >
+                {nbSaving ? t("common.loading") : t("common.save", "Save")}
+              </button>
+              {nbSaved && (
+                <span style={{ color: "var(--success)", fontSize: "12px" }}>
+                  {t("enterprise.config.saved", "Saved")}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* System Email Configuration */}
+        <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "16px",
+              alignItems: "flex-start",
+              marginBottom: "4px",
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                {t(
+                  "enterprise.systemEmail.title",
+                  "System Email Configuration",
+                )}
+              </div>
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "var(--text-tertiary)",
+                  margin: "4px 0 0",
+                }}
+              >
+                {t(
+                  "enterprise.systemEmail.description",
+                  "Configure SMTP settings for sending system emails such as password resets and notifications.",
+                )}
+              </p>
+            </div>
             <label
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: "8px",
                 cursor: "pointer",
+                paddingTop: "2px",
+                flexShrink: 0,
               }}
             >
               <input
                 type="checkbox"
-                checked={systemEmailConfig.SYSTEM_SMTP_SSL}
+                checked={systemEmailConfig.SYSTEM_EMAIL_ENABLED}
                 onChange={(e) =>
                   setSystemEmailConfig({
                     ...systemEmailConfig,
-                    SYSTEM_SMTP_SSL: e.target.checked,
+                    SYSTEM_EMAIL_ENABLED: e.target.checked,
                   })
                 }
                 style={{ width: "16px", height: "16px" }}
               />
-              <span style={{ fontSize: "13px" }}>
-                {t("enterprise.systemEmail.useSsl", "Use SSL/TLS")}
+              <span
+                style={{
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  color: "var(--text-primary)",
+                }}
+              >
+                {t("enterprise.systemEmail.enabled", "Enable system email")}
               </span>
             </label>
           </div>
-        </div>
-        <div
-          style={{
-            marginTop: "16px",
-            display: "flex",
-            gap: "8px",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <button
-            className="btn btn-primary"
-            onClick={saveEmailConfig}
-            disabled={emailConfigSaving}
-          >
-            {emailConfigSaving ? t("common.loading") : t("common.save", "Save")}
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              setShowTestEmail(!showTestEmail);
-              setTestEmailResult(null);
+          <p
+            style={{
+              fontSize: "12px",
+              color: "var(--text-tertiary)",
+              marginBottom: "16px",
             }}
           >
-            {t("enterprise.systemEmail.sendTest", "Send Test Email")}
-          </button>
-          {emailConfigSaved && (
-            <span style={{ color: "var(--success)", fontSize: "12px" }}>
-              {t("common.saved", "Saved")}
-            </span>
-          )}
-        </div>
+            {systemEmailConfig.SYSTEM_EMAIL_ENABLED
+              ? t(
+                  "enterprise.systemEmail.enabledHint",
+                  "System emails are enabled. New email/password registrations will require email verification.",
+                )
+              : t(
+                  "enterprise.systemEmail.disabledHint",
+                  "System emails are disabled. SMTP settings can be saved and tested, but registration email verification will be skipped.",
+                )}
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "16px",
+            }}
+          >
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t("enterprise.systemEmail.fromAddress", "From Email Address")}
+              </label>
+              <input
+                className="form-input"
+                value={systemEmailConfig.SYSTEM_EMAIL_FROM_ADDRESS}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_EMAIL_FROM_ADDRESS: e.target.value,
+                  })
+                }
+                placeholder="noreply@yourcompany.com"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t("enterprise.systemEmail.fromName", "From Name")}
+              </label>
+              <input
+                className="form-input"
+                value={systemEmailConfig.SYSTEM_EMAIL_FROM_NAME}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_EMAIL_FROM_NAME: e.target.value,
+                  })
+                }
+                placeholder="Clawith"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t("enterprise.systemEmail.smtpHost", "SMTP Host")}
+              </label>
+              <input
+                className="form-input"
+                value={systemEmailConfig.SYSTEM_SMTP_HOST}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_SMTP_HOST: e.target.value,
+                  })
+                }
+                placeholder="smtp.gmail.com"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t("enterprise.systemEmail.smtpPort", "SMTP Port")}
+              </label>
+              <input
+                className="form-input"
+                type="number"
+                value={systemEmailConfig.SYSTEM_SMTP_PORT}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_SMTP_PORT: parseInt(e.target.value) || 465,
+                  })
+                }
+                placeholder="465"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t("enterprise.systemEmail.username", "SMTP Username")}
+              </label>
+              <input
+                className="form-input"
+                value={systemEmailConfig.SYSTEM_SMTP_USERNAME}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_SMTP_USERNAME: e.target.value,
+                  })
+                }
+                placeholder="your-email@gmail.com"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t(
+                  "enterprise.systemEmail.password",
+                  "SMTP Password / App Password",
+                )}
+              </label>
+              <input
+                className="form-input"
+                type="password"
+                value={systemEmailConfig.SYSTEM_SMTP_PASSWORD}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_SMTP_PASSWORD: e.target.value,
+                  })
+                }
+                placeholder="••••••••"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div>
+              <label
+                className="form-label"
+                style={{ fontSize: "12px", marginBottom: "6px" }}
+              >
+                {t("enterprise.systemEmail.timeout", "Timeout (seconds)")}
+              </label>
+              <input
+                className="form-input"
+                type="number"
+                value={systemEmailConfig.SYSTEM_SMTP_TIMEOUT_SECONDS}
+                onChange={(e) =>
+                  setSystemEmailConfig({
+                    ...systemEmailConfig,
+                    SYSTEM_SMTP_TIMEOUT_SECONDS: parseInt(e.target.value) || 15,
+                  })
+                }
+                placeholder="15"
+                style={{ fontSize: "13px" }}
+              />
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                paddingTop: "24px",
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={systemEmailConfig.SYSTEM_SMTP_SSL}
+                  onChange={(e) =>
+                    setSystemEmailConfig({
+                      ...systemEmailConfig,
+                      SYSTEM_SMTP_SSL: e.target.checked,
+                    })
+                  }
+                  style={{ width: "16px", height: "16px" }}
+                />
+                <span style={{ fontSize: "13px" }}>
+                  {t("enterprise.systemEmail.useSsl", "Use SSL/TLS")}
+                </span>
+              </label>
+            </div>
+          </div>
+          <div
+            style={{
+              marginTop: "16px",
+              display: "flex",
+              gap: "8px",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <button
+              className="btn btn-primary"
+              onClick={saveEmailConfig}
+              disabled={emailConfigSaving}
+            >
+              {emailConfigSaving
+                ? t("common.loading")
+                : t("common.save", "Save")}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                setShowTestEmail(!showTestEmail);
+                setTestEmailResult(null);
+              }}
+            >
+              {t("enterprise.systemEmail.sendTest", "Send Test Email")}
+            </button>
+            {emailConfigSaved && (
+              <span style={{ color: "var(--success)", fontSize: "12px" }}>
+                {t("common.saved", "Saved")}
+              </span>
+            )}
+          </div>
 
-        {/* Test email inline form */}
-        {showTestEmail && (
+          {/* Test email inline form */}
+          {showTestEmail && (
+            <div
+              style={{
+                marginTop: "12px",
+                padding: "12px 16px",
+                background: "var(--bg-secondary)",
+                borderRadius: "8px",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div
+                style={{ display: "flex", gap: "8px", alignItems: "center" }}
+              >
+                <input
+                  className="form-input"
+                  type="email"
+                  placeholder={t(
+                    "enterprise.systemEmail.testPlaceholder",
+                    "Enter recipient email...",
+                  )}
+                  value={testEmailAddr}
+                  onChange={(e) => setTestEmailAddr(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSendTestEmail()}
+                  style={{ flex: 1, fontSize: "13px" }}
+                />
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleSendTestEmail}
+                  disabled={testEmailSending || !testEmailAddr.trim()}
+                >
+                  {testEmailSending
+                    ? t("common.loading", "Sending...")
+                    : t("enterprise.systemEmail.send", "Send")}
+                </button>
+              </div>
+              {testEmailResult && (
+                <div
+                  style={{
+                    marginTop: "8px",
+                    fontSize: "12px",
+                    color: testEmailResult.ok
+                      ? "var(--success)"
+                      : "var(--error)",
+                  }}
+                >
+                  {testEmailResult.msg}
+                </div>
+              )}
+            </div>
+          )}
+
           <div
             style={{
               marginTop: "12px",
-              padding: "12px 16px",
-              background: "var(--bg-secondary)",
-              borderRadius: "8px",
-              border: "1px solid var(--border-subtle)",
+              fontSize: "11px",
+              color: "var(--text-tertiary)",
             }}
           >
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-              <input
-                className="form-input"
-                type="email"
-                placeholder={t(
-                  "enterprise.systemEmail.testPlaceholder",
-                  "Enter recipient email...",
-                )}
-                value={testEmailAddr}
-                onChange={(e) => setTestEmailAddr(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSendTestEmail()}
-                style={{ flex: 1, fontSize: "13px" }}
-              />
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleSendTestEmail}
-                disabled={testEmailSending || !testEmailAddr.trim()}
-              >
-                {testEmailSending
-                  ? t("common.loading", "Sending...")
-                  : t("enterprise.systemEmail.send", "Send")}
-              </button>
-            </div>
-            {testEmailResult && (
-              <div
-                style={{
-                  marginTop: "8px",
-                  fontSize: "12px",
-                  color: testEmailResult.ok ? "var(--success)" : "var(--error)",
-                }}
-              >
-                {testEmailResult.msg}
-              </div>
+            {t(
+              "enterprise.systemEmail.hint",
+              "For Gmail, use an App Password. For QQ/163 mail, use the SMTP authorization code.",
             )}
           </div>
-        )}
-
-        <div
-          style={{
-            marginTop: "12px",
-            fontSize: "11px",
-            color: "var(--text-tertiary)",
-          }}
-        >
-          {t(
-            "enterprise.systemEmail.hint",
-            "For Gmail, use an App Password. For QQ/163 mail, use the SMTP authorization code.",
-          )}
         </div>
-      </div>
 
-      {/* Email Templates Configuration */}
-      <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
-        <div
-          style={{
-            fontSize: "13px",
-            fontWeight: 600,
-            marginBottom: "4px",
-            color: "var(--text-secondary)",
-          }}
-        >
-          {t("enterprise.emailTemplates.title", "Email Templates")}
-        </div>
-        <p
-          style={{
-            fontSize: "12px",
-            color: "var(--text-tertiary)",
-            marginBottom: "16px",
-          }}
-        >
-          {t(
-            "enterprise.emailTemplates.description",
-            "Customize email content for each scenario. Use {{variable}} placeholders to insert dynamic data.",
-          )}
-        </p>
+        {/* Email Templates Configuration */}
+        <div className="card" style={{ padding: "16px", marginBottom: "16px" }}>
+          <div
+            style={{
+              fontSize: "13px",
+              fontWeight: 600,
+              marginBottom: "4px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {t("enterprise.emailTemplates.title", "Email Templates")}
+          </div>
+          <p
+            style={{
+              fontSize: "12px",
+              color: "var(--text-tertiary)",
+              marginBottom: "16px",
+            }}
+          >
+            {t(
+              "enterprise.emailTemplates.description",
+              "Customize email content for each scenario. Use {{variable}} placeholders to insert dynamic data.",
+            )}
+          </p>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-          {(
-            [
-              {
-                key: "email_verification",
-                label: t(
-                  "enterprise.emailTemplates.emailVerification",
-                  "Email Verification Code",
-                ),
-                desc: t(
-                  "enterprise.emailTemplates.emailVerificationDesc",
-                  "Sent when a user registers and needs to verify their email address.",
-                ),
-              },
-              {
-                key: "password_reset",
-                label: t(
-                  "enterprise.emailTemplates.passwordReset",
-                  "Password Reset",
-                ),
-                desc: t(
-                  "enterprise.emailTemplates.passwordResetDesc",
-                  "Sent when a user requests to reset their password.",
-                ),
-              },
-              {
-                key: "company_invitation",
-                label: t(
-                  "enterprise.emailTemplates.companyInvitation",
-                  "Company Invitation",
-                ),
-                desc: t(
-                  "enterprise.emailTemplates.companyInvitationDesc",
-                  "Sent when an admin invites a user to join their company.",
-                ),
-              },
-            ] as const
-          ).map((scenario) => {
-            const isExpanded = expandedTemplate === scenario.key;
-            const template = emailTemplates[scenario.key] || {
-              subject: "",
-              body: "",
-            };
-            const vars = emailTemplateVars[scenario.key] || [];
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {(
+              [
+                {
+                  key: "email_verification",
+                  label: t(
+                    "enterprise.emailTemplates.emailVerification",
+                    "Email Verification Code",
+                  ),
+                  desc: t(
+                    "enterprise.emailTemplates.emailVerificationDesc",
+                    "Sent when a user registers and needs to verify their email address.",
+                  ),
+                },
+                {
+                  key: "password_reset",
+                  label: t(
+                    "enterprise.emailTemplates.passwordReset",
+                    "Password Reset",
+                  ),
+                  desc: t(
+                    "enterprise.emailTemplates.passwordResetDesc",
+                    "Sent when a user requests to reset their password.",
+                  ),
+                },
+                {
+                  key: "company_invitation",
+                  label: t(
+                    "enterprise.emailTemplates.companyInvitation",
+                    "Company Invitation",
+                  ),
+                  desc: t(
+                    "enterprise.emailTemplates.companyInvitationDesc",
+                    "Sent when an admin invites a user to join their company.",
+                  ),
+                },
+              ] as const
+            ).map((scenario) => {
+              const isExpanded = expandedTemplate === scenario.key;
+              const template = emailTemplates[scenario.key] || {
+                subject: "",
+                body: "",
+              };
+              const vars = emailTemplateVars[scenario.key] || [];
 
-            return (
-              <div
-                key={scenario.key}
-                style={{
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "8px",
-                  overflow: "hidden",
-                  marginBottom: "8px",
-                }}
-              >
-                {/* Scenario header */}
+              return (
                 <div
+                  key={scenario.key}
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "12px 16px",
-                    cursor: "pointer",
-                    background: isExpanded
-                      ? "var(--bg-secondary)"
-                      : "transparent",
-                    transition: "background 0.15s",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "8px",
+                    overflow: "hidden",
+                    marginBottom: "8px",
                   }}
-                  onClick={() =>
-                    setExpandedTemplate(isExpanded ? null : scenario.key)
-                  }
                 >
-                  <div>
-                    <div style={{ fontWeight: 500, fontSize: "13px" }}>
-                      {scenario.label}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "11px",
-                        color: "var(--text-tertiary)",
-                        marginTop: "2px",
-                      }}
-                    >
-                      {scenario.desc}
-                    </div>
-                  </div>
+                  {/* Scenario header */}
                   <div
                     style={{
-                      color: "var(--text-tertiary)",
-                      transform: isExpanded ? "rotate(180deg)" : "none",
-                      transition: "transform 0.2s",
-                      fontSize: "12px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "12px 16px",
+                      cursor: "pointer",
+                      background: isExpanded
+                        ? "var(--bg-secondary)"
+                        : "transparent",
+                      transition: "background 0.15s",
                     }}
+                    onClick={() =>
+                      setExpandedTemplate(isExpanded ? null : scenario.key)
+                    }
                   >
-                    ▼
-                  </div>
-                </div>
-
-                {/* Expanded editor */}
-                {isExpanded && (
-                  <div
-                    style={{
-                      padding: "16px",
-                      background: "var(--bg-secondary)",
-                      borderTop: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    {/* Available variables */}
-                    <div style={{ marginBottom: "12px" }}>
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: "13px" }}>
+                        {scenario.label}
+                      </div>
                       <div
                         style={{
                           fontSize: "11px",
-                          fontWeight: 600,
                           color: "var(--text-tertiary)",
-                          marginBottom: "6px",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
+                          marginTop: "2px",
                         }}
                       >
-                        {t(
-                          "enterprise.emailTemplates.availableVars",
-                          "Available Variables",
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "6px",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        {vars.map((v) => (
-                          <span
-                            key={v}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "4px",
-                              padding: "3px 8px",
-                              borderRadius: "4px",
-                              background:
-                                "rgba(var(--accent-rgb, 99,102,241), 0.1)",
-                              color: "var(--accent-primary)",
-                              fontSize: "11px",
-                              fontFamily: "var(--font-mono)",
-                              cursor: "default",
-                            }}
-                            title={t(
-                              "enterprise.emailTemplates.clickToInsert",
-                              "Click to copy variable",
-                            )}
-                          >
-                            {`{{${v}}}`}
-                          </span>
-                        ))}
+                        {scenario.desc}
                       </div>
                     </div>
-
-                    {/* Subject */}
-                    <div style={{ marginBottom: "12px" }}>
-                      <label
-                        className="form-label"
-                        style={{ fontSize: "12px", marginBottom: "4px" }}
-                      >
-                        {t("enterprise.emailTemplates.subject", "Subject")}
-                      </label>
-                      <input
-                        className="form-input"
-                        value={template.subject}
-                        onChange={(e) =>
-                          setEmailTemplates((prev) => ({
-                            ...prev,
-                            [scenario.key]: {
-                              ...prev[scenario.key],
-                              subject: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{ fontSize: "13px" }}
-                      />
-                    </div>
-
-                    {/* Body */}
-                    <div style={{ marginBottom: "12px" }}>
-                      <label
-                        className="form-label"
-                        style={{ fontSize: "12px", marginBottom: "4px" }}
-                      >
-                        {t("enterprise.emailTemplates.body", "Body")}
-                      </label>
-                      <textarea
-                        className="form-input"
-                        rows={8}
-                        value={template.body}
-                        onChange={(e) =>
-                          setEmailTemplates((prev) => ({
-                            ...prev,
-                            [scenario.key]: {
-                              ...prev[scenario.key],
-                              body: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{
-                          fontSize: "13px",
-                          fontFamily: "var(--font-mono)",
-                          resize: "vertical",
-                          lineHeight: 1.6,
-                          minHeight: "200px",
-                          height: "auto",
-                        }}
-                      />
-                    </div>
-
-                    {/* Reset to default */}
                     <div
-                      style={{ display: "flex", justifyContent: "flex-end" }}
+                      style={{
+                        color: "var(--text-tertiary)",
+                        transform: isExpanded ? "rotate(180deg)" : "none",
+                        transition: "transform 0.2s",
+                        fontSize: "12px",
+                      }}
                     >
-                      <button
-                        className="btn btn-ghost"
-                        style={{
-                          fontSize: "12px",
-                          color: "var(--text-tertiary)",
-                        }}
-                        onClick={() => resetTemplate(scenario.key)}
-                      >
-                        {t(
-                          "enterprise.emailTemplates.resetDefault",
-                          "Reset to Default",
-                        )}
-                      </button>
+                      ▼
                     </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
 
-        <div
-          style={{
-            marginTop: "12px",
-            display: "flex",
-            gap: "8px",
-            alignItems: "center",
-          }}
-        >
-          <button
-            className="btn btn-primary"
-            onClick={saveEmailTemplates}
-            disabled={templatesSaving}
+                  {/* Expanded editor */}
+                  {isExpanded && (
+                    <div
+                      style={{
+                        padding: "16px",
+                        background: "var(--bg-secondary)",
+                        borderTop: "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      {/* Available variables */}
+                      <div style={{ marginBottom: "12px" }}>
+                        <div
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            color: "var(--text-tertiary)",
+                            marginBottom: "6px",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          {t(
+                            "enterprise.emailTemplates.availableVars",
+                            "Available Variables",
+                          )}
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "6px",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          {vars.map((v) => (
+                            <span
+                              key={v}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                padding: "3px 8px",
+                                borderRadius: "4px",
+                                background:
+                                  "rgba(var(--accent-rgb, 99,102,241), 0.1)",
+                                color: "var(--accent-primary)",
+                                fontSize: "11px",
+                                fontFamily: "var(--font-mono)",
+                                cursor: "default",
+                              }}
+                              title={t(
+                                "enterprise.emailTemplates.clickToInsert",
+                                "Click to copy variable",
+                              )}
+                            >
+                              {`{{${v}}}`}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Subject */}
+                      <div style={{ marginBottom: "12px" }}>
+                        <label
+                          className="form-label"
+                          style={{ fontSize: "12px", marginBottom: "4px" }}
+                        >
+                          {t("enterprise.emailTemplates.subject", "Subject")}
+                        </label>
+                        <input
+                          className="form-input"
+                          value={template.subject}
+                          onChange={(e) =>
+                            setEmailTemplates((prev) => ({
+                              ...prev,
+                              [scenario.key]: {
+                                ...prev[scenario.key],
+                                subject: e.target.value,
+                              },
+                            }))
+                          }
+                          style={{ fontSize: "13px" }}
+                        />
+                      </div>
+
+                      {/* Body */}
+                      <div style={{ marginBottom: "12px" }}>
+                        <label
+                          className="form-label"
+                          style={{ fontSize: "12px", marginBottom: "4px" }}
+                        >
+                          {t("enterprise.emailTemplates.body", "Body")}
+                        </label>
+                        <textarea
+                          className="form-input"
+                          rows={8}
+                          value={template.body}
+                          onChange={(e) =>
+                            setEmailTemplates((prev) => ({
+                              ...prev,
+                              [scenario.key]: {
+                                ...prev[scenario.key],
+                                body: e.target.value,
+                              },
+                            }))
+                          }
+                          style={{
+                            fontSize: "13px",
+                            fontFamily: "var(--font-mono)",
+                            resize: "vertical",
+                            lineHeight: 1.6,
+                            minHeight: "200px",
+                            height: "auto",
+                          }}
+                        />
+                      </div>
+
+                      {/* Reset to default */}
+                      <div
+                        style={{ display: "flex", justifyContent: "flex-end" }}
+                      >
+                        <button
+                          className="btn btn-ghost"
+                          style={{
+                            fontSize: "12px",
+                            color: "var(--text-tertiary)",
+                          }}
+                          onClick={() => resetTemplate(scenario.key)}
+                        >
+                          {t(
+                            "enterprise.emailTemplates.resetDefault",
+                            "Reset to Default",
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div
+            style={{
+              marginTop: "12px",
+              display: "flex",
+              gap: "8px",
+              alignItems: "center",
+            }}
           >
-            {templatesSaving
-              ? t("common.loading")
-              : t("enterprise.emailTemplates.saveTemplates", "Save Templates")}
-          </button>
-          {templatesSaved && (
-            <span style={{ color: "var(--success)", fontSize: "12px" }}>
-              {t("common.saved", "Saved")}
-            </span>
-          )}
+            <button
+              className="btn btn-primary"
+              onClick={saveEmailTemplates}
+              disabled={templatesSaving}
+            >
+              {templatesSaving
+                ? t("common.loading")
+                : t(
+                    "enterprise.emailTemplates.saveTemplates",
+                    "Save Templates",
+                  )}
+            </button>
+            {templatesSaved && (
+              <span style={{ color: "var(--success)", fontSize: "12px" }}>
+                {t("common.saved", "Saved")}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      </fieldset>
     </>
   );
 }
