@@ -20,117 +20,25 @@ import { IconAlertTriangle } from "@tabler/icons-react";
 import { fetchJson } from "../services/api";
 import { useAuthStore } from "../stores";
 import { useDialog } from "../components/Dialog/DialogContext";
+import {
+  parseCompanyReportResponse,
+  parseCompanyReports,
+  parseMemberDailyReports,
+  parseMembersWithoutOKR,
+  parseObjectives,
+  parseOKRSettings,
+  parseOutreachResult,
+  parsePeriods,
+  type CompanyReport,
+  type KeyResult,
+  type MemberDailyReportItem,
+  type MembersWithoutOKRData,
+  type Objective,
+  type OKRSettings,
+  type Period,
+} from "./okrResponse";
 
 // ─── Type Definitions ────────────────────────────────────────────────────────
-
-interface OKRSettings {
-  enabled: boolean;
-  first_enabled_at?: string | null;
-  daily_report_enabled: boolean;
-  daily_report_time: string;
-  daily_report_skip_non_workdays?: boolean;
-  weekly_report_enabled: boolean;
-  weekly_report_day: number;
-  period_frequency: string;
-  period_length_days?: number;
-  period_frequency_locked?: boolean;
-}
-
-interface KeyResult {
-  id: string;
-  objective_id: string;
-  title: string;
-  target_value: number;
-  current_value: number;
-  unit?: string;
-  focus_ref?: string;
-  status: string; // on_track | at_risk | behind | completed
-  last_updated_at: string;
-  created_at: string;
-}
-
-interface Objective {
-  id: string;
-  title: string;
-  description?: string;
-  owner_type: string; // company | user | agent
-  owner_id?: string;
-  owner_name?: string; // resolved display name (agent name or user display_name)
-  period_start: string;
-  period_end: string;
-  status: string;
-  created_at: string;
-  key_results: KeyResult[];
-}
-
-interface Period {
-  start: string;
-  end: string;
-  label: string;
-  is_current: boolean;
-}
-
-interface CompanyReport {
-  id: string;
-  report_type: "daily" | "weekly" | "monthly";
-  period_start: string;
-  period_end: string;
-  period_label: string;
-  content: string;
-  submitted_count: number;
-  missing_count: number;
-  needs_refresh: boolean;
-  generated_at: string;
-  updated_at: string;
-}
-
-interface MemberDailyReportItem {
-  id: string;
-  member_type: "user" | "agent";
-  member_id: string;
-  display_name: string;
-  avatar_url?: string | null;
-  group_label: string;
-  report_date: string;
-  content: string;
-  status: string;
-  submitted_at?: string | null;
-  updated_at?: string | null;
-}
-
-interface MemberWithoutOKR {
-  id: string;
-  type: "user" | "agent";
-  display_name: string;
-  avatar_url: string;
-  channel: string | null;
-  channel_user_id: string | null;
-  source_label?: string | null;
-}
-
-interface ChannelWarning {
-  channel_type: string;
-  channel_display: string;
-  affected_members: string[];
-  count: number;
-}
-
-interface MembersWithoutOKRData {
-  period_start: string;
-  period_end: string;
-  company_okr_exists: boolean;
-  okr_agent_id: string | null;
-  members_without_okr: MemberWithoutOKR[];
-  tracked_user_ids: string[];
-  tracked_agent_ids: string[];
-  total: number;
-  last_outreach_error?: {
-    message: string;
-    timestamp: string;
-    is_read: boolean;
-  } | null;
-  channel_warnings?: ChannelWarning[];
-}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1263,7 +1171,8 @@ export default function OKR() {
   // Fetch OKR settings — always fresh on mount so toggling the switch is reflected immediately
   const { data: settings, isLoading: settingsLoading } = useQuery<OKRSettings>({
     queryKey: ["okr-settings"],
-    queryFn: () => fetchJson<OKRSettings>("/okr/settings"),
+    queryFn: async () =>
+      parseOKRSettings(await fetchJson<unknown>("/okr/settings")),
     staleTime: 0,
     refetchOnWindowFocus: true,
   });
@@ -1274,7 +1183,7 @@ export default function OKR() {
   // Fetch periods (only when enabled)
   const { data: periods = [] } = useQuery<Period[]>({
     queryKey: ["okr-periods"],
-    queryFn: () => fetchJson<Period[]>("/okr/periods"),
+    queryFn: async () => parsePeriods(await fetchJson<unknown>("/okr/periods")),
     enabled: !!settings?.enabled,
   });
 
@@ -1313,9 +1222,11 @@ export default function OKR() {
     Objective[]
   >({
     queryKey: ["okr-objectives", selectedPeriod?.start, selectedPeriod?.end],
-    queryFn: () =>
-      fetchJson<Objective[]>(
-        `/okr/objectives?period_start=${selectedPeriod!.start}&period_end=${selectedPeriod!.end}`,
+    queryFn: async () =>
+      parseObjectives(
+        await fetchJson<unknown>(
+          `/okr/objectives?period_start=${selectedPeriod!.start}&period_end=${selectedPeriod!.end}`,
+        ),
       ),
     enabled: !!settings?.enabled && !!selectedPeriod,
     staleTime: 0,
@@ -2036,7 +1947,10 @@ function MembersWithoutOKRPanel({
   // Always refetch on mount — list must be live after admin adds/removes OKR Agent relationships
   const { data, isLoading } = useQuery<MembersWithoutOKRData>({
     queryKey: ["okr-members-without-okr", periodStart, periodEnd],
-    queryFn: () => fetchJson<MembersWithoutOKRData>("/okr/members-without-okr"),
+    queryFn: async () =>
+      parseMembersWithoutOKR(
+        await fetchJson<unknown>("/okr/members-without-okr"),
+      ),
     staleTime: 0,
     refetchOnWindowFocus: true,
   });
@@ -2052,11 +1966,11 @@ function MembersWithoutOKRPanel({
     setNudging(true);
     setNudgeResult(null);
     try {
-      const result = await fetchJson<{
-        status: string;
-        message: string;
-        members_count: number;
-      }>("/okr/trigger-member-outreach", { method: "POST" });
+      const result = parseOutreachResult(
+        await fetchJson<unknown>("/okr/trigger-member-outreach", {
+          method: "POST",
+        }),
+      );
       setNudgeResult(result.message);
       queryClient.invalidateQueries({ queryKey: ["okr-members-without-okr"] });
 
@@ -2494,9 +2408,11 @@ function ReportsTab({ isChinese }: { isChinese: boolean }) {
     CompanyReport[]
   >({
     queryKey: ["company-reports", reportType],
-    queryFn: () =>
-      fetchJson<CompanyReport[]>(
-        `/okr/company-reports?report_type=${reportType}`,
+    queryFn: async () =>
+      parseCompanyReports(
+        await fetchJson<unknown>(
+          `/okr/company-reports?report_type=${reportType}`,
+        ),
       ),
     enabled: view === "company",
   });
@@ -2505,19 +2421,26 @@ function ReportsTab({ isChinese }: { isChinese: boolean }) {
     MemberDailyReportItem[]
   >({
     queryKey: ["member-daily-reports", selectedDate],
-    queryFn: () =>
-      fetchJson<MemberDailyReportItem[]>(
-        `/okr/member-daily-reports?report_date=${selectedDate}`,
+    queryFn: async () =>
+      parseMemberDailyReports(
+        await fetchJson<unknown>(
+          `/okr/member-daily-reports?report_date=${selectedDate}`,
+        ),
       ),
     enabled: view === "member",
   });
 
   const regenerateMutation = useMutation({
-    mutationFn: (payload: { report_type: string; period_start: string }) =>
-      fetchJson<CompanyReport>("/okr/company-reports/regenerate", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }),
+    mutationFn: async (payload: {
+      report_type: string;
+      period_start: string;
+    }) =>
+      parseCompanyReportResponse(
+        await fetchJson<unknown>("/okr/company-reports/regenerate", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["company-reports"] });
     },
