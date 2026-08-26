@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   parseStoredChannelConfig,
+  parseAtlassianTestResult,
+  parseWechatQr,
+  parseWechatQrStatus,
   parseWebhookConfig,
   readOptionalChannelResource,
 } from "../src/services/channelConfigResponse.ts";
-import { channelApi } from "../src/services/api.ts";
+import { channelApi, fetchVoid } from "../src/services/api.ts";
 
 const storage = new Map();
 globalThis.localStorage = {
@@ -15,6 +19,11 @@ globalThis.localStorage = {
   setItem: (key, value) => storage.set(key, value),
 };
 globalThis.window = { location: { href: "" } };
+
+const channelConfigSource = readFileSync(
+  new URL("../src/components/ChannelConfig.tsx", import.meta.url),
+  "utf8",
+);
 
 test("only an explicit 404 is treated as an unconfigured channel", async () => {
   assert.equal(
@@ -44,6 +53,9 @@ test("malformed successful channel responses remain errors", async () => {
     /channel configuration/i,
   );
   assert.throws(() => parseWebhookConfig({ webhook_url: 42 }), /webhook/i);
+  assert.throws(() => parseAtlassianTestResult({ ok: "yes" }), /Atlassian/i);
+  assert.throws(() => parseWechatQr({ qrcode: 1 }));
+  assert.throws(() => parseWechatQrStatus({ status: 1 }));
 });
 
 test("valid channel and webhook responses are parsed", () => {
@@ -86,4 +98,30 @@ test("channel service preserves status for the UI 404-only mapping", async () =>
       );
     }
   }
+});
+
+test("JSON and void transports share non-auth 401 logout behavior", async () => {
+  for (const load of [
+    () => channelApi.get("agent-1"),
+    () => fetchVoid("/agents/agent-1/channel", { method: "DELETE" }),
+  ]) {
+    storage.set("token", "expired");
+    storage.set("user", "cached");
+    globalThis.window.location.href = "";
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ detail: "Expired" }), { status: 401 });
+
+    await assert.rejects(load, (error) => error?.status === 401);
+    assert.equal(storage.has("token"), false);
+    assert.equal(storage.has("user"), false);
+    assert.equal(globalThis.window.location.href, "/login");
+  }
+});
+
+test("ChannelConfig never types raw JSON before parsing", () => {
+  assert.doesNotMatch(channelConfigSource, /fetchAuth</);
+  assert.match(channelConfigSource, /parseAtlassianTestResult/);
+  assert.match(channelConfigSource, /parseWechatQr/);
+  assert.match(channelConfigSource, /parseWechatQrStatus/);
+  assert.match(channelConfigSource, /fetchAuthVoid/);
 });

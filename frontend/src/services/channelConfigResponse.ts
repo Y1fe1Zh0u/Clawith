@@ -19,6 +19,55 @@ export interface WebhookConfig {
   webhook_url: string;
 }
 
+export interface AtlassianTestResultResponse {
+  ok: boolean;
+  message?: string;
+  tool_count?: number;
+  error?: string;
+}
+
+export function parseAtlassianTestResult(
+  value: unknown,
+): AtlassianTestResultResponse {
+  if (!isRecord(value) || typeof value.ok !== "boolean")
+    throw new Error("Invalid Atlassian test response");
+  const message = optionalString(value, "message");
+  const error = optionalString(value, "error");
+  const toolCount = value.tool_count;
+  if (
+    toolCount !== undefined &&
+    (typeof toolCount !== "number" || !Number.isFinite(toolCount))
+  )
+    throw new Error("Invalid Atlassian tool count");
+  return {
+    ok: value.ok,
+    ...(message !== undefined ? { message } : {}),
+    ...(toolCount !== undefined ? { tool_count: toolCount } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
+}
+
+export function parseWechatQr(value: unknown): {
+  qrcode: string;
+  qrcode_img_content: string;
+} {
+  if (!isRecord(value)) throw new Error("Invalid WeChat QR response");
+  const qrcode = optionalString(value, "qrcode");
+  const imageContent = optionalString(value, "qrcode_img_content");
+  if (!qrcode || !imageContent) throw new Error("Invalid WeChat QR response");
+  return {
+    qrcode,
+    qrcode_img_content: imageContent,
+  };
+}
+
+export function parseWechatQrStatus(value: unknown): { status: string } {
+  if (!isRecord(value)) throw new Error("Invalid WeChat QR status response");
+  const status = optionalString(value, "status");
+  if (!status) throw new Error("Invalid WeChat QR status response");
+  return { status };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

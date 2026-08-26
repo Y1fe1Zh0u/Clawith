@@ -10,14 +10,17 @@ import { channelApi } from "../services/api";
 import type { ChannelConfigRequest } from "../services/apiContracts";
 import {
   parseStoredChannelConfig,
+  parseAtlassianTestResult,
+  parseWechatQr,
+  parseWechatQrStatus,
   parseWebhookConfig,
   readOptionalChannelResource,
+  type AtlassianTestResultResponse as AtlassianTestResult,
   type StoredChannelConfig,
   type WebhookConfig,
 } from "../services/channelConfigResponse";
 import LinearCopyButton from "./LinearCopyButton";
 // ─── Shared fetchAuth (same as AgentDetail) ─────────────
-function fetchAuth<T>(url: string, options?: RequestInit): Promise<T>;
 function fetchAuth(url: string, options?: RequestInit): Promise<unknown> {
   const token = localStorage.getItem("token");
   return fetch(`/api${url}`, {
@@ -36,6 +39,13 @@ function fetchAuth(url: string, options?: RequestInit): Promise<unknown> {
     const value: unknown = await r.json();
     return value;
   });
+}
+
+async function fetchAuthVoid(
+  url: string,
+  options?: RequestInit,
+): Promise<void> {
+  await fetchAuth(url, options);
 }
 
 // ─── Types ──────────────────────────────────────────────
@@ -91,20 +101,9 @@ interface ChannelDef {
   hasTestConnection?: boolean;
 }
 
-interface AtlassianTestResult {
-  ok: boolean;
-  message?: string;
-  tool_count?: number;
-  error?: string;
-}
-
 interface WechatQr {
   qrcode: string;
   qrcode_img_content: string;
-}
-
-interface WechatQrStatus {
-  status?: string;
 }
 
 const EMPTY_CHANNEL_CONFIG: StoredChannelConfig = {
@@ -594,12 +593,12 @@ export default function ChannelConfig({
   const activeAgentId = agentId ?? "";
   const readConfig = (slug: string) =>
     readOptionalChannelResource(
-      () => fetchAuth<unknown>(`/agents/${activeAgentId}/${slug}`),
+      () => fetchAuth(`/agents/${activeAgentId}/${slug}`),
       parseStoredChannelConfig,
     );
   const readWebhook = (slug: string) =>
     readOptionalChannelResource(
-      () => fetchAuth<unknown>(`/agents/${activeAgentId}/${slug}/webhook-url`),
+      () => fetchAuth(`/agents/${activeAgentId}/${slug}/webhook-url`),
       parseWebhookConfig,
     );
 
@@ -735,7 +734,7 @@ export default function ChannelConfig({
 
   // ─── Edit mode: mutations ───────────────────────────
   const saveMutation = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       ch,
       data,
     }: {
@@ -746,12 +745,13 @@ export default function ChannelConfig({
         if (!data.channel_type) {
           throw new Error("Channel type is required");
         }
-        return channelApi.create(activeAgentId, {
+        await channelApi.create(activeAgentId, {
           ...data,
           channel_type: data.channel_type,
         });
+        return;
       }
-      return fetchAuth(`/agents/${agentId}/${ch.apiSlug}`, {
+      await fetchAuthVoid(`/agents/${agentId}/${ch.apiSlug}`, {
         method: "POST",
         body: JSON.stringify(data),
       });
@@ -793,7 +793,7 @@ export default function ChannelConfig({
       if (ch.useChannelApi) {
         return channelApi.delete(activeAgentId);
       }
-      return fetchAuth(`/agents/${agentId}/${ch.apiSlug}`, {
+      return fetchAuthVoid(`/agents/${agentId}/${ch.apiSlug}`, {
         method: "DELETE",
       });
     },
@@ -829,9 +829,10 @@ export default function ChannelConfig({
     setAtlassianTesting(true);
     setAtlassianTestResult(null);
     try {
-      const res = await fetchAuth<AtlassianTestResult>(
-        `/agents/${agentId}/atlassian-channel/test`,
-        { method: "POST" },
+      const res = parseAtlassianTestResult(
+        await fetchAuth(`/agents/${agentId}/atlassian-channel/test`, {
+          method: "POST",
+        }),
       );
       setAtlassianTestResult(res);
     } catch (e) {
@@ -847,8 +848,10 @@ export default function ChannelConfig({
 
     const poll = async () => {
       try {
-        const result = await fetchAuth<WechatQrStatus>(
-          `/agents/${agentId}/wechat-channel/qrcode-status?qrcode=${encodeURIComponent(wechatQr.qrcode)}`,
+        const result = parseWechatQrStatus(
+          await fetchAuth(
+            `/agents/${agentId}/wechat-channel/qrcode-status?qrcode=${encodeURIComponent(wechatQr.qrcode)}`,
+          ),
         );
         if (cancelled) return;
         setWechatQrStatus(result.status || "");
@@ -976,12 +979,11 @@ export default function ChannelConfig({
     setWechatQrStatus("");
     setWechatQrImageSrc("");
     try {
-      const qr = await fetchAuth<WechatQr>(
-        `/agents/${agentId}/wechat-channel/qrcode`,
-        {
+      const qr = parseWechatQr(
+        await fetchAuth(`/agents/${agentId}/wechat-channel/qrcode`, {
           method: "POST",
           body: JSON.stringify({}),
-        },
+        }),
       );
       setWechatQr(qr);
       setWechatQrStatus("wait");
