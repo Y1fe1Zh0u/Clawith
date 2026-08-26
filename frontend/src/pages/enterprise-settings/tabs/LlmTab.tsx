@@ -18,6 +18,7 @@ import {
   type LLMProviderSpec,
   type RuntimeModelSettings as ParsedRuntimeModelSettings,
 } from "../utils/responseParsers";
+import { updateLlmModelEnabled } from "../utils/llmModelToggle";
 
 interface RuntimeModelSettings extends ParsedRuntimeModelSettings {
   planning_source: "database" | "environment" | "unavailable";
@@ -1164,13 +1165,10 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
                     onClick={async () => {
                       try {
                         const token = localStorage.getItem("token");
-                        await fetch(`/api/enterprise/llm-models/${m.id}`, {
-                          method: "PUT",
-                          headers: {
-                            "Content-Type": "application/json",
-                            Authorization: `Bearer ${token}`,
-                          },
-                          body: JSON.stringify({ enabled: !m.enabled }),
+                        await updateLlmModelEnabled({
+                          modelId: m.id,
+                          enabled: !m.enabled,
+                          token,
                         });
                         invalidateModelCaches();
                       } catch (e) {

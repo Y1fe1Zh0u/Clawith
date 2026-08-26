@@ -247,7 +247,7 @@ export function CompanyLogoEditor() {
           t("enterprise.logo.uploadFailed", "Failed to upload logo."),
         );
       }
-      const tenant = await res.json();
+      const tenant = parseEnterpriseTenant(await res.json());
       setLogoUrl(tenant.logo_url || "");
       setCropSource(null);
       qc.invalidateQueries({ queryKey: ["tenant", tenantId] });

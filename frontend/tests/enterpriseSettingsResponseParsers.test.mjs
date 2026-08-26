@@ -59,6 +59,14 @@ test("enterprise settings fetchJson calls keep successful payloads unknown until
     assert.doesNotMatch(source, /fetchJson<(?!unknown>)/);
     assert.doesNotMatch(source, /fetchJson\s*\(/);
   }
+  const companyEditors = readFileSync(
+    new URL(
+      "../src/pages/enterprise-settings/components/CompanyInfoEditors.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(companyEditors, /parseEnterpriseTenant\(await res\.json\(\)\)/);
 });
 
 test("enterprise tenant parsers accept complete tenants and reject malformed fields", () => {

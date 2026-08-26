@@ -481,6 +481,9 @@ function parseLlmModel(value: unknown, path: string): LLMModel {
   };
 }
 
+export const parseLlmModelResponse = (value: unknown): LLMModel =>
+  parseLlmModel(value, "LLM model");
+
 export const parseLlmModels = (value: unknown): LLMModel[] =>
   array(value, "LLM models", parseLlmModel);
 
