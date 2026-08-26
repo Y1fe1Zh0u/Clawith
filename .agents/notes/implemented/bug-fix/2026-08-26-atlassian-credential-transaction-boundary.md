@@ -1,10 +1,10 @@
 # Agent Note: Atlassian Credential and Tool-Sync Boundary
 
-Status: implemented — Atlassian credentials and assigned tools now share one fail-closed persistence contract.
+Status: implemented — Atlassian credentials and assigned tools share one fail-closed persistence contract.
 
 ## Problem
 
-Atlassian tool synchronization previously stored the plaintext API key in `AgentTool.config`, treated decryption failure as permission to reuse the stored value, and committed tool assignments in a separate transaction from the owning `ChannelConfig`. A failed or partial sync could therefore expose a secret at rest, dispatch ciphertext as a credential, or publish configuration success without matching tool assignments.
+Atlassian configuration spans the owning `ChannelConfig`, discovered shared `Tool` records, per-Agent assignments, and runtime credential dispatch. Persisting plaintext credentials, accepting undecryptable values as legacy plaintext, or committing those records independently would expose a secret at rest, dispatch ciphertext as a credential, or publish configuration success without matching tool assignments.
 
 ## Decision
 
@@ -20,7 +20,7 @@ Atlassian discovery, Tool upsert, AgentTool assignment, and ChannelConfig mutati
 
 ## Consequences
 
-Atlassian configuration may take as long as provider discovery, but success now means the encrypted configuration and assigned tools committed together. Provider unavailability is visible as an HTTP failure and does not publish partial configuration state. Other MCP providers retain their existing credential contracts.
+Atlassian configuration may take as long as provider discovery, but success means the encrypted configuration and assigned tools committed together. Provider unavailability is visible as an HTTP failure and does not publish partial configuration state. Other MCP providers retain their existing credential contracts.
 
 ## Verification
 
