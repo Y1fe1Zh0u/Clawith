@@ -24,7 +24,6 @@ from app.services.participant_identity import (
     get_or_create_user_participant,
 )
 
-
 _GROUP_SESSION_TYPE = "group"
 _ACTIVE_AGENT_STATUSES = ("creating", "running", "idle")
 
@@ -141,30 +140,13 @@ async def _valid_participant(
     subject = subject_result.scalar_one_or_none()
     if subject is None:
         raise GroupChatServiceError(error_code, "Participant subject is not active in this tenant")
-    if participant.type == "agent" and subject.access_mode == "private":
+    if (
+        participant.type == "agent"
+        and isinstance(subject, Agent)
+        and subject.access_mode == "private"
+    ):
         raise GroupChatServiceError(error_code, "Private Agents cannot join a group")
     return participant
-
-
-async def _active_group(
-    db: AsyncSession,
-    *,
-    tenant_id: uuid.UUID,
-    group_id: uuid.UUID,
-    lock: bool = False,
-) -> Group:
-    statement = select(Group).where(
-        Group.id == group_id,
-        Group.tenant_id == tenant_id,
-        Group.deleted_at.is_(None),
-    )
-    if lock:
-        statement = statement.with_for_update()
-    result = await db.execute(statement)
-    group = result.scalar_one_or_none()
-    if group is None:
-        raise GroupChatServiceError("group_not_found", "Group not found")
-    return group
 
 
 async def _active_membership(

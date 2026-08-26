@@ -2,6 +2,7 @@
 
 import json
 from collections import OrderedDict
+from typing import TYPE_CHECKING
 
 import httpx
 from loguru import logger
@@ -12,14 +13,16 @@ try:
 except ImportError:
     lark = None  # type: ignore
     _HAS_LARK = False
+if TYPE_CHECKING:
+    from lark_oapi import Client as LarkClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dao import query_dao
 from app.config import get_settings
 from app.core.security import create_access_token
-from app.models.user import User, Identity
+from app.dao import query_dao
 from app.models.identity import IdentityProvider
+from app.models.user import Identity, User
 
 settings = get_settings()
 
@@ -92,7 +95,7 @@ class FeishuService:
         # OrderedDict is used as a simple LRU cache: move_to_end() on each hit
         # keeps the most-recently-used entries at the tail so we can evict from
         # the head when the cache is full.
-        self._lark_clients: OrderedDict[str, lark.Client] = OrderedDict()
+        self._lark_clients: OrderedDict[str, LarkClient] = OrderedDict()
 
     @staticmethod
     def _parse_api_response(
@@ -159,7 +162,11 @@ class FeishuService:
         """Get or refresh the app-level access token. Deprecated: Use get_tenant_access_token instead."""
         return await self.get_tenant_access_token(self.app_id, self.app_secret)
         
-    async def get_tenant_access_token(self, app_id: str = None, app_secret: str = None) -> str:
+    async def get_tenant_access_token(
+        self,
+        app_id: str | None = None,
+        app_secret: str | None = None,
+    ) -> str:
         """Get or refresh the app-level access token (tenant_access_token)."""
         target_app_id = app_id or self.app_id
         target_app_secret = app_secret or self.app_secret
@@ -688,7 +695,7 @@ class FeishuService:
         """Query records in a specific table."""
         tenant_token = await self.get_tenant_access_token(app_id, app_secret)
         body = dict(filters) if filters else {}
-        params: dict[str, object] = {
+        params: dict[str, str | int] = {
             "page_size": max(1, min(page_size, 500)),
         }
         if page_token:
@@ -855,7 +862,13 @@ class FeishuService:
             )
             return resp.json()
 
-    async def query_approval_instances(self, app_id: str, app_secret: str, approval_code: str, status: str = None) -> dict:
+    async def query_approval_instances(
+        self,
+        app_id: str,
+        app_secret: str,
+        approval_code: str,
+        status: str | None = None,
+    ) -> dict:
         """Query Feishu approval instances."""
         tenant_token = await self.get_tenant_access_token(app_id, app_secret)
         body = {"approval_code": approval_code}
@@ -887,7 +900,7 @@ class FeishuService:
         Implements a simple LRU eviction policy: when the cache exceeds
         _LARK_CLIENT_CACHE_MAX entries, the least-recently-used client is removed.
         """
-        if not _HAS_LARK:
+        if not _HAS_LARK or lark is None:
             raise RuntimeError("lark-oapi package is not installed. Install with: pip install lark-oapi")
         cache_key = f"{app_id}:{app_secret}"
         client = self._lark_clients.get(cache_key)
@@ -911,7 +924,8 @@ class FeishuService:
     ) -> str:
         """Create a CardKit card entity and return its card_id."""
         from lark_oapi.api.cardkit.v1.model import (
-            CreateCardRequest, CreateCardRequestBody,
+            CreateCardRequest,
+            CreateCardRequestBody,
         )
 
         client = self._get_lark_client(app_id, app_secret)
@@ -920,9 +934,12 @@ class FeishuService:
             .data(json.dumps(card_dict)) \
             .build()
         request = CreateCardRequest.builder().request_body(body).build()
+        cardkit = client.cardkit
+        if cardkit is None:
+            raise RuntimeError("Feishu CardKit client is unavailable")
 
         try:
-            resp = await client.cardkit.v1.card.acreate(request)
+            resp = await cardkit.v1.card.acreate(request)
             logger.info(
                 f"[Feishu CardKit] create_card_entity response: "
                 f"code={resp.code}, msg={resp.msg}"
@@ -930,6 +947,10 @@ class FeishuService:
             if not resp.success():
                 raise RuntimeError(
                     f"Feishu CardKit create_card_entity failed: code={resp.code}, msg={resp.msg}"
+                )
+            if resp.data is None or not resp.data.card_id:
+                raise RuntimeError(
+                    "Feishu CardKit create_card_entity returned no card_id"
                 )
             return resp.data.card_id
         except Exception as e:
@@ -972,7 +993,8 @@ class FeishuService:
     ) -> None:
         """Stream content to a specific card element via CardKit API."""
         from lark_oapi.api.cardkit.v1.model import (
-            ContentCardElementRequest, ContentCardElementRequestBody,
+            ContentCardElementRequest,
+            ContentCardElementRequestBody,
         )
 
         client = self._get_lark_client(app_id, app_secret)
@@ -985,9 +1007,12 @@ class FeishuService:
             .element_id(element_id) \
             .request_body(body) \
             .build()
+        cardkit = client.cardkit
+        if cardkit is None:
+            raise RuntimeError("Feishu CardKit client is unavailable")
 
         try:
-            resp = await client.cardkit.v1.card_element.acontent(request)
+            resp = await cardkit.v1.card_element.acontent(request)
             logger.info(
                 f"[Feishu CardKit] stream_card_content response: "
                 f"code={resp.code}, msg={resp.msg}, card_id={card_id}, "
@@ -1014,7 +1039,8 @@ class FeishuService:
     ) -> None:
         """Toggle streaming mode on a card via CardKit settings API."""
         from lark_oapi.api.cardkit.v1.model import (
-            SettingsCardRequest, SettingsCardRequestBody,
+            SettingsCardRequest,
+            SettingsCardRequestBody,
         )
 
         client = self._get_lark_client(app_id, app_secret)
@@ -1026,9 +1052,12 @@ class FeishuService:
             .card_id(card_id) \
             .request_body(body) \
             .build()
+        cardkit = client.cardkit
+        if cardkit is None:
+            raise RuntimeError("Feishu CardKit client is unavailable")
 
         try:
-            resp = await client.cardkit.v1.card.asettings(request)
+            resp = await cardkit.v1.card.asettings(request)
             logger.info(
                 f"[Feishu CardKit] set_card_streaming_mode response: "
                 f"code={resp.code}, msg={resp.msg}, card_id={card_id}, "
@@ -1055,7 +1084,9 @@ class FeishuService:
     ) -> None:
         """Full card update via CardKit API."""
         from lark_oapi.api.cardkit.v1.model import (
-            UpdateCardRequest, UpdateCardRequestBody, Card,
+            Card,
+            UpdateCardRequest,
+            UpdateCardRequestBody,
         )
 
         client = self._get_lark_client(app_id, app_secret)
@@ -1071,9 +1102,12 @@ class FeishuService:
             .card_id(card_id) \
             .request_body(body) \
             .build()
+        cardkit = client.cardkit
+        if cardkit is None:
+            raise RuntimeError("Feishu CardKit client is unavailable")
 
         try:
-            resp = await client.cardkit.v1.card.aupdate(request)
+            resp = await cardkit.v1.card.aupdate(request)
             logger.info(
                 f"[Feishu CardKit] update_cardkit_card response: "
                 f"code={resp.code}, msg={resp.msg}, card_id={card_id}, "

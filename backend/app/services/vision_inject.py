@@ -23,7 +23,6 @@ from typing import Optional
 
 from loguru import logger
 
-
 # ─── Memory Image Cache ────────────────────────────────────────────────────────
 # Maps a short UUID key -> (raw_bytes, created_at_timestamp, grid_options).
 # Items older than _CACHE_TTL_SECONDS are pruned lazily on each store() call.
@@ -223,7 +222,7 @@ def compress_bytes_to_base64(
         if img.width > _MAX_WIDTH:
             ratio = _MAX_WIDTH / img.width
             new_size = (int(img.width * ratio), int(img.height * ratio))
-            img = img.resize(new_size, Image.LANCZOS)
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
 
         # Convert RGBA/P to RGB for JPEG compatibility
         if img.mode in ("RGBA", "P"):

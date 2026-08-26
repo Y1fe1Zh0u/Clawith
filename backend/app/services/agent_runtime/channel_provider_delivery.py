@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
+from dataclasses import dataclass
 
 import httpx
 from loguru import logger
@@ -192,12 +192,18 @@ class DatabaseChannelDeliverySender:
         from app.services.dingtalk_service import send_dingtalk_message
 
         user_id = _required(envelope.target, "user_id")
+        agent_id = str(config.extra_config.get("agent_id") or "")
+        if not agent_id:
+            raise ChannelProviderDeliveryError(
+                "dingtalk_agent_id_missing",
+                "DingTalk channel has no application agent ID",
+            )
         response = await send_dingtalk_message(
             app_id=config.app_id,
             app_secret=config.app_secret,
             user_id=user_id,
             message=envelope.content,
-            agent_id=str(config.extra_config.get("agent_id") or "") or None,
+            agent_id=agent_id,
         )
         if response.get("errcode") != 0:
             raise ChannelProviderDeliveryError(
@@ -286,8 +292,8 @@ class DatabaseChannelDeliverySender:
                     },
                 )
             else:
-                agent_id = config.extra_config.get("wecom_agent_id")
-                if agent_id in {None, ""}:
+                raw_agent_id = config.extra_config.get("wecom_agent_id")
+                if not isinstance(raw_agent_id, (str, int)) or raw_agent_id == "":
                     raise ChannelProviderDeliveryError(
                         "wecom_agent_id_missing",
                         "WeCom channel has no application agent ID",
@@ -298,7 +304,7 @@ class DatabaseChannelDeliverySender:
                     json={
                         "touser": user_id,
                         "msgtype": "text",
-                        "agentid": int(agent_id),
+                        "agentid": int(raw_agent_id),
                         "text": {"content": envelope.content},
                     },
                 )

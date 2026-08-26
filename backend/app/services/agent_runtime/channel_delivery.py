@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import re
 from typing import Callable, Literal, Protocol
-import uuid
 
 from sqlalchemy import and_, or_, select
 
@@ -17,7 +17,6 @@ from app.models.audit import ChatMessage
 from app.models.channel_delivery import ChannelDelivery
 from app.models.chat_session import ChatSession
 from app.services.agent_runtime.command_worker import RuntimeSessionFactory
-
 
 ChannelDeliveryWorkStatus = Literal["idle", "delivered", "retry", "failed"]
 _SUPPORTED_CHANNELS = frozenset(
@@ -75,6 +74,7 @@ class ChannelDeliveryWorkResult:
 class ChannelDeliverySender(Protocol):
     async def send(self, envelope: ChannelDeliveryEnvelope) -> ChannelSendResult:
         """Send one claimed envelope or raise when the provider did not confirm it."""
+        ...
 
 
 def _delivery_id(run_id: uuid.UUID, idempotency_key: str) -> uuid.UUID:

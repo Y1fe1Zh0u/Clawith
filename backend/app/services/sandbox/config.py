@@ -1,10 +1,11 @@
 """Sandbox configuration models."""
 
-from loguru import logger
+from collections.abc import Mapping
 from enum import Enum
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
 
+from loguru import logger
+from pydantic import BaseModel, Field
 
 CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS = 180
 CODE_EXECUTION_MAX_TIMEOUT_SECONDS = 300
@@ -71,7 +72,9 @@ class SandboxConfig(BaseModel):
 
     @classmethod
     def from_dict(
-        cls, config: dict, fallback_config: Optional["SandboxConfig"] = None
+        cls,
+        config: Mapping[str, object],
+        fallback_config: Optional["SandboxConfig"] = None,
     ) -> "SandboxConfig":
         """从 dict 构建 SandboxConfig，支持字段级 fallback。
 
@@ -82,7 +85,11 @@ class SandboxConfig(BaseModel):
         Returns:
             SandboxConfig 实例
         """
-        def get_value(key: str, default=None, encrypt: bool = False):
+        def get_value(
+            key: str,
+            default: object = None,
+            encrypt: bool = False,
+        ) -> object:
             """获取配置值，优先从 config 读取，缺失则使用 fallback。"""
             value = config.get(key)
             if value is None or value == "":
@@ -94,10 +101,10 @@ class SandboxConfig(BaseModel):
                 logger.info(f"[SandboxConfig] allow_network: raw={config.get(key)!r}, resolved={value!r}")
 
             # 解密敏感字段
-            if encrypt and value:
+            if encrypt and isinstance(value, str):
                 try:
-                    from app.core.security import decrypt_data
                     from app.config import get_settings
+                    from app.core.security import decrypt_data
 
                     settings = get_settings()
                     decrypted = decrypt_data(value, settings.SECRET_KEY)
@@ -112,36 +119,41 @@ class SandboxConfig(BaseModel):
             return value
 
         # Map config key names to SandboxConfig attributes
-        sandbox_type_str = get_value("sandbox_type", "subprocess")
+        sandbox_type_value = get_value("sandbox_type", "subprocess")
+        sandbox_type_str = (
+            sandbox_type_value
+            if isinstance(sandbox_type_value, str)
+            else SandboxType.SUBPROCESS.value
+        )
         try:
             sandbox_type = SandboxType(sandbox_type_str)
         except ValueError:
             sandbox_type = SandboxType.SUBPROCESS
 
-        result = cls(
-            type=sandbox_type,
-            enabled=True,  # Always enabled when explicitly configured
-            api_key=get_value("api_key", "", encrypt=True),
-            api_url=get_value("api_url", ""),
-            cpu_limit=get_value("cpu_limit", "0.5"),
-            memory_limit=get_value("memory_limit", "256m"),
-            allow_network=get_value("allow_network", False),
-            allow_unsafe_fallback_when_bwrap_missing=get_value(
+        resolved: dict[str, object] = {
+            "type": sandbox_type,
+            "enabled": True,  # Always enabled when explicitly configured
+            "api_key": get_value("api_key", "", encrypt=True),
+            "api_url": get_value("api_url", ""),
+            "cpu_limit": get_value("cpu_limit", "0.5"),
+            "memory_limit": get_value("memory_limit", "256m"),
+            "allow_network": get_value("allow_network", False),
+            "allow_unsafe_fallback_when_bwrap_missing": get_value(
                 "allow_unsafe_fallback_when_bwrap_missing",
                 False,
             ),
-            workspace_mode=get_value("workspace_mode", "merge"),
-            publication_owner=get_value("publication_owner", "workspace_cas"),
-            default_timeout=get_value(
+            "workspace_mode": get_value("workspace_mode", "merge"),
+            "publication_owner": get_value("publication_owner", "workspace_cas"),
+            "default_timeout": get_value(
                 "default_timeout",
                 CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
             ),
-            max_timeout=get_value(
+            "max_timeout": get_value(
                 "max_timeout",
                 CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
             ),
-            http_proxy=get_value("http_proxy", None),
-            https_proxy=get_value("https_proxy", None),
-            no_proxy=get_value("no_proxy", None),
-        )
-        return result
+            "http_proxy": get_value("http_proxy", None),
+            "https_proxy": get_value("https_proxy", None),
+            "no_proxy": get_value("no_proxy", None),
+        }
+        return cls.model_validate(resolved)

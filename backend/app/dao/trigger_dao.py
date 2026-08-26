@@ -34,7 +34,8 @@ class TriggerDAO(BaseDAO[AgentTrigger]):
                 )
                 .limit(1)
             )
-            return (await session_db.execute(stmt)).one_or_none()
+            row = (await session_db.execute(stmt)).one_or_none()
+            return (row[0], row[1]) if row is not None else None
 
 
 trigger_dao = TriggerDAO()

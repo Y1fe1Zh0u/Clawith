@@ -8,11 +8,11 @@ ordinary Runtime delivery transaction.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Callable
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,8 +22,8 @@ from app.models.agent import Agent
 from app.models.agent_run import AgentRun
 from app.models.audit import ChatMessage
 from app.services.agent_runtime.adapter import RuntimeCommandIntake
-from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
 from app.services.agent_runtime.config import RuntimeRolloutPolicy
+from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
 from app.services.agent_runtime.cycle_guard import (
     AgentCycleGuard,
     AgentCycleGuardError,
@@ -36,14 +36,13 @@ from app.services.agent_runtime.state import (
 from app.services.group_message_service import (
     GroupMessageServiceError,
     ResolvedGroupMention,
-    _SenderScope,
     _dedupe_mentions,
     _load_sender_scope,
     _persist_message,
     _required_content,
     _resolve_mentions,
+    _SenderScope,
 )
-
 
 _INTENT_VERSION = 1
 
@@ -341,7 +340,11 @@ def _snapshot_scope(
     group = group_context.get("group")
     session = group_context.get("session")
     agent = group_context.get("agent")
-    if not all(isinstance(item, Mapping) for item in (group, session, agent)):
+    if (
+        not isinstance(group, Mapping)
+        or not isinstance(session, Mapping)
+        or not isinstance(agent, Mapping)
+    ):
         raise GroupAgentHandoffError(
             "group_handoff_source_invalid",
             "The frozen Group scope is incomplete",

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
 import json
 import re
-from typing import Protocol
-from urllib.parse import quote, unquote, urlsplit
 import uuid
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Literal, Protocol, TypedDict, cast
+from urllib.parse import quote, unquote, urlsplit
 
 from sqlalchemy import select
 
@@ -19,18 +19,22 @@ from app.models.llm import LLMModel
 from app.models.published_page import PublishedPage
 from app.services.agent_runtime.command_worker import RuntimeSessionFactory
 from app.services.agent_runtime.node_executor import VerificationResult
-from app.services.agent_runtime.state import JsonObject, RuntimeContext, RuntimeGraphState
-from app.services.agent_runtime.state import runtime_messages_as_json
+from app.services.agent_runtime.state import (
+    JsonObject,
+    JsonValue,
+    RuntimeContext,
+    RuntimeGraphState,
+    runtime_messages_as_json,
+)
 from app.services.agent_runtime.tool_result_store import (
     ToolResultStore,
     ToolResultStoreError,
 )
+from app.services.llm.client import LLMMessage
+from app.services.llm.single_step import LLMCompletionStep, complete_llm_once
 from app.services.storage import agent_storage_key, get_storage_backend
 from app.services.storage_runtime.base import StorageBackend
 from app.services.workspace_collaboration import normalize_workspace_path
-from app.services.llm.client import LLMMessage
-from app.services.llm.single_step import LLMCompletionStep, complete_llm_once
-
 
 ReferenceExists = Callable[[str, uuid.UUID, uuid.UUID], Awaitable[bool]]
 _STABLE_REFERENCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
@@ -89,12 +93,36 @@ def _bounded_json(value: object, *, max_chars: int) -> str:
     return rendered[:max_chars] + "\n...[truncated by completion gate]"
 
 
-def _completion_evidence(state: RuntimeGraphState) -> dict[str, object]:
+class _CompletionDecision(TypedDict):
+    verdict: Literal["pass", "repair"]
+    missing_requirements: list[str]
+    next_actions: list[str]
+    evidence: list[str]
+
+
+class _AsyncPoll(TypedDict):
+    tool: str
+    arguments: JsonObject
+    interval_ms: int
+
+
+class _AsyncPendingOperation(TypedDict):
+    operation_key: str
+    operation_id: str
+    state: str
+    poll: _AsyncPoll
+
+
+def _json_list(values: Sequence[object]) -> list[JsonValue]:
+    return cast(list[JsonValue], list(values))
+
+
+def _completion_evidence(state: RuntimeGraphState) -> JsonObject:
     messages = runtime_messages_as_json(state)
-    retained: list[dict[str, object]] = []
+    retained: list[JsonObject] = []
     remaining = 24000
     for message in reversed(messages):
-        compact = {
+        compact: JsonObject = {
             key: message[key]
             for key in (
                 "role",
@@ -114,10 +142,10 @@ def _completion_evidence(state: RuntimeGraphState) -> dict[str, object]:
         retained.append(compact)
         remaining -= size
     retained.reverse()
-    evidence: dict[str, object] = {
+    evidence: JsonObject = {
         "initial_input": state["snapshots"].initial_input,
-        "trajectory": retained,
-        "authoritative_task_amendments": [
+        "trajectory": _json_list(retained),
+        "authoritative_task_amendments": _json_list([
             {
                 key: message[key]
                 for key in (
@@ -130,14 +158,15 @@ def _completion_evidence(state: RuntimeGraphState) -> dict[str, object]:
             for message in messages
             if message.get("role") == "user"
             and message.get("runtime_input") == "resume"
-        ],
+        ]),
     }
-    if state.get("thread_summary") is not None:
-        evidence["thread_summary"] = state["thread_summary"]
+    thread_summary = state.get("thread_summary")
+    if thread_summary is not None:
+        evidence["thread_summary"] = thread_summary
     return evidence
 
 
-def _parse_completion_decision(content: str | None) -> dict[str, object] | None:
+def _parse_completion_decision(content: str | None) -> _CompletionDecision | None:
     raw = (content or "").strip()
     if raw.startswith("```") and raw.endswith("```"):
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE)
@@ -153,7 +182,7 @@ def _parse_completion_decision(content: str | None) -> dict[str, object] | None:
             return None
     if payload["verdict"] == "pass" and payload["missing_requirements"]:
         return None
-    return payload
+    return cast(_CompletionDecision, payload)
 
 
 def _refs(metadata: object, field: str) -> tuple[str, ...] | None:
@@ -194,7 +223,9 @@ def _vercel_ready_receipt(
     }
 
 
-def _async_pending_operation(execution: AgentToolExecution) -> dict | None:
+def _async_pending_operation(
+    execution: AgentToolExecution,
+) -> _AsyncPendingOperation | None:
     metadata = getattr(execution, "result_metadata", None)
     if (
         execution.status != "started"
@@ -231,13 +262,17 @@ def _async_pending_operation(execution: AgentToolExecution) -> dict | None:
         or interval_ms < 0
     ):
         return None
+    normalized_arguments = cast(
+        JsonObject,
+        json.loads(json.dumps(dict(arguments), ensure_ascii=False)),
+    )
     return {
         "operation_key": operation_key,
         "operation_id": operation_id,
         "state": state,
         "poll": {
             "tool": tool,
-            "arguments": dict(arguments),
+            "arguments": normalized_arguments,
             "interval_ms": interval_ms,
         },
     }
@@ -701,7 +736,7 @@ class TaskCompletionGate:
                 outcome="pass",
                 details={
                     "code": "task_completion_passed",
-                    "evidence": decision["evidence"],
+                    "evidence": _json_list(decision["evidence"]),
                 },
             )
 
@@ -719,9 +754,9 @@ class TaskCompletionGate:
             reason="\n".join(reason_parts),
             details={
                 "code": "task_completion_repair_required",
-                "missing_requirements": missing,
-                "next_actions": actions,
-                "evidence": decision["evidence"],
+                "missing_requirements": _json_list(missing),
+                "next_actions": _json_list(actions),
+                "evidence": _json_list(decision["evidence"]),
             },
         )
 
@@ -835,7 +870,7 @@ class ToolLedgerRuntimeVerifier:
             )
             executions = list(result.scalars().all())
 
-        async_pending_by_key: dict[str, dict] = {}
+        async_pending_by_key: dict[str, _AsyncPendingOperation] = {}
         for execution in executions:
             operation = _async_pending_operation(execution)
             if operation is not None:
@@ -852,7 +887,7 @@ class ToolLedgerRuntimeVerifier:
                 reason="unsettled tool executions require reconciliation",
                 details={
                     "code": "unsettled_tool_execution",
-                    "tool_call_ids": unsettled,
+                    "tool_call_ids": _json_list(unsettled),
                 },
             )
         if async_pending_by_key:
@@ -870,7 +905,7 @@ class ToolLedgerRuntimeVerifier:
                 ),
                 details={
                     "code": "async_tool_pending",
-                    "operations": operations,
+                    "operations": _json_list(operations),
                 },
             )
         invalid_statuses = sorted(
@@ -884,7 +919,7 @@ class ToolLedgerRuntimeVerifier:
                 reason="tool ledger contains an invalid status",
                 details={
                     "code": "invalid_tool_execution_status",
-                    "tool_call_ids": invalid_statuses,
+                    "tool_call_ids": _json_list(invalid_statuses),
                 },
             )
 
@@ -1035,9 +1070,9 @@ class ToolLedgerRuntimeVerifier:
             outcome="pass",
             details={
                 "code": "deterministic_checks_passed",
-                "artifact_refs": artifact_refs,
-                "evidence_refs": evidence_refs,
-                "reference_warnings": reference_warnings,
+                "artifact_refs": _json_list(artifact_refs),
+                "evidence_refs": _json_list(evidence_refs),
+                "reference_warnings": _json_list(reference_warnings),
             },
         )
 

@@ -61,14 +61,14 @@ class BaseDAO(Generic[ModelType]):
             if hasattr(session_db, "get"):
                 return await session_db.get(self.model, id)
             # Fallback for custom mock DB clients in tests
-            stmt = select(self.model).where(self.model.id == id)
+            stmt = select(self.model).where(getattr(self.model, "id") == id)
             result = await session_db.execute(stmt)
             return result.scalar_one_or_none()
 
     async def is_empty(self, db: Any = None) -> bool:
         """Check if the table is empty (no records)."""
         async with self.session(db=db, readonly=True) as session_db:
-            stmt = select(self.model.id).limit(1)
+            stmt = select(getattr(self.model, "id")).limit(1)
             result = await session_db.execute(stmt)
             return result.scalar() is None
 
@@ -103,7 +103,7 @@ class BaseDAO(Generic[ModelType]):
             if hasattr(db, "get"):
                 obj = await db.get(self.model, id)
             else:
-                stmt = select(self.model).where(self.model.id == id)
+                stmt = select(self.model).where(getattr(self.model, "id") == id)
                 result = await db.execute(stmt)
                 obj = result.scalar_one_or_none()
             if obj:
@@ -235,7 +235,7 @@ class TenantScopedBaseDAO(BaseDAO[ModelType]):
         if object_tenant_id is not None and object_tenant_id != resolved_tenant_id:
             raise RuntimeError("Object tenant_id does not match the write tenant scope")
 
-        obj.tenant_id = resolved_tenant_id
+        setattr(obj, "tenant_id", resolved_tenant_id)
         db.add(obj)
         return obj
 
@@ -246,8 +246,8 @@ class TenantScopedBaseDAO(BaseDAO[ModelType]):
             return await super().get(id, db=db)
         async with self.session(db=db, readonly=True) as session_db:
             stmt = select(self.model).where(
-                self.model.id == id,
-                self.model.tenant_id == tenant_id,
+                getattr(self.model, "id") == id,
+                getattr(self.model, "tenant_id") == tenant_id,
             )
             return (await session_db.execute(stmt)).scalar_one_or_none()
 
@@ -264,7 +264,7 @@ class TenantScopedBaseDAO(BaseDAO[ModelType]):
         async with self.session(db=db, readonly=True) as session_db:
             stmt = select(self.model)
             if tenant_id is not None:
-                stmt = stmt.where(self.model.tenant_id == tenant_id)
+                stmt = stmt.where(getattr(self.model, "tenant_id") == tenant_id)
             if extra_filters:
                 stmt = stmt.where(*extra_filters)
             stmt = stmt.offset(skip).limit(limit)
@@ -275,8 +275,8 @@ class TenantScopedBaseDAO(BaseDAO[ModelType]):
         tenant_id = self._require_tenant_id()
         async with self.session() as db:
             stmt = select(self.model).where(
-                self.model.id == id,
-                self.model.tenant_id == tenant_id,
+                getattr(self.model, "id") == id,
+                getattr(self.model, "tenant_id") == tenant_id,
             )
             obj = (await db.execute(stmt)).scalar_one_or_none()
             if obj:

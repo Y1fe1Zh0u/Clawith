@@ -5,10 +5,11 @@ Saves extracted text as a companion .md file alongside the original.
 """
 
 import io
+from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
-
 
 # File extensions that need text extraction
 EXTRACTABLE_EXTS = {".pdf", ".docx", ".xlsx", ".pptx"}
@@ -23,7 +24,7 @@ def _clean_cell(value: object) -> str:
     return text.replace("\n", "<br>").replace("|", "\\|")
 
 
-def _markdown_table(rows: list[list[object]]) -> str:
+def _markdown_table(rows: Sequence[Sequence[object]]) -> str:
     cleaned = [[_clean_cell(cell) for cell in row] for row in rows]
     cleaned = [row for row in cleaned if any(cell for cell in row)]
     if not cleaned:
@@ -177,6 +178,8 @@ def _extract_xlsx(data: bytes) -> str:
 def _extract_pptx(data: bytes) -> str:
     """Extract text from PPTX using python-pptx."""
     from pptx import Presentation
+    from pptx.shapes.autoshape import Shape
+    from pptx.shapes.graphfrm import GraphicFrame
     
     prs = Presentation(io.BytesIO(data))
     parts = []
@@ -186,13 +189,13 @@ def _extract_pptx(data: bytes) -> str:
         tables = []
         for shape in slide.shapes:
             if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
+                for para in cast(Shape, shape).text_frame.paragraphs:
                     text = para.text.strip()
                     if text:
                         texts.append(text)
             if shape.has_table:
                 rows = []
-                for row in shape.table.rows:
+                for row in cast(GraphicFrame, shape).table.rows:
                     rows.append([cell.text.strip() for cell in row.cells])
                 table_md = _markdown_table(rows)
                 if table_md:

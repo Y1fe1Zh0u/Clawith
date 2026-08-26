@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Literal, NotRequired, Protocol, TypeAlias, TypedDict, cast
 
-from langchain_core.messages import AnyMessage, BaseMessage, convert_to_openai_messages
+from langchain_core.messages import (
+    AnyMessage,
+    BaseMessage,
+    RemoveMessage,
+    convert_to_openai_messages,
+)
 from langgraph.graph.message import add_messages
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -142,7 +147,7 @@ class RuntimeStateUpdate(TypedDict, total=False):
     """Node updates use native message reduction plus narrow mutable state."""
 
     lifecycle: RuntimeLifecycle
-    messages: list[AnyMessage | JsonObject]
+    messages: list[AnyMessage | RemoveMessage | JsonObject]
     thread_summary: JsonObject | None
     summary_covered_through_message_id: str | None
 

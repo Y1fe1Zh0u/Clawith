@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,7 @@ from app.models.trigger_execution import TriggerExecution
 from app.services.agent_runtime.adapter import RuntimeCommandIntake
 from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
+from app.services.agent_runtime.state import JsonObject
 from app.services.chat_session_service import ensure_primary_platform_session
 from app.services.feishu_group_targets import resolve_feishu_group_target
 from app.services.participant_identity import get_or_create_agent_participant
@@ -45,10 +46,10 @@ def _trigger_config(trigger: AgentTrigger) -> dict:
     return {}
 
 
-def _trigger_event_data(trigger: AgentTrigger) -> dict[str, str]:
+def _trigger_event_data(trigger: AgentTrigger) -> JsonObject:
     """Extract bounded low-trust event facts from the executable instruction."""
     config = _trigger_config(trigger)
-    event_data: dict[str, str] = {}
+    event_data: JsonObject = {}
     if trigger.type == "on_message" and config.get("_matched_message"):
         event_data["matched_message"] = str(config["_matched_message"])[:500]
         event_data["matched_from"] = str(config.get("_matched_from", "?"))[:200]
@@ -206,7 +207,7 @@ async def _resolve_trigger_delivery_target(
     *,
     agent: Agent,
     trigger: AgentTrigger,
-) -> dict[str, object] | None:
+) -> JsonObject | None:
     """Resolve only user-facing direct delivery; A2A is migrated separately."""
     delivery_target_id = getattr(trigger, "delivery_target_id", None)
     if delivery_target_id is not None:

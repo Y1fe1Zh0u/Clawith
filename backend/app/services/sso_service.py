@@ -27,7 +27,7 @@ class SSOService:
     DOMAIN_TENANT_HINTS: dict[str, str] = {}
 
     async def match_user_by_email(
-        self, db: AsyncSession, email: str, tenant_id: str
+        self, db: AsyncSession, email: str, tenant_id: str | None
     ) -> User | None:
         """Find existing user by email address.
 
@@ -84,7 +84,7 @@ class SSOService:
         return None
 
     async def match_user_by_mobile(
-        self, db: AsyncSession, mobile: str, tenant_id: str
+        self, db: AsyncSession, mobile: str, tenant_id: str | None
     ) -> User | None:
         """Find existing user by mobile phone number.
 

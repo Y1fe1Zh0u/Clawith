@@ -51,7 +51,8 @@ class RealtimeRouter:
         }
         async with redis.pipeline(transaction=True) as pipe:
             pipe.sadd(self._agent_index_key(agent_id), connection_id)
-            pipe.hset(self._connection_key(connection_id), mapping=payload)
+            for field, value in payload.items():
+                pipe.hset(self._connection_key(connection_id), field, value)
             pipe.expire(self._connection_key(connection_id), PRESENCE_TTL_SECONDS)
             pipe.expire(self._agent_index_key(agent_id), PRESENCE_TTL_SECONDS)
             await pipe.execute()
@@ -186,12 +187,28 @@ class RealtimeRouter:
             return []
         records: list[dict[str, str]] = []
         stale_ids: list[str] = []
-        for connection_id in connection_ids:
+        for raw_connection_id in connection_ids:
+            connection_id = (
+                raw_connection_id.decode("utf-8")
+                if isinstance(raw_connection_id, bytes)
+                else raw_connection_id
+            )
             data = await redis.hgetall(self._connection_key(connection_id))
             if not data:
                 stale_ids.append(connection_id)
                 continue
-            records.append(data)
+            records.append(
+                {
+                    (
+                        key.decode("utf-8") if isinstance(key, bytes) else key
+                    ): (
+                        value.decode("utf-8")
+                        if isinstance(value, bytes)
+                        else value
+                    )
+                    for key, value in data.items()
+                }
+            )
         if stale_ids:
             await redis.srem(self._agent_index_key(agent_id), *stale_ids)
         return records

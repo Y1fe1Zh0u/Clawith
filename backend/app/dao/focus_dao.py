@@ -1,10 +1,11 @@
 """DAO for structured agent focus items."""
 
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import CursorResult
 
 from app.dao.base import BaseDAO
 from app.models.focus import AgentFocusItem
@@ -31,7 +32,7 @@ class FocusDAO(BaseDAO[AgentFocusItem]):
             stmt = stmt.on_conflict_do_nothing(index_elements=["agent_id", "key"])
             result = await db.execute(stmt)
             await db.flush()
-            return result.rowcount or 0
+            return cast(CursorResult[Any], result).rowcount or 0
 
     async def list_by_agent(self, *, agent_id: Any, include_completed: bool) -> Sequence[AgentFocusItem]:
         """List focus items in display order."""

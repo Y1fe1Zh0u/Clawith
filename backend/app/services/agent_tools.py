@@ -12,9 +12,6 @@ The agent reads/writes these files directly. No per-concept tools needed.
 """
 
 import asyncio
-from collections.abc import Mapping
-from copy import deepcopy
-from dataclasses import dataclass, field, replace
 import fnmatch
 import hashlib
 import json
@@ -24,31 +21,35 @@ import os
 import queue
 import re
 import tempfile
-import uuid
 import unicodedata
+import uuid
+from collections.abc import Mapping
 from contextvars import ContextVar
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, Never, Optional, cast
 from urllib.parse import quote
 
-from croniter import croniter
 import httpx
+from croniter import croniter
 from loguru import logger
-from sqlalchemy import select, or_
+from sqlalchemy import or_, select
 
+from app.config import get_settings
 from app.core.permissions import (
     evaluate_roster_agent_visibility,
     evaluate_roster_human_visibility,
 )
-from app.database import async_session
 from app.dao.chat_session_dao import chat_session_dao
+from app.database import async_session
 from app.models.agent import Agent as AgentModel
 from app.models.agent_run import AgentRun
 from app.models.agent_tool_execution import AgentToolExecution
 from app.models.audit import ChatMessage
-from app.models.chat_session import ChatSession
 from app.models.channel_config import ChannelConfig
+from app.models.chat_session import ChatSession
 from app.models.identity import IdentityProvider
 from app.models.org import (
     OrgDepartment,
@@ -56,61 +57,26 @@ from app.models.org import (
 )
 from app.models.task import Task
 from app.models.user import User as UserModel
-from app.services.channel_session import find_or_create_channel_session
-from app.services.channel_user_service import get_platform_user_by_org_member
-from app.services.document_conversion import (
-    convert_html_to_pdf as convert_html_file_to_pdf,
-    convert_html_to_pptx as convert_html_file_to_pptx,
-)
-from app.services.focus_service import (
-    complete_focus_item,
-    ensure_focus_item,
-    is_focus_file_path,
-    list_focus_items,
-    upsert_focus_item,
-)
-from app.services.feishu_group_targets import (
-    FeishuGroupTargetError,
-    resolve_feishu_group_target,
-)
-from app.services.feishu_contact_search import (
-    resolve_feishu_contacts_by_exact_names,
-    search_feishu_contacts,
-)
 from app.services import agent_directory
-from app.services.workspace_collaboration import (
-    delete_workspace_file,
-    move_workspace_path,
-    normalize_workspace_path,
-    write_workspace_file,
+from app.services.agent_runtime.feishu_approval_authorization import (
+    FeishuApprovalCreateAuthorization,
+    feishu_approval_create_arguments_hash,
+    verify_feishu_approval_create_authorization,
 )
-from app.services.storage import get_storage_backend, normalize_storage_key
-from app.services.storage_runtime.base import StorageVersion, WriteCondition, content_hash_bytes
-from app.services.workspace_locking import workspace_locks
-from app.services.workspace_reconciliation import (
-    CandidateChange,
-    ReconciliationScope,
-    WorkspaceReconciliationService,
-    expand_move,
+from app.services.agent_runtime.tool_contracts import (
+    ToolContractError,
+    ToolExecutionBinding,
+    resolve_tool_deadline_seconds,
 )
-from app.services.sandbox.execution_lease import SandboxExecutionLeaseStore
-from app.services.sandbox.local.run_workspace import (
-    RunWorkspaceIdentity,
-    use_run_workspace,
+from app.services.agent_runtime.tool_execution import (
+    SAFE_READ_MAX_ATTEMPTS,
+    ToolExecutionOutcome,
+    sanitize_tool_arguments,
 )
-from app.services.sandbox.run_scope import sandbox_run_scope_id
-from app.services.sandbox.config import (
-    CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
-    CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
-)
-from app.services.sandbox.workspace_policy import (
-    SandboxExecutionScope,
-    build_workspace_policy,
-    parse_canonical_uuid,
-)
-from app.config import get_settings
-from app.services.llm.finish import (
-    FINISH_TOOL_NAME,
+from app.services.agent_runtime.tool_registry import (
+    RUNTIME_TOOL_BINDING_KEY,
+    STATIC_REGISTERED_TOOL_NAMES,
+    resolve_registered_tool,
 )
 from app.services.builtin_tool_definitions import (
     AGENT_RELATIVE_PATH_ARGUMENTS,
@@ -123,27 +89,62 @@ from app.services.builtin_tool_definitions import (
     builtin_sensitive_paths,
     is_reserved_custom_tool_name,
 )
-from app.services.agent_runtime.tool_execution import (
-    SAFE_READ_MAX_ATTEMPTS,
-    ToolExecutionOutcome,
-    sanitize_tool_arguments,
+from app.services.channel_session import find_or_create_channel_session
+from app.services.channel_user_service import get_platform_user_by_org_member
+from app.services.document_conversion import (
+    convert_html_to_pdf as convert_html_file_to_pdf,
 )
-from app.services.agent_runtime.tool_contracts import (
-    ToolContractError,
-    ToolExecutionBinding,
-    resolve_tool_deadline_seconds,
+from app.services.document_conversion import (
+    convert_html_to_pptx as convert_html_file_to_pptx,
 )
-from app.services.agent_runtime.feishu_approval_authorization import (
-    FeishuApprovalCreateAuthorization,
-    feishu_approval_create_arguments_hash,
-    verify_feishu_approval_create_authorization,
+from app.services.feishu_contact_search import (
+    resolve_feishu_contacts_by_exact_names,
+    search_feishu_contacts,
 )
-from app.services.agent_runtime.tool_registry import (
-    RUNTIME_TOOL_BINDING_KEY,
-    STATIC_REGISTERED_TOOL_NAMES,
-    resolve_registered_tool,
+from app.services.feishu_group_targets import (
+    FeishuGroupTargetError,
+    resolve_feishu_group_target,
 )
-
+from app.services.focus_service import (
+    complete_focus_item,
+    ensure_focus_item,
+    is_focus_file_path,
+    list_focus_items,
+    upsert_focus_item,
+)
+from app.services.llm.finish import (
+    FINISH_TOOL_NAME,
+)
+from app.services.sandbox.config import (
+    CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
+    CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
+)
+from app.services.sandbox.execution_lease import SandboxExecutionLeaseStore
+from app.services.sandbox.local.run_workspace import (
+    RunWorkspaceIdentity,
+    use_run_workspace,
+)
+from app.services.sandbox.run_scope import sandbox_run_scope_id
+from app.services.sandbox.workspace_policy import (
+    SandboxExecutionScope,
+    build_workspace_policy,
+    parse_canonical_uuid,
+)
+from app.services.storage import get_storage_backend, normalize_storage_key
+from app.services.storage_runtime.base import StorageVersion, WriteCondition, content_hash_bytes
+from app.services.workspace_collaboration import (
+    delete_workspace_file,
+    move_workspace_path,
+    normalize_workspace_path,
+    write_workspace_file,
+)
+from app.services.workspace_locking import workspace_locks
+from app.services.workspace_reconciliation import (
+    CandidateChange,
+    ReconciliationScope,
+    WorkspaceReconciliationService,
+    expand_move,
+)
 
 _settings = get_settings()
 WORKSPACE_ROOT = Path(_settings.STORAGE_LOCAL_ROOT or _settings.AGENT_DATA_DIR)
@@ -285,8 +286,8 @@ def _decrypt_sensitive_fields(config: dict, config_schema: dict | None = None) -
     if not config:
         return config
 
-    from app.core.security import decrypt_data
     from app.config import get_settings
+    from app.core.security import decrypt_data
 
     settings = get_settings()
     result = dict(config)
@@ -349,8 +350,8 @@ async def _get_tool_config(agent_id: Optional[uuid.UUID], tool_name: str) -> Opt
         logger.debug(f"[ToolConfig] Cache hit for {tool_name}, agent_id={agent_id}")
         return cached
 
-    from app.models.tool import Tool, AgentTool
     from app.models.agent import Agent as AgentModel
+    from app.models.tool import AgentTool, Tool
     from app.services.tool_config import get_tenant_tool_config
 
     async with async_session() as db:
@@ -976,7 +977,7 @@ async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[dict]:
     computer_os_type = await _get_computer_os_type(agent_id)
 
     try:
-        from app.models.tool import Tool, AgentTool
+        from app.models.tool import AgentTool, Tool
 
         async with async_session() as db:
             # Get agent-specific assignments
@@ -1343,7 +1344,7 @@ async def get_runtime_agent_tools_for_llm(agent_id: uuid.UUID) -> list[dict]:
     try:
         execute_code_config = await _get_tool_config(agent_id, "execute_code") or {}
         from app.config import get_sandbox_config
-        from app.services.sandbox.config import SandboxConfig
+        from app.services.sandbox.config import SandboxConfig, SandboxType
 
         fallback_config = get_sandbox_config()
         sandbox_config = (
@@ -4698,8 +4699,8 @@ async def execute_tool(
     action_type = _TOOL_AUTONOMY_MAP.get(tool_name)
     if action_type:
         try:
-            from app.services.autonomy_service import autonomy_service
             from app.models.agent import Agent as AgentModel
+            from app.services.autonomy_service import autonomy_service
             async with async_session() as _adb:
                 _ar = await _adb.execute(select(AgentModel).where(AgentModel.id == agent_id))
                 _agent = _ar.scalar_one_or_none()
@@ -5331,9 +5332,10 @@ async def _web_search(
 async def _get_jina_api_key() -> str:
     """Read Jina API key from DB system_settings first, then fall back to env."""
     try:
+        from sqlalchemy import select
+
         from app.database import async_session
         from app.models.system_settings import SystemSetting
-        from sqlalchemy import select
         async with async_session() as db:
             result = await db.execute(select(SystemSetting).where(SystemSetting.key == "jina_api_key"))
             setting = result.scalar_one_or_none()
@@ -5474,8 +5476,9 @@ async def _jina_read_outcome(
     agent_id: uuid.UUID | None = None,
 ) -> ToolExecutionOutcome:
     """Read one page through Jina using HTTP and bounded-content facts."""
-    import httpx
     from urllib.parse import urlparse
+
+    import httpx
 
     url = arguments.get("url")
     if not isinstance(url, str) or not url.strip():
@@ -5655,14 +5658,15 @@ def _fallback_extract_visible_text(html: str) -> str:
 
 
 def _extract_page_links(html: str, base_url: str, limit: int = 30) -> list[str]:
-    from bs4 import BeautifulSoup
     from urllib.parse import urljoin
+
+    from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
     links: list[str] = []
     seen: set[str] = set()
     for anchor in soup.find_all("a", href=True):
-        href = urljoin(base_url, anchor["href"].strip())
+        href = urljoin(base_url, str(anchor["href"]).strip())
         if not href.startswith(("http://", "https://")) or href in seen:
             continue
         label = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True))[:80] or href
@@ -5680,8 +5684,11 @@ async def _read_webpage_outcome(arguments: dict) -> ToolExecutionOutcome:
     from bs4 import BeautifulSoup
 
     url, validation_error = await _validate_public_http_url(arguments.get("url", ""))
-    if validation_error:
-        return _typed_failure(validation_error, "webpage_url_invalid")
+    if validation_error or url is None:
+        return _typed_failure(
+            validation_error or "Webpage URL is invalid.",
+            "webpage_url_invalid",
+        )
 
     try:
         max_chars = min(max(int(arguments.get("max_chars", 12000)), 500), 50000)
@@ -5761,7 +5768,7 @@ async def _read_webpage_outcome(arguments: dict) -> ToolExecutionOutcome:
                 title = soup.title.string.strip()
             meta_description = soup.find("meta", attrs={"name": "description"})
             if meta_description and meta_description.get("content"):
-                description = meta_description["content"].strip()
+                description = str(meta_description["content"]).strip()
 
             extracted = trafilatura.extract(
                 text,
@@ -6800,8 +6807,8 @@ async def _send_file_to_human_target(
             target_member_id=target_member_id,
             provider_type=target_channel,
         )
-        if error:
-            return error
+        if error or target is None:
+            return error or "❌ File recipient could not be resolved."
 
         result = await db.execute(
             select(ChannelConfig).where(ChannelConfig.agent_id == agent_id)
@@ -6859,8 +6866,11 @@ async def _send_file_to_human_target_outcome(
                 target_member_id=target_member_id,
                 provider_type=target_channel,
             )
-            if error:
-                return _typed_failure(error, "channel_file_recipient_invalid")
+            if error or target is None:
+                return _typed_failure(
+                    error or "File recipient could not be resolved.",
+                    "channel_file_recipient_invalid",
+                )
             result = await db.execute(
                 select(ChannelConfig).where(ChannelConfig.agent_id == agent_id)
             )
@@ -7097,6 +7107,7 @@ async def _send_file_via_feishu_resolved(
     except Exception as e:
         # If upload fails, try sending a download link as fallback
         import json as _j
+
         from app.config import get_settings as _gs
         _s = _gs()
         base_url = getattr(_s, 'BASE_URL', '').rstrip('/') or ''
@@ -8026,7 +8037,7 @@ async def _execute_via_smithery_connect_outcome(
         "not found",
         "connection",
     }
-    normalized_error_message = error_message.lower()
+    normalized_error_message = str(error_message or "").lower()
     if error and (
         "http://" in normalized_error_message
         or "https://" in normalized_error_message
@@ -8114,7 +8125,7 @@ async def _smithery_auto_recover(api_key: str, mcp_url: str, namespace: str, con
         }
         if agent_id:
             try:
-                from app.models.tool import Tool, AgentTool
+                from app.models.tool import AgentTool, Tool
                 async with async_session() as db:
                     # Update all MCP tools for this server URL
                     r = await db.execute(
@@ -8722,7 +8733,10 @@ def _read_document_sync(
             content = "\n\n".join(sheets) if sheets else "(Excel is empty)"
 
         elif ext == ".pptx":
+            from typing import cast
+
             from pptx import Presentation
+            from pptx.shapes.autoshape import Shape
             prs = Presentation(str(file_path))
             slides = []
             total_slides = len(prs.slides)
@@ -8733,8 +8747,10 @@ def _read_document_sync(
                 processed_slides = i + 1
                 texts = []
                 for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        texts.append(shape.text)
+                    if shape.has_text_frame:
+                        text = cast(Shape, shape).text.strip()
+                        if text:
+                            texts.append(text)
                 if texts:
                     slides.append(f"--- Slide {i+1} ---\n" + "\n".join(texts))
             processed_scope.update(
@@ -9274,6 +9290,7 @@ async def _convert_csv_to_xlsx(agent_id: uuid.UUID, ws: Path, arguments: dict) -
 
     try:
         import csv
+
         from openpyxl import Workbook
 
         text = src_file.read_text(encoding="utf-8-sig")
@@ -9283,10 +9300,12 @@ async def _convert_csv_to_xlsx(agent_id: uuid.UUID, ws: Path, arguments: dict) -
         if lines:
             scores = {candidate: sum(line.count(candidate) for line in lines) for candidate in candidates}
             if any(scores.values()):
-                delimiter = max(scores, key=scores.get)
+                delimiter = max(scores.items(), key=lambda item: item[1])[0]
 
         wb = Workbook()
         ws_sheet = wb.active
+        if ws_sheet is None:
+            return "❌ Conversion failed: workbook has no active sheet."
         with src_file.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.reader(f, delimiter=delimiter)
             for row in reader:
@@ -9382,7 +9401,10 @@ async def _convert_markdown_to_docx(agent_id: uuid.UUID, ws: Path, arguments: di
             if bullet_match or ordered_match:
                 flush_paragraph(paragraph_lines)
                 paragraph_lines = []
-                text = (bullet_match or ordered_match).group(1).strip()
+                list_match = bullet_match if bullet_match is not None else ordered_match
+                if list_match is None:
+                    raise RuntimeError("List match disappeared")
+                text = list_match.group(1).strip()
                 if text:
                     doc.add_paragraph(text, style="List Bullet" if bullet_match else "List Number")
                 i += 1
@@ -9826,8 +9848,9 @@ async def _manage_tasks(
     args: dict,
 ) -> str:
     """Create / update / delete tasks in DB and sync to workspace."""
-    from app.models.task import TaskLog
     from datetime import datetime, timezone
+
+    from app.models.task import TaskLog
 
     action = args["action"]
     title = args["title"]
@@ -9854,6 +9877,7 @@ async def _manage_tasks(
             if task_type == "todo":
                 # Trigger auto-execution for todo tasks
                 import asyncio
+
                 from app.services.task_executor import execute_task
                 asyncio.create_task(execute_task(task.id, agent_id))
                 await _sync_tasks_to_file(agent_id, ws)
@@ -10199,7 +10223,8 @@ async def _query_directory_outcome(
     summary = _json_tool_result(payload)
     if payload.get("ok") is True:
         return _typed_success(summary)
-    error = payload.get("error") if isinstance(payload.get("error"), Mapping) else {}
+    raw_error = payload.get("error")
+    error = raw_error if isinstance(raw_error, Mapping) else {}
     return _typed_failure(
         summary,
         str(error.get("code") or "query_directory_failed"),
@@ -10261,6 +10286,11 @@ async def _send_feishu_message_to_member_outcome(
             if not config:
                 return _typed_failure(
                     "This Agent has no Feishu channel configured.",
+                    "feishu_channel_not_configured",
+                )
+            if not config.app_id or not config.app_secret:
+                return _typed_failure(
+                    "This Agent's Feishu channel credentials are incomplete.",
                     "feishu_channel_not_configured",
                 )
 
@@ -10413,8 +10443,8 @@ async def _send_channel_message(agent_id: uuid.UUID, args: dict) -> str:
                 target_member_id=target_member_id,
                 provider_type=target_channel,
             )
-            if error:
-                return error
+            if error or target is None:
+                return error or "❌ Channel recipient could not be resolved."
 
             target_member = target.member
             display_name = target_member.name or target_member_id
@@ -10516,6 +10546,11 @@ async def _send_channel_message_outcome(
                 config = config_result.scalar_one_or_none()
             if config is None:
                 return _typed_failure("This Agent has no Feishu channel configured.", "feishu_channel_not_configured")
+            if not config.app_id or not config.app_secret:
+                return _typed_failure(
+                    "This Agent's Feishu channel credentials are incomplete.",
+                    "feishu_channel_not_configured",
+                )
             response = await feishu_service.send_message(
                 config.app_id,
                 config.app_secret,
@@ -10554,8 +10589,11 @@ async def _send_channel_message_outcome(
             f"Channel recipient could not be resolved: {type(exc).__name__}.",
             "channel_recipient_resolution_failed",
         )
-    if error:
-        return _typed_failure(error, "channel_recipient_invalid")
+    if error or target is None:
+        return _typed_failure(
+            error or "Channel recipient could not be resolved.",
+            "channel_recipient_invalid",
+        )
     target_member = target.member
     display_name = target_member.name or target_member_id
     provider_type = target.provider_type
@@ -10688,6 +10726,11 @@ async def _send_dingtalk_message_outcome(
                     "This Agent has no DingTalk channel configured.",
                     "dingtalk_channel_not_configured",
                 )
+            if not config.app_id or not config.app_secret:
+                return _typed_failure(
+                    "This Agent's DingTalk channel credentials are incomplete.",
+                    "dingtalk_channel_not_configured",
+                )
 
             user_id = (target_member.external_id or "").strip()
             if not user_id:
@@ -10699,10 +10742,14 @@ async def _send_dingtalk_message_outcome(
                     )
 
             logger.info(f"[DingTalk] Sending to user_id: {user_id}")
-            provider_agent_id = (
-                str((config.extra_config or {}).get("agent_id") or "").strip()
-                or None
-            )
+            provider_agent_id = str(
+                (config.extra_config or {}).get("agent_id") or ""
+            ).strip()
+            if not provider_agent_id:
+                return _typed_failure(
+                    "This Agent's DingTalk channel has no application AgentID.",
+                    "dingtalk_agent_id_missing",
+                )
             try:
                 result = await send_dingtalk_message(
                     app_id=config.app_id,
@@ -10788,6 +10835,11 @@ async def _send_wecom_message_outcome(
             if not config:
                 return _typed_failure(
                     "This Agent has no WeCom channel configured.",
+                    "wecom_channel_not_configured",
+                )
+            if not config.app_id or not config.app_secret:
+                return _typed_failure(
+                    "This Agent's WeCom channel credentials are incomplete.",
                     "wecom_channel_not_configured",
                 )
 
@@ -11003,7 +11055,9 @@ async def _send_teams_channel_message(
                 .limit(1)
             )
             session = session_result.scalar_one_or_none()
-            conversation_id = str(session.external_conv_id or "").strip() if session else ""
+            if session is None:
+                return f"❌ Teams proactive send to {member_name} requires them to message the bot first"
+            conversation_id = str(session.external_conv_id or "").strip()
             if not conversation_id:
                 return f"❌ Teams proactive send to {member_name} requires them to message the bot first"
 
@@ -11145,9 +11199,17 @@ async def _send_platform_message_outcome(
                 member_name=None,
                 require_platform_user=True,
             )
-            if error:
-                return _typed_failure(error, "platform_recipient_invalid")
+            if error or target is None:
+                return _typed_failure(
+                    error or "Platform recipient could not be resolved.",
+                    "platform_recipient_invalid",
+                )
             target_user = target.platform_user
+            if target_user is None:
+                return _typed_failure(
+                    "Platform recipient is not linked to a user.",
+                    "platform_recipient_invalid",
+                )
             from app.services.chat_session_service import ensure_primary_platform_session
 
             session = await ensure_primary_platform_session(
@@ -11356,9 +11418,9 @@ async def _send_file_to_agent_outcome(
             source_creator_id = source_agent.creator_id if source_agent else from_agent_id
 
             target_agent, target_error = await _resolve_a2a_target_by_id(db, source_agent, target_agent_id)
-            if target_error:
+            if target_error or target_agent is None:
                 return _typed_failure(
-                    target_error,
+                    target_error or "Target Agent could not be resolved.",
                     "agent_file_recipient_invalid",
                 )
 
@@ -11573,9 +11635,10 @@ async def _send_message_to_agent(
 
 async def _plaza_get_new_posts(agent_id: uuid.UUID, arguments: dict) -> str:
     """Get recent posts from the Agent Plaza, scoped to agent's tenant."""
-    from app.models.plaza import PlazaPost, PlazaComment
-    from app.models.agent import Agent as AgentModel
     from sqlalchemy import desc
+
+    from app.models.agent import Agent as AgentModel
+    from app.models.plaza import PlazaComment, PlazaPost
 
     limit = min(arguments.get("limit", 10), 20)
 
@@ -11632,8 +11695,8 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
     keep the social feed clean — the OKR Agent communicates through Chat and
     reports, not through Plaza posts.
     """
-    from app.models.plaza import PlazaPost
     from app.models.agent import Agent as AgentModel
+    from app.models.plaza import PlazaPost
 
     content = arguments.get("content", "").strip()
     if not content:
@@ -11705,8 +11768,8 @@ async def _plaza_create_post(agent_id: uuid.UUID, arguments: dict) -> str:
 
 async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
     """Add a comment to a plaza post."""
-    from app.models.plaza import PlazaPost, PlazaComment
     from app.models.agent import Agent as AgentModel
+    from app.models.plaza import PlazaComment, PlazaPost
 
     post_id = arguments.get("post_id", "")
     content = arguments.get("content", "").strip()
@@ -11820,8 +11883,8 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
                 import re
                 mentions = re.findall(r'@(\S+)', content)
                 if mentions:
-                    from app.services.notification_service import send_notification
                     from app.models.user import User
+                    from app.services.notification_service import send_notification
                     # Load agents in tenant
                     a_q = select(AgentModel).where(AgentModel.id != agent_id)
                     if agent.tenant_id:
@@ -11984,7 +12047,7 @@ async def _execute_code_outcome(
     try:
         # Import here to avoid circular imports
         from app.config import get_sandbox_config
-        from app.services.sandbox.config import SandboxConfig
+        from app.services.sandbox.config import SandboxConfig, SandboxType
         from app.services.sandbox.registry import get_sandbox_backend
 
         tool_config = await _get_tool_config(agent_id, tool_name)
@@ -12028,7 +12091,7 @@ async def _execute_code_outcome(
                     "sandbox_configuration_invalid",
                 )
             sandbox_config = SandboxConfig(
-                type="e2b",
+                type=SandboxType.E2B,
                 api_key=api_key.strip(),
                 default_timeout=default_timeout,
                 max_timeout=max_timeout,
@@ -12061,7 +12124,7 @@ async def _execute_code_outcome(
                     "Runtime code timeout is outside the supported range.",
                     "sandbox_runtime_timeout_invalid",
                 )
-            timeout = runtime_code_timeout_seconds
+            timeout = int(runtime_code_timeout_seconds)
         else:
             effective_timeout = (
                 sandbox_config.default_timeout
@@ -12537,8 +12600,8 @@ async def _handle_set_trigger_outcome(
     user_id: uuid.UUID | None = None,
 ) -> ToolExecutionOutcome:
     """Create a trigger from validated config and the committed DB fact."""
-    from app.models.trigger import AgentTrigger
     from app.models.chat_session import ChatSession
+    from app.models.trigger import AgentTrigger
 
     raw_name = arguments.get("name", "")
     raw_type = arguments.get("type", "")
@@ -12751,9 +12814,11 @@ async def _handle_set_trigger_outcome(
         # Snapshot the latest message timestamp so we only detect NEW messages after this point
         # This prevents false positives from already-processed messages
         try:
+            from sqlalchemy import String as SaString
+            from sqlalchemy import cast as sa_cast
+
             from app.models.audit import ChatMessage
             from app.models.chat_session import ChatSession
-            from sqlalchemy import cast as sa_cast, String as SaString
             async with async_session() as _snap_db:
                 _snap_q = select(ChatMessage.created_at).join(
                     ChatSession, ChatMessage.conversation_id == sa_cast(ChatSession.id, SaString)
@@ -13257,8 +13322,9 @@ async def _upload_image_outcome(
     1. Global tool config (admin-set, shared by all agents)
     2. Per-agent tool config override (agent-specific)
     """
-    import httpx
     import base64
+
+    import httpx
 
     file_path = arguments.get("file_path")
     source_url = arguments.get("url")
@@ -13519,11 +13585,11 @@ class _ImageGenerationBoundaryError(RuntimeError):
         self.summary = summary
 
 
-def _image_generation_failure(error_code: str, summary: str) -> None:
+def _image_generation_failure(error_code: str, summary: str) -> Never:
     raise _ImageGenerationBoundaryError("failed", error_code, summary)
 
 
-def _image_generation_unknown(error_code: str, summary: str) -> None:
+def _image_generation_unknown(error_code: str, summary: str) -> Never:
     raise _ImageGenerationBoundaryError("unknown", error_code, summary)
 
 
@@ -14321,6 +14387,7 @@ async def _generate_image_google(
 async def _get_feishu_token(agent_id: uuid.UUID) -> tuple[str, str] | None:
     """Get (app_id, app_access_token) for the agent's configured Feishu channel."""
     import httpx
+
     from app.models.channel_config import ChannelConfig
 
     async with async_session() as db:
@@ -14419,8 +14486,8 @@ async def _get_feishu_credentials(agent_id: uuid.UUID) -> tuple[str, str]:
     1. Try Agent-specific ChannelConfig
     2. Fallback to global settings (.env)
     """
-    from app.models.channel_config import ChannelConfig
     from app.config import get_settings
+    from app.models.channel_config import ChannelConfig
 
     settings = get_settings()
     app_id = settings.FEISHU_APP_ID
@@ -15090,6 +15157,11 @@ async def _bitable_write_outcome(
     )
     try:
         if tool_name == "bitable_create_record":
+            if not isinstance(fields, dict):
+                return _typed_failure(
+                    "bitable_create_record fields must be an object.",
+                    "invalid_tool_arguments",
+                )
             response = await feishu_service.bitable_create_record(
                 app_id,
                 app_secret,
@@ -15098,6 +15170,11 @@ async def _bitable_write_outcome(
                 fields,
             )
         elif tool_name == "bitable_update_record":
+            if not isinstance(fields, dict) or requested_record_id is None:
+                return _typed_failure(
+                    "bitable_update_record requires record_id and fields.",
+                    "invalid_tool_arguments",
+                )
             response = await feishu_service.bitable_update_record(
                 app_id,
                 app_secret,
@@ -15107,6 +15184,11 @@ async def _bitable_write_outcome(
                 fields,
             )
         else:
+            if requested_record_id is None:
+                return _typed_failure(
+                    "bitable_delete_record requires record_id.",
+                    "invalid_tool_arguments",
+                )
             response = await feishu_service.bitable_delete_record(
                 app_id,
                 app_secret,
@@ -15586,6 +15668,7 @@ def _feishu_read_exception_outcome(
 ) -> ToolExecutionOutcome:
     """Classify a Feishu read without converting display text into facts."""
     import httpx
+
     from app.services.feishu_service import FeishuAPIError
 
     if _feishu_error_is_known_rejection(exc):
@@ -15691,6 +15774,7 @@ async def _feishu_wiki_list_outcome(
 ) -> ToolExecutionOutcome:
     """List Wiki children with provider pagination and a fixed depth bound."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     node_token = arguments.get("node_token")
@@ -15737,7 +15821,7 @@ async def _feishu_wiki_list_outcome(
             children: list[dict] = []
 
             while True:
-                params: dict[str, object] = {
+                params: dict[str, str | int] = {
                     "parent_node_token": parent_token,
                     "page_size": 50,
                 }
@@ -15896,6 +15980,7 @@ async def _feishu_doc_search_outcome(
 ) -> ToolExecutionOutcome:
     """Search documents with bounded pagination and stable document tokens."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     query = arguments.get("query")
@@ -15957,6 +16042,7 @@ async def _feishu_doc_search_outcome(
     }
     if docs_types:
         payload["docs_types"] = docs_types
+    response_body: object = None
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
@@ -16178,6 +16264,7 @@ async def _feishu_doc_append_outcome(
 ) -> ToolExecutionOutcome:
     """Append once after a read-only root-block preflight."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     document_token = arguments.get("document_token")
@@ -16304,6 +16391,7 @@ async def _feishu_drive_share_outcome(
 ) -> ToolExecutionOutcome:
     """Settle each collaborator mutation independently and stop on uncertainty."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     document_token = arguments.get("document_token")
@@ -16545,6 +16633,7 @@ async def _feishu_drive_delete_outcome(
 ) -> ToolExecutionOutcome:
     """Delete exactly once and require the folder task receipt when applicable."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     file_token = arguments.get("file_token")
@@ -17468,6 +17557,7 @@ async def _feishu_calendar_list_outcome(
 ) -> ToolExecutionOutcome:
     """Read Bot-calendar events; freebusy remains best-effort context only."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     try:
@@ -17616,6 +17706,7 @@ async def _feishu_calendar_create_outcome(
 ) -> ToolExecutionOutcome:
     """Create one event, then record each attendee write independently."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     if any(
@@ -17806,6 +17897,7 @@ async def _feishu_calendar_mutation_outcome(
 ) -> ToolExecutionOutcome:
     """Update or delete one event on the Bot primary calendar."""
     import httpx
+
     from app.services.feishu_service import feishu_service
 
     event_id = arguments.get("event_id")
@@ -17909,9 +18001,10 @@ async def _feishu_calendar_mutation_outcome(
 
 
 async def _feishu_calendar_list(agent_id: uuid.UUID, arguments: dict) -> str:
-    import httpx
     import re as _re
     from datetime import timedelta as _td
+
+    import httpx
 
     user_email = arguments.get("user_email", "").strip()
 
@@ -18291,8 +18384,12 @@ def _feishu_provider_receipt(
     status_code = getattr(response, "status_code", None)
     if isinstance(status_code, bool) or not isinstance(status_code, int):
         status_code = None
+    response_body: object = None
     try:
-        payload = response.json()  # type: ignore[attr-defined]
+        json_method = getattr(response, "json")
+        if not callable(json_method):
+            raise TypeError("Provider response has no JSON decoder")
+        payload = json_method()
         payload_is_json = True
     except Exception:
         payload = None
@@ -18894,11 +18991,8 @@ async def _feishu_user_search_outcome(
     }
     payload = await _query_directory_payload(agent_id, directory_arguments)
     if payload.get("ok") is not True:
-        error = (
-            payload.get("error")
-            if isinstance(payload.get("error"), Mapping)
-            else {}
-        )
+        raw_error = payload.get("error")
+        error = raw_error if isinstance(raw_error, Mapping) else {}
         error_code = str(error.get("code") or "query_directory_failed")
         return _typed_failure(
             "The tenant directory search could not be completed.",
@@ -19068,7 +19162,7 @@ async def _feishu_approval_query_outcome(
     body: dict[str, object] = {"approval_code": approval_code.strip()}
     if instance_status:
         body["instance_status"] = instance_status
-    params: dict[str, object] = {"page_size": page_size}
+    params: dict[str, str | int] = {"page_size": page_size}
     if page_token:
         params["page_token"] = page_token
 
@@ -19163,8 +19257,9 @@ async def _feishu_approval_get_outcome(
     arguments: dict,
 ) -> ToolExecutionOutcome:
     """Read a safe instance summary or one explicitly selected section."""
-    import httpx
     from urllib.parse import quote
+
+    import httpx
 
     instance_id = arguments.get("instance_id")
     section = arguments.get("section", "summary")
@@ -19936,7 +20031,7 @@ async def _feishu_contacts_refresh(agent_id: uuid.UUID) -> None:
 
 async def _get_email_config(agent_id: uuid.UUID) -> dict:
     """Retrieve per-agent email config from the send_email tool's AgentTool config."""
-    from app.models.tool import Tool, AgentTool
+    from app.models.tool import AgentTool, Tool
 
     async with async_session() as db:
         # Find the send_email tool
@@ -20115,8 +20210,13 @@ async def _read_emails_outcome(
                 selected_ids = list(reversed(message_ids[-limit:]))
                 messages: list[dict[str, str]] = []
                 for message_number in selected_ids:
+                    normalized_message_number = (
+                        message_number.decode("ascii")
+                        if isinstance(message_number, bytes)
+                        else message_number
+                    )
                     fetch_payload = _checked_email_imap_status(
-                        mailbox.fetch(message_number, "(RFC822)"),
+                        mailbox.fetch(normalized_message_number, "(RFC822)"),
                         "fetch",
                     )
                     if not isinstance(fetch_payload, (tuple, list)):
@@ -20387,8 +20487,14 @@ def _email_reply_source(
             message_numbers = packed_ids.split()
             if not message_numbers:
                 raise _EmailOriginalNotFound
+            message_number = message_numbers[0]
+            normalized_message_number = (
+                message_number.decode("ascii")
+                if isinstance(message_number, bytes)
+                else message_number
+            )
             fetch_payload = _checked_email_imap_status(
-                mailbox.fetch(message_numbers[0], "(RFC822)"),
+                mailbox.fetch(normalized_message_number, "(RFC822)"),
                 "fetch",
             )
             if not isinstance(fetch_payload, (tuple, list)):
@@ -20528,7 +20634,7 @@ def _send_email_message(
 def _email_receipt_metadata(
     message_id: str,
     recipients: list[str],
-    refused: Mapping[object, object],
+    refused: Mapping[str, object],
 ) -> tuple[list[str], list[str], dict[str, object]]:
     refused_recipients = [str(recipient) for recipient in refused]
     refused_keys = {recipient.casefold() for recipient in refused_recipients}
@@ -20786,8 +20892,8 @@ async def _publish_page_outcome(
     arguments: dict,
 ) -> ToolExecutionOutcome:
     """Publish an HTML file as a public page."""
-    import secrets
     import re
+    import secrets
 
     path = arguments.get("path", "")
     if not path:
@@ -21162,10 +21268,19 @@ def _agentbay_screenshot_outcome(
         return _agentbay_read_failure(malformed=True)
     raw, mime_type = decoded
     if tool_name == "agentbay_computer_precision_screenshot":
-        coordinates = tuple(arguments.get(name) for name in ("x", "y", "width", "height"))
-        if any(
-            not isinstance(value, int) or isinstance(value, bool)
-            for value in coordinates
+        x = arguments.get("x")
+        y = arguments.get("y")
+        width = arguments.get("width")
+        height = arguments.get("height")
+        if (
+            not isinstance(x, int)
+            or isinstance(x, bool)
+            or not isinstance(y, int)
+            or isinstance(y, bool)
+            or not isinstance(width, int)
+            or isinstance(width, bool)
+            or not isinstance(height, int)
+            or isinstance(height, bool)
         ):
             return _typed_failure(
                 "Precision screenshot coordinates must be integers.",
@@ -21173,10 +21288,10 @@ def _agentbay_screenshot_outcome(
             )
         cropped = _agentbay_crop_image(
             raw,
-            x=coordinates[0],
-            y=coordinates[1],
-            width=coordinates[2],
-            height=coordinates[3],
+            x=x,
+            y=y,
+            width=width,
+            height=height,
         )
         if cropped is None:
             return _agentbay_read_failure(malformed=True)
@@ -21301,18 +21416,23 @@ async def _agentbay_read_outcome(
                 "invalid_tool_arguments",
             )
     if tool_name == "agentbay_computer_precision_screenshot":
-        coordinates = tuple(
-            arguments.get(name) for name in ("x", "y", "width", "height")
-        )
+        x = arguments.get("x")
+        y = arguments.get("y")
+        width = arguments.get("width")
+        height = arguments.get("height")
         if (
-            any(
-                not isinstance(value, int) or isinstance(value, bool)
-                for value in coordinates
-            )
-            or coordinates[0] < 0
-            or coordinates[1] < 0
-            or coordinates[2] <= 0
-            or coordinates[3] <= 0
+            not isinstance(x, int)
+            or isinstance(x, bool)
+            or not isinstance(y, int)
+            or isinstance(y, bool)
+            or not isinstance(width, int)
+            or isinstance(width, bool)
+            or not isinstance(height, int)
+            or isinstance(height, bool)
+            or x < 0
+            or y < 0
+            or width <= 0
+            or height <= 0
         ):
             return _typed_failure(
                 "Precision screenshot requires non-negative x/y and positive integer width/height.",
@@ -21685,7 +21805,7 @@ async def _agentbay_code_write_file(agent_id: Optional[uuid.UUID], ws: Path, arg
         _session_id, _run_id = _agentbay_scope_ids(arguments)
         client = await get_agentbay_client_for_agent(agent_id, "code", session_id=_session_id, run_id=_run_id)
         result = await asyncio.to_thread(
-            client._session.file_system.write_file,
+            client._active_session().file_system.write_file,
             remote_path,
             str(content),
             mode,
@@ -21765,7 +21885,7 @@ async def _agentbay_code_edit_file(agent_id: Optional[uuid.UUID], ws: Path, argu
         _session_id, _run_id = _agentbay_scope_ids(arguments)
         client = await get_agentbay_client_for_agent(agent_id, "code", session_id=_session_id, run_id=_run_id)
         result = await asyncio.to_thread(
-            client._session.file_system.edit_file,
+            client._active_session().file_system.edit_file,
             remote_path,
             normalized_edits,
             dry_run,
@@ -21783,7 +21903,7 @@ async def _agentbay_code_edit_file(agent_id: Optional[uuid.UUID], ws: Path, argu
 
 async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
     """Dispatch email tool calls to the email_service module."""
-    from app.services.email_service import send_email, read_emails, reply_email
+    from app.services.email_service import read_emails, reply_email, send_email
 
     config = await _get_email_config(agent_id)
     if not config.get("email_address") or not config.get("auth_code"):
@@ -21938,7 +22058,7 @@ async def _install_skill_outcome(
     try:
         if is_url:
             # ── GitHub URL path ──
-            from app.api.skills import _parse_github_url, _fetch_github_directory, _get_github_token
+            from app.api.skills import _fetch_github_directory, _get_github_token, _parse_github_url
 
             parsed = _parse_github_url(source)
             if not parsed:
@@ -22250,6 +22370,7 @@ async def _agentbay_get_screen_metadata(client) -> tuple[int | None, int | None,
 def _agentbay_image_dimensions(raw_bytes: bytes) -> tuple[int | None, int | None]:
     try:
         from io import BytesIO
+
         from PIL import Image
 
         with Image.open(BytesIO(raw_bytes)) as img:
@@ -22268,6 +22389,7 @@ def _agentbay_crop_image_bytes(
 ) -> tuple[bytes, tuple[int, int, int, int], int] | None:
     try:
         from io import BytesIO
+
         from PIL import Image
 
         with Image.open(BytesIO(raw_bytes)) as img:
@@ -23043,8 +23165,8 @@ async def _agentbay_computer_close_window(agent_id: Optional[uuid.UUID], ws: Pat
             if not windows_result.get("success"):
                 return f"Failed to list windows before closing: {windows_result.get('error_message', 'Unknown error')}"
 
-            from difflib import SequenceMatcher
             import json
+            from difflib import SequenceMatcher
 
             title_norm = _agentbay_normalize_text(title)
             candidates: list[dict] = []
@@ -23184,10 +23306,10 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
 
     from app.services.agentbay_client import get_agentbay_client_for_agent
 
-    from_type = arguments.get("from_type", "")
-    from_path = arguments.get("from_path", "")
-    to_type   = arguments.get("to_type", "")
-    to_path   = arguments.get("to_path", "")
+    from_type = str(arguments.get("from_type") or "")
+    from_path = str(arguments.get("from_path") or "")
+    to_type = str(arguments.get("to_type") or "")
+    to_path = str(arguments.get("to_path") or "")
     session_id, run_id = _agentbay_scope_ids(arguments)
 
     if not all([from_type, from_path, to_type, to_path]):
@@ -23213,8 +23335,8 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
         # ── Case 1: workspace → env ──────────────────────────────────────────
         if from_type == "workspace" and to_type in env_types:
             local_path, err = resolve_workspace(from_path)
-            if err:
-                return err
+            if err or local_path is None:
+                return err or "Workspace source path is invalid"
             import os
             if not os.path.exists(local_path):
                 return f"File not found in workspace: {from_path}"
@@ -23225,7 +23347,7 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
                 run_id=run_id,
             )
             result = await asyncio.to_thread(
-                client._session.file_system.upload_file,
+                client._active_session().file_system.upload_file,
                 local_path, to_path
             )
             if result.success:
@@ -23239,7 +23361,7 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
                 if to_type == "computer" and to_path.startswith(desktop_dir):
                     try:
                         await asyncio.to_thread(
-                            client._session.command.exec,
+                            client._active_session().command.exec,
                             f"DISPLAY=:0 gio info '{to_path}' 2>/dev/null || true"
                         )
                     except Exception:
@@ -23250,8 +23372,8 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
         # ── Case 2: env → workspace ──────────────────────────────────────────
         elif from_type in env_types and to_type == "workspace":
             local_path, err = resolve_workspace(to_path)
-            if err:
-                return err
+            if err or local_path is None:
+                return err or "Workspace target path is invalid"
             import os
             os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
             client = await get_agentbay_client_for_agent(
@@ -23261,7 +23383,7 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
                 run_id=run_id,
             )
             result = await asyncio.to_thread(
-                client._session.file_system.download_file,
+                client._active_session().file_system.download_file,
                 from_path, local_path
             )
             if result.success:
@@ -23274,8 +23396,8 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
 
         # ── Case 3: env A → env B (transparent /tmp/ intermediary) ──────────
         elif from_type in env_types and to_type in env_types:
-            import uuid as _uuid
             import os
+            import uuid as _uuid
             tmp_path = f"/tmp/agentbay_transfer_{_uuid.uuid4().hex}"
             try:
                 # Step 1: download from source env to backend /tmp/
@@ -23286,7 +23408,7 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
                     run_id=run_id,
                 )
                 dl_result = await asyncio.to_thread(
-                    src_client._session.file_system.download_file,
+                    src_client._active_session().file_system.download_file,
                     from_path, tmp_path
                 )
                 if not dl_result.success:
@@ -23300,7 +23422,7 @@ async def _agentbay_file_transfer(agent_id: Optional[uuid.UUID], ws: Path, argum
                     run_id=run_id,
                 )
                 ul_result = await asyncio.to_thread(
-                    dst_client._session.file_system.upload_file,
+                    dst_client._active_session().file_system.upload_file,
                     tmp_path, to_path
                 )
                 if not ul_result.success:
@@ -23337,9 +23459,10 @@ async def _get_agent_owner_info(agent_id: uuid.UUID) -> tuple[str, str]:
     Used by get_my_okr and update_kr_progress to scope queries to the
     correct owner without requiring the caller to pass their own ID.
     """
+    from sqlalchemy import select as _select
+
     from app.database import async_session
     from app.models.agent import Agent
-    from sqlalchemy import select as _select
 
     async with async_session() as db:
         result = await db.execute(
@@ -23354,7 +23477,10 @@ async def _get_agent_owner_info(agent_id: uuid.UUID) -> tuple[str, str]:
     return "agent", str(agent_id)
 
 
-def _compute_okr_period_bounds(frequency: str, length_days: int | None):
+def _compute_okr_period_bounds(
+    frequency: str,
+    length_days: int | None,
+) -> tuple[date, date]:
     """Return the current OKR period using the tenant's configured cadence."""
     from datetime import date, timedelta
 
@@ -23383,7 +23509,7 @@ def _compute_okr_period_bounds(frequency: str, length_days: int | None):
 
 def _explicit_okr_period(
     arguments: Mapping[str, object],
-) -> tuple[object | None, object | None, str | None]:
+) -> tuple[date | None, date | None, str | None]:
     """Parse a caller-supplied OKR range, requiring both dates or neither."""
     from datetime import date
 
@@ -23444,6 +23570,11 @@ def _okr_finite_number(
     field: str,
 ) -> tuple[float | None, ToolExecutionOutcome | None]:
     if isinstance(value, bool):
+        return None, _typed_failure(
+            f"{field} must be a finite number.",
+            "invalid_tool_arguments",
+        )
+    if not isinstance(value, (int, float, str)):
         return None, _typed_failure(
             f"{field} must be a finite number.",
             "invalid_tool_arguments",
@@ -23534,6 +23665,11 @@ async def _get_okr_outcome(
                 return _typed_failure(
                     "Agent not found.",
                     "source_agent_not_found",
+                )
+            if agent.tenant_id is None:
+                return _typed_failure(
+                    "Agent has no tenant.",
+                    "agent_tenant_missing",
                 )
 
             settings_result = await db.execute(
@@ -23660,6 +23796,8 @@ async def _get_okr_settings_outcome(
                     "Agent not found.",
                     "source_agent_not_found",
                 )
+        if agent.tenant_id is None:
+            return _typed_failure("Agent has no tenant.", "agent_tenant_missing")
         settings = await get_okr_settings_for_agent(agent.tenant_id)
         summary = json.dumps(settings, ensure_ascii=False, sort_keys=True, default=str)
         if len(summary.encode("utf-8")) > 8192:
@@ -23739,12 +23877,13 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: dict) -> str:
         return period_error
 
     try:
+        from sqlalchemy import select as _select
+
         from app.database import async_session
         from app.models.agent import Agent
-        from app.models.okr import OKRObjective, OKRKeyResult, OKRSettings
+        from app.models.okr import OKRKeyResult, OKRObjective, OKRSettings
         from app.models.org import OrgMember
         from app.models.user import User
-        from sqlalchemy import select as _select
 
         async with async_session() as db:
             # Look up the agent's tenant
@@ -23757,6 +23896,10 @@ async def _get_okr(agent_id: uuid.UUID | None, arguments: dict) -> str:
             agent = agent_result.scalar_one_or_none()
             if not agent:
                 return "Agent not found."
+            if agent.tenant_id is None:
+                return "Agent has no tenant."
+            if agent.tenant_id is None:
+                return "Agent has no tenant."
 
             tenant_id = agent.tenant_id
 
@@ -23914,10 +24057,11 @@ async def _get_my_okr(agent_id: uuid.UUID | None, arguments: dict) -> str:
         return period_error
 
     try:
+        from sqlalchemy import select as _select
+
         from app.database import async_session
         from app.models.agent import Agent
-        from app.models.okr import OKRObjective, OKRKeyResult, OKRSettings
-        from sqlalchemy import select as _select
+        from app.models.okr import OKRKeyResult, OKRObjective, OKRSettings
 
         async with async_session() as db:
             agent_result = await db.execute(
@@ -24379,9 +24523,11 @@ async def _update_kr_progress(agent_id: uuid.UUID | None, user_id: uuid.UUID | N
         return f"Invalid kr_id format: {kr_id_str}"
 
     try:
-        from app.models.okr import OKRObjective, OKRKeyResult, OKRProgressLog
-        from sqlalchemy import select as _select
         from datetime import datetime
+
+        from sqlalchemy import select as _select
+
+        from app.models.okr import OKRKeyResult, OKRObjective, OKRProgressLog
 
         async with async_session() as db:
             ctx = await _load_okr_request_context(db, agent_id, user_id)
@@ -24473,8 +24619,9 @@ async def _update_kr_content(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
         return "No KR content fields provided. You can update: title, target_value, unit, focus_ref, status."
 
     try:
-        from app.models.okr import OKRObjective, OKRKeyResult
         from sqlalchemy import select as _select
+
+        from app.models.okr import OKRKeyResult, OKRObjective
 
         async with async_session() as db:
             ctx = await _load_okr_request_context(db, agent_id, user_id)
@@ -24683,6 +24830,11 @@ async def _okr_job_outcome(
             "Agent not found.",
             "source_agent_not_found",
         )
+    if agent.tenant_id is None:
+        return _typed_failure(
+            "Agent has no tenant.",
+            "agent_tenant_missing",
+        )
 
     from app.services import okr_scheduler
 
@@ -24829,9 +24981,10 @@ async def _get_okr_settings_tool(agent_id: uuid.UUID | None) -> str:
         return "OKR tools require agent context."
 
     try:
+        import json as _json
+
         from app.models.agent import Agent as AgentModel
         from app.services.okr_scheduler import get_okr_settings_for_agent
-        import json as _json
 
         async with async_session() as db:
             agent_result = await db.execute(
@@ -24840,6 +24993,8 @@ async def _get_okr_settings_tool(agent_id: uuid.UUID | None) -> str:
             agent = agent_result.scalar_one_or_none()
             if not agent:
                 return "Agent not found."
+            if agent.tenant_id is None:
+                return "Agent has no tenant."
 
         settings = await get_okr_settings_for_agent(agent.tenant_id)
         return _json.dumps(settings, indent=2, ensure_ascii=False)
@@ -25194,8 +25349,8 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
     try:
         from app.models.agent import Agent as AgentModel
         from app.models.okr import OKRObjective
-        from app.models.user import User as UserModel
         from app.models.org import OrgMember
+        from app.models.user import User as UserModel
         async with async_session() as db:
             ctx = await _load_okr_request_context(db, agent_id, user_id)
             ag = ctx["agent"]
@@ -25206,7 +25361,16 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
             owner_type = arguments.get("owner_type")
             period_start = arguments.get("period_start")
             period_end = arguments.get("period_end")
-            if not all([title, owner_type, period_start, period_end]):
+            if (
+                not isinstance(title, str)
+                or not title
+                or not isinstance(owner_type, str)
+                or not owner_type
+                or not isinstance(period_start, str)
+                or not period_start
+                or not isinstance(period_end, str)
+                or not period_end
+            ):
                 return "Missing required fields: title, owner_type, period_start, period_end"
 
             from datetime import date
@@ -25229,8 +25393,8 @@ async def _create_objective(agent_id: uuid.UUID | None, user_id: uuid.UUID | Non
                         res = await db.execute(select(AgentModel.id).where(AgentModel.id == owner_id))
                         owner_exists = res.scalar_one_or_none() is not None
                     elif owner_type == "user":
-                        from app.models.user import User as UserModel
                         from app.models.org import OrgMember
+                        from app.models.user import User as UserModel
                         res = await db.execute(select(UserModel.id).where(UserModel.id == owner_id))
                         owner_exists = res.scalar_one_or_none() is not None
                         if not owner_exists:
@@ -25317,6 +25481,8 @@ async def _create_key_result(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
         return "Missing title"
     if isinstance(raw_target_value, bool):
         return "Invalid target_value: a finite number is required."
+    if not isinstance(raw_target_value, (int, float, str)):
+        return "Invalid target_value: a finite number is required."
     try:
         target_value = float(raw_target_value)
     except (TypeError, ValueError):
@@ -25329,7 +25495,7 @@ async def _create_key_result(agent_id: uuid.UUID | None, user_id: uuid.UUID | No
         return "Invalid formatted objective_id (must be UUID)"
 
     try:
-        from app.models.okr import OKRObjective, OKRKeyResult
+        from app.models.okr import OKRKeyResult, OKRObjective
         async with async_session() as db:
             ctx = await _load_okr_request_context(db, agent_id, user_id)
             if not ctx["agent"]:
@@ -25431,10 +25597,8 @@ async def _update_objective_outcome(
             "update_objective status is invalid.",
             "invalid_tool_arguments",
         )
-    parsed_dates: dict[str, object] = {}
+    parsed_dates: dict[str, date] = {}
     try:
-        from datetime import date
-
         for field in ("period_start", "period_end"):
             if field in arguments:
                 if not isinstance(arguments[field], str):
@@ -25836,10 +26000,13 @@ async def _upsert_member_daily_report(agent_id: uuid.UUID | None, arguments: dic
 
     try:
         from datetime import date as date_cls
+
         from app.models.agent import Agent as AgentModel
         from app.models.okr import MemberDailyReport
         from app.services.okr_reporting import (
             list_tracked_okr_members,
+        )
+        from app.services.okr_reporting import (
             upsert_member_daily_report as _upsert,
         )
 
@@ -25863,6 +26030,8 @@ async def _upsert_member_daily_report(agent_id: uuid.UUID | None, arguments: dic
             ag = ag_res.scalar_one_or_none()
             if not ag:
                 return "Agent not found."
+            if ag.tenant_id is None:
+                return "Agent has no tenant."
             if not ag.is_system:
                 return "Permission denied: only the OKR Agent can upsert member daily reports."
 
@@ -26091,9 +26260,11 @@ async def _vercel_read_outcome(
     arguments: dict,
 ) -> ToolExecutionOutcome:
     """Execute one Vercel read from explicit HTTP and payload facts."""
-    import httpx
     from urllib.parse import quote, urlparse
 
+    import httpx
+
+    project_name = ""
     if tool_name == "vercel_list_deployments":
         project_name_value = arguments.get("project_name")
         if (
@@ -26311,13 +26482,13 @@ async def _vercel_read_outcome(
             "vercel_get_deploy_logs_response_invalid",
             retryable=True,
         )
-    evidence_refs = (
+    deployment_evidence_refs = (
         f"vercel-deployment://{quote(provider_reference, safe='')}",
     )
     if not events:
         return _typed_success(
             f"No logs found for deployment '{provider_reference}'.",
-            evidence_refs=evidence_refs,
+            evidence_refs=deployment_evidence_refs,
         )
 
     log_lines: list[str] = []
@@ -26345,12 +26516,12 @@ async def _vercel_read_outcome(
     if not log_lines:
         return _typed_success(
             f"No textual logs found for deployment '{provider_reference}'.",
-            evidence_refs=evidence_refs,
+            evidence_refs=deployment_evidence_refs,
         )
     content = "\n".join(log_lines[-100:])
     return _typed_success(
         f"Logs for deployment {provider_reference} (last 100 lines):\n{content}",
-        evidence_refs=evidence_refs,
+        evidence_refs=deployment_evidence_refs,
     )
 
 
@@ -26638,8 +26809,9 @@ async def _vercel_deploy_outcome(
     arguments: dict,
 ) -> ToolExecutionOutcome:
     """Settle the existing Vercel deployment lifecycle from stage receipts."""
-    import httpx
     from urllib.parse import quote
+
+    import httpx
 
     operation_value = arguments.get("operation", "launch")
     operation = (
@@ -27118,6 +27290,12 @@ async def _vercel_deploy_outcome(
                     unknown=False,
                 )
             deployment_data = _deploy_response_object(deployment_response)
+            if deployment_data is None:
+                return project_stage_failure(
+                    "Vercel deployment create returned an invalid receipt.",
+                    "vercel_deployment_create_outcome_unknown",
+                    unknown=True,
+                )
             deployment_id_value = (
                 deployment_data.get("id")
                 if deployment_data is not None
@@ -27285,8 +27463,9 @@ async def _vercel_set_env_outcome(
     agent_id: uuid.UUID,
     arguments: dict,
 ) -> ToolExecutionOutcome:
-    import httpx
     from urllib.parse import quote
+
+    import httpx
 
     project_value = arguments.get("project_name")
     key_value = arguments.get("key")
@@ -27545,8 +27724,9 @@ async def _vercel_manage_domain_outcome(
     agent_id: uuid.UUID,
     arguments: dict,
 ) -> ToolExecutionOutcome:
-    import httpx
     from urllib.parse import quote
+
+    import httpx
 
     action_value = arguments.get("action")
     domain_value = arguments.get("domain")
@@ -27875,6 +28055,11 @@ async def _neon_create_database_outcome(
                     "neon_project_create_rejected",
                 )
             data = _deploy_response_object(response)
+            if data is None:
+                return _typed_unknown(
+                    "Neon project create returned an invalid receipt; reconcile before retrying.",
+                    "neon_project_create_outcome_unknown",
+                )
             project = data.get("project") if data is not None else None
             project_id_value = (
                 project.get("id") if isinstance(project, Mapping) else None

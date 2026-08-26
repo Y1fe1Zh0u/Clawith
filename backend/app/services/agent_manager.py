@@ -2,17 +2,20 @@
 
 import json
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol, cast
 
 import docker
 from docker.errors import DockerException, NotFound
+from docker.models.containers import Container
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dao import query_dao
 from app.config import get_settings
+from app.dao import query_dao
 from app.models.agent import Agent, AgentTemplate
 from app.models.llm import LLMModel
 from app.services.llm import get_model_api_key
@@ -20,6 +23,23 @@ from app.services.llm.model_resolution import resolve_active_agent_model
 from app.services.storage import get_storage_backend, normalize_storage_key
 
 settings = get_settings()
+
+
+class _ContainerRunner(Protocol):
+    def run(
+        self,
+        image: str,
+        command: object = None,
+        *,
+        detach: bool,
+        name: str,
+        network: str,
+        ports: Mapping[str, int],
+        volumes: Mapping[str, Mapping[str, str]],
+        environment: Mapping[str, str],
+        restart_policy: Mapping[str, object],
+        labels: Mapping[str, str],
+    ) -> Container: ...
 
 
 def _render_soul_template(
@@ -283,7 +303,8 @@ class AgentManager:
         container_port = 18789 + hash(str(agent.id)) % 10000
 
         try:
-            container = self.docker_client.containers.run(
+            runner = cast(_ContainerRunner, self.docker_client.containers)
+            container = runner.run(
                 settings.OPENCLAW_IMAGE,
                 detach=True,
                 name=f"clawith-agent-{str(agent.id)[:8]}",
@@ -301,6 +322,8 @@ class AgentManager:
                     "clawith.agent_name": agent.name,
                 },
             )
+            if container.id is None:
+                raise DockerException("Docker returned a container without an ID")
 
             agent.container_id = container.id
             agent.container_port = container_port

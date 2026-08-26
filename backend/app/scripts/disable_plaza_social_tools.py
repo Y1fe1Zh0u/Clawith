@@ -11,11 +11,13 @@ Idempotent — safe to re-run.
 """
 
 import asyncio
+from typing import Any, cast
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 
 from app.database import async_session
-from app.models.tool import Tool, AgentTool
+from app.models.tool import AgentTool, Tool
 
 DEPRECATED_TOOLS = ("plaza_get_new_posts", "plaza_create_post", "plaza_add_comment")
 
@@ -29,9 +31,10 @@ async def main() -> None:
             print("No plaza_* tools found; nothing to do.")
             return
 
-        detached = (
-            await db.execute(delete(AgentTool).where(AgentTool.tool_id.in_(tool_ids)))
-        ).rowcount
+        detached_result = await db.execute(
+            delete(AgentTool).where(AgentTool.tool_id.in_(tool_ids))
+        )
+        detached = cast(CursorResult[Any], detached_result).rowcount
         await db.execute(
             update(Tool)
             .where(Tool.id.in_(tool_ids))

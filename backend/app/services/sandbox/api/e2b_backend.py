@@ -1,10 +1,12 @@
 """E2B API-based sandbox backend."""
 
+import importlib
 import time
+
+from loguru import logger
 
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
-from loguru import logger
 
 # Lazy import e2b to make it optional
 _e2b = None
@@ -15,8 +17,7 @@ def _get_e2b():
     global _e2b
     if _e2b is None:
         try:
-            import e2b
-            _e2b = e2b
+            _e2b = importlib.import_module("e2b")
         except ImportError:
             raise ImportError(
                 "e2b package is required for E2B backend. "

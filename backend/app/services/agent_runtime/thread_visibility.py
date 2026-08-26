@@ -1,13 +1,13 @@
 """Model-visible boundaries for one shared LangGraph Thread."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 from app.services.agent_runtime.state import JsonObject
 from app.services.llm.finish import FINISH_PROTOCOL_REMINDER
 
 
 def model_visible_thread_messages(
-    messages: Sequence[Mapping[str, object]],
+    messages: Sequence[JsonObject],
     *,
     current_run_id: str,
 ) -> tuple[JsonObject, ...]:

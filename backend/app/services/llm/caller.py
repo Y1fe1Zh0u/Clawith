@@ -20,17 +20,17 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import get_settings
 from app.database import async_session
-
+from app.services.llm.model_resolution import active_agent_model_candidates
+from app.services.llm.multimodal_content import estimate_multimodal_tokens
 from app.services.token_tracker import (
     TokenUsage,
-    record_token_usage,
-    extract_token_usage,
     estimate_token_usage_from_chars,
+    extract_token_usage,
+    record_token_usage,
 )
-from app.services.llm.multimodal_content import estimate_multimodal_tokens
-from app.services.llm.model_resolution import active_agent_model_candidates
 
 from .client import (
     LLMError,
@@ -252,8 +252,8 @@ async def _get_user_name(user_id) -> str | None:
     if not user_id:
         return None
     try:
-        from app.models.user import User as _UserModel
         from app.models.agent import Agent as _AgentModel
+        from app.models.user import User as _UserModel
         async with async_session() as _udb:
             _ur = await _udb.execute(select(_UserModel).where(_UserModel.id == user_id))
             _u = _ur.scalar_one_or_none()
@@ -479,7 +479,7 @@ async def call_llm(
     messages: list[dict],
     agent_name: str,
     role_description: str,
-    agent_id=None,
+    agent_id: uuid.UUID | None = None,
     user_id=None,
     session_id: str = "",
     on_chunk=None,
@@ -518,7 +518,7 @@ async def call_llm(
                     conversation_id=session_id,
                     tool_name=data.get("name", ""),
                     arguments=data.get("args"),
-                    result=data.get("result"),
+                    result=str(data.get("result") or ""),
                     status="done",
                     tool_call_id=data.get("call_id"),
                     reasoning_content=data.get("reasoning_content"),
@@ -543,6 +543,8 @@ async def call_llm(
 
     from app.services.agent_context import build_agent_context
 
+    if agent_id is None:
+        raise ValueError("call_llm requires agent_id")
     static_prompt, dynamic_prompt = await build_agent_context(
         agent_id,
         agent_name,
@@ -1020,8 +1022,8 @@ async def call_agent_llm(
     supports_vision: bool = False,
 ) -> str:
     """Call the agent's LLM with automatic failover support."""
-    from app.models.agent import Agent
     from app.core.permissions import is_agent_expired
+    from app.models.agent import Agent
 
     # Load agent
     agent_result = await db.execute(

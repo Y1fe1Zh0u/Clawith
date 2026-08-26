@@ -12,6 +12,7 @@ import re
 import uuid
 from collections import Counter
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -35,7 +36,7 @@ class LockFactory(Protocol):
         paths: list[str],
         *,
         tenant_id: str,
-    ): ...
+    ) -> AbstractAsyncContextManager[None]: ...
 
 
 @dataclass(frozen=True)
@@ -283,11 +284,14 @@ class WorkspaceReconciliationService:
                     snapshots[change.path] = await self._read_current(scope, change.path)
                 # Storage adapters may surface provider-specific read errors.
                 except Exception as exc:  # noqa: BLE001
-                    results = tuple(
+                    unverified_results = tuple(
                         ChangeApplication(item.path, item.operation, "unverified", type(exc).__name__)
                         for item in manifest.changes
                     )
-                    return ApplyResult(status="unverified", changes=results)
+                    return ApplyResult(
+                        status="unverified",
+                        changes=unverified_results,
+                    )
 
             results: list[ChangeApplication] = []
             ordered = sorted(manifest.changes, key=lambda change: change.operation == "delete")

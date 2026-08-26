@@ -1,8 +1,8 @@
 """Clawith Backend — FastAPI Application Entry Point."""
 
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-import shutil
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,7 +71,11 @@ def _log_bwrap_startup_status() -> None:
 
 async def _start_ss_local() -> None:
     """Start ss-local SOCKS5 proxy for Discord API calls. Tries nodes in priority order."""
-    import asyncio, json, os, shutil, tempfile
+    import asyncio
+    import json
+    import os
+    import shutil
+    import tempfile
     if not shutil.which("ss-local"):
         logger.info("[Proxy] ss-local not found — Discord proxy disabled")
         return
@@ -111,6 +115,9 @@ async def _start_ss_local() -> None:
                 os.environ["DISCORD_PROXY"] = "socks5h://127.0.0.1:1080"
                 logger.info(f"[Proxy] ss-local → {node['label']} ({node['server']}:{node['port']})")
                 return
+            if proc.stderr is None:
+                logger.warning("[Proxy] ss-local failed without a stderr pipe")
+                continue
             err = (await proc.stderr.read()).decode()[:120]
             logger.warning(f"[Proxy] {node['label']} failed: {err}")
         except Exception as e:
@@ -137,52 +144,36 @@ async def lifespan(app: FastAPI):
     import asyncio
     import os
     from contextlib import AsyncExitStack
-    from app.services.scheduler import start_scheduler
-    from app.services.trigger_daemon import start_trigger_daemon
-    from app.services.tool_seeder import seed_builtin_tools
-    from app.services.template_seeder import seed_agent_templates
-    from app.services.feishu_ws import feishu_ws_manager
+
     from app.services.dingtalk_stream import dingtalk_stream_manager
-    from app.services.wecom_stream import wecom_stream_manager
-    from app.services.wechat_channel import wechat_poll_manager
     from app.services.discord_gateway import discord_gateway_manager
+    from app.services.feishu_ws import feishu_ws_manager
+    from app.services.scheduler import start_scheduler
+    from app.services.template_seeder import seed_agent_templates
+    from app.services.tool_seeder import seed_builtin_tools
+    from app.services.trigger_daemon import start_trigger_daemon
+    from app.services.wechat_channel import wechat_poll_manager
+    from app.services.wecom_stream import wecom_stream_manager
 
     runtime_stack = AsyncExitStack()
 
     if _role_enabled("all", "bootstrap"):
         # ── Step 0: Ensure all DB tables exist (idempotent, safe to run on every startup) ──
         try:
-            from app.database import Base, engine
-            # Import all models so Base.metadata is fully populated
-            import app.models.user           # noqa
-            import app.models.agent          # noqa
-            import app.models.task           # noqa
-            import app.models.llm            # noqa
-            import app.models.tool           # noqa
-            import app.models.audit          # noqa
-            import app.models.skill          # noqa
-            import app.models.channel_config  # noqa
-            import app.models.schedule       # noqa
-            import app.models.plaza          # noqa
-            import app.models.activity_log   # noqa
-            import app.models.org            # noqa
-            import app.models.system_settings  # noqa
-            import app.models.invitation_code  # noqa
-            import app.models.tenant         # noqa
-            import app.models.tenant_setting  # noqa
-            import app.models.participant    # noqa
-            import app.models.chat_session   # noqa
-            import app.models.group          # noqa
-            import app.models.trigger        # noqa
-            import app.models.trigger_execution  # noqa
-            import app.models.focus          # noqa
-            import app.models.notification   # noqa
-            import app.models.gateway_message # noqa
-            import app.models.agent_credential  # noqa
-            import app.models.okr            # noqa
-            import app.models.onboarding     # noqa
+            # Import all models so Base.metadata is fully populated.
+            import importlib
 
-            import app.models.identity       # noqa
+            from app.database import Base, engine
+
+            for model_module in (
+                "user", "agent", "task", "llm", "tool", "audit", "skill",
+                "channel_config", "schedule", "plaza", "activity_log", "org",
+                "system_settings", "invitation_code", "tenant", "tenant_setting",
+                "participant", "chat_session", "group", "trigger",
+                "trigger_execution", "focus", "notification", "gateway_message",
+                "agent_credential", "okr", "onboarding", "identity",
+            ):
+                importlib.import_module(f"app.models.{model_module}")
             if settings.DATABASE_AUTO_CREATE_TABLES:
                 async with engine.begin() as conn:
                     await conn.run_sync(Base.metadata.create_all)
@@ -194,9 +185,10 @@ async def lifespan(app: FastAPI):
         logger.info("[startup] seeding...")
 
         try:
-            from app.models.tenant import Tenant
-            from app.database import async_session as _session
             from sqlalchemy import select as _select
+
+            from app.database import async_session as _session
+            from app.models.tenant import Tenant
             async with _session() as _db:
                 _existing = await _db.execute(_select(Tenant).where(Tenant.slug == "default"))
                 if not _existing.scalar_one_or_none():
@@ -210,10 +202,12 @@ async def lifespan(app: FastAPI):
         try:
             import shutil
             from pathlib import Path as _Path
-            from app.config import get_settings as _gs
-            from app.models.tenant import Tenant as _T
-            from app.database import async_session as _ses
+
             from sqlalchemy import select as _sel
+
+            from app.config import get_settings as _gs
+            from app.database import async_session as _ses
+            from app.models.tenant import Tenant as _T
             _data_dir = _Path(_gs().AGENT_DATA_DIR)
             _old_dir = _data_dir / "enterprise_info"
             if _old_dir.exists() and any(_old_dir.iterdir()):
@@ -231,14 +225,14 @@ async def lifespan(app: FastAPI):
             print(f"[startup] ⚠️ enterprise_info migration failed: {e}", flush=True)
 
         try:
-            from app.services.tool_seeder import seed_builtin_tools, clean_orphaned_mcp_tools
+            from app.services.tool_seeder import clean_orphaned_mcp_tools, seed_builtin_tools
             await seed_builtin_tools()
             await clean_orphaned_mcp_tools()
         except Exception as e:
             logger.warning(f"[startup] Builtin tools seed or cleanup failed: {e}")
 
         try:
-            from app.services.tool_seeder import seed_atlassian_rovo_config, get_atlassian_api_key
+            from app.services.tool_seeder import get_atlassian_api_key, seed_atlassian_rovo_config
             await seed_atlassian_rovo_config()
             _rovo_key = await get_atlassian_api_key()
             if _rovo_key:
@@ -253,7 +247,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[startup] Agent templates seed failed: {e}")
 
         try:
-            from app.services.skill_seeder import seed_skills, push_default_skills_to_existing_agents
+            from app.services.skill_seeder import push_default_skills_to_existing_agents, seed_skills
             await seed_skills()
             await push_default_skills_to_existing_agents()
         except Exception as e:
@@ -287,21 +281,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"[startup] realtime router start failed: {e}")
 
+    def _bg_task_error(t: asyncio.Task[object]) -> None:
+        """Callback to surface background task exceptions."""
+        try:
+            exc = t.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            logger.error(f"[startup] Background task {t.get_name()} CRASHED: {exc}")
+            import traceback
+
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+
     try:
         logger.info("[startup] starting background tasks...")
         from app.services.audit_logger import write_audit_log
         await write_audit_log("server_startup", {"pid": os.getpid()})
-
-        def _bg_task_error(t):
-            """Callback to surface background task exceptions."""
-            try:
-                exc = t.exception()
-            except asyncio.CancelledError:
-                return
-            if exc:
-                logger.error(f"[startup] Background task {t.get_name()} CRASHED: {exc}")
-                import traceback
-                traceback.print_exception(type(exc), exc, exc.__traceback__)
 
         task_specs = []
         if _role_enabled("all", "worker"):
@@ -378,53 +373,53 @@ app.add_middleware(
 )
 
 # Register API routes
-from app.api.auth import router as auth_router
-from app.api.agents import router as agents_router
-from app.api.tasks import router as tasks_router
-from app.api.files import router as files_router
-from app.api.websocket import router as ws_router
-from app.api.group_websocket import router as group_ws_router
-from app.api.feishu import router as feishu_router
-from app.api.sso import router as sso_router
-from app.api.organization import router as org_router
-from app.api.enterprise import router as enterprise_router
-from app.api.advanced import router as advanced_router
-from app.api.upload import router as upload_router
-from app.api.relationships import router as relationships_router
-from app.api.directory import router as directory_router
-from app.api.files import upload_router as files_upload_router, enterprise_kb_router
 from app.api.activity import router as activity_router
-from app.api.messages import router as messages_router
-from app.api.tenants import router as tenants_router
-from app.api.schedules import router as schedules_router
-from app.api.tools import router as tools_router
-from app.api.plaza import router as plaza_router
-from app.api.experience import router as experience_router
-from app.api.skills import router as skills_router
-from app.api.users import router as users_router
-from app.api.chat_sessions import router as chat_sessions_router
-from app.api.groups import router as groups_router
-from app.api.slack import router as slack_router
-from app.api.discord_bot import router as discord_router
-from app.api.dingtalk import router as dingtalk_router
-from app.api.google_workspace import router as google_workspace_router
-from app.api.wecom import router as wecom_router
-from app.api.wechat import router as wechat_router
-from app.api.teams import router as teams_router
-from app.api.triggers import router as triggers_router
-from app.api.focus import router as focus_router
-
-from app.api.atlassian import router as atlassian_router
-
-from app.api.webhooks import router as webhooks_router
-from app.api.notification import router as notification_router
-from app.api.gateway import router as gateway_router
 from app.api.admin import router as admin_router
-from app.api.pages import router as pages_router, public_router as pages_public_router
+from app.api.advanced import router as advanced_router
 from app.api.agent_credentials import router as credentials_router
 from app.api.agentbay_control import router as agentbay_control_router
+from app.api.agents import router as agents_router
+from app.api.atlassian import router as atlassian_router
+from app.api.auth import router as auth_router
+from app.api.chat_sessions import router as chat_sessions_router
+from app.api.dingtalk import router as dingtalk_router
+from app.api.directory import router as directory_router
+from app.api.discord_bot import router as discord_router
+from app.api.enterprise import router as enterprise_router
+from app.api.experience import router as experience_router
+from app.api.feishu import router as feishu_router
+from app.api.files import enterprise_kb_router
+from app.api.files import router as files_router
+from app.api.files import upload_router as files_upload_router
+from app.api.focus import router as focus_router
+from app.api.gateway import router as gateway_router
+from app.api.google_workspace import router as google_workspace_router
+from app.api.group_websocket import router as group_ws_router
+from app.api.groups import router as groups_router
+from app.api.messages import router as messages_router
+from app.api.notification import router as notification_router
 from app.api.okr import router as okr_router
 from app.api.onboarding import router as onboarding_router
+from app.api.organization import router as org_router
+from app.api.pages import public_router as pages_public_router
+from app.api.pages import router as pages_router
+from app.api.plaza import router as plaza_router
+from app.api.relationships import router as relationships_router
+from app.api.schedules import router as schedules_router
+from app.api.skills import router as skills_router
+from app.api.slack import router as slack_router
+from app.api.sso import router as sso_router
+from app.api.tasks import router as tasks_router
+from app.api.teams import router as teams_router
+from app.api.tenants import router as tenants_router
+from app.api.tools import router as tools_router
+from app.api.triggers import router as triggers_router
+from app.api.upload import router as upload_router
+from app.api.users import router as users_router
+from app.api.webhooks import router as webhooks_router
+from app.api.websocket import router as ws_router
+from app.api.wechat import router as wechat_router
+from app.api.wecom import router as wecom_router
 
 app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(agents_router, prefix=settings.API_PREFIX)

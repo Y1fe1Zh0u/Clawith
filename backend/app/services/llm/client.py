@@ -17,7 +17,6 @@ from typing import Any, Callable, Coroutine, Literal
 import httpx
 from loguru import logger
 
-
 # ============================================================================
 # Errors and request-shape normalization
 # ============================================================================
@@ -526,7 +525,7 @@ class LLMClient(ABC):
         timeout: float = 120.0,
     ):
         self.api_key = api_key
-        self.base_url = base_url
+        self.base_url = base_url or ""
         self.model = model
         self.timeout = timeout
 
@@ -541,6 +540,10 @@ class LLMClient(ABC):
     ) -> LLMResponse:
         """Send a completion request and return the full response."""
         pass
+
+    async def close(self) -> None:
+        """Release provider resources when a concrete client owns any."""
+        return None
 
     @abstractmethod
     async def stream(
@@ -1227,7 +1230,7 @@ class OpenAIResponsesClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int | None,
         stream: bool = False,
         **kwargs: Any,
@@ -1610,7 +1613,7 @@ class GeminiClient(LLMClient):
         self,
         messages: list[LLMMessage],
         tools: list[dict] | None,
-        temperature: float,
+        temperature: float | None,
         max_tokens: int | None,
         **kwargs: Any,
     ) -> dict[str, Any]:

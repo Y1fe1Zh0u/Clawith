@@ -34,7 +34,7 @@ async def send_wecom_message(
     secret: str,
     user_id: str,
     message: str,
-    agent_id: str = None,
+    agent_id: str | None = None,
 ) -> dict:
     """Send a text message to a WeCom user.
 

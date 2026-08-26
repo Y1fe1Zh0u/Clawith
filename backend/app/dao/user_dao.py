@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.dao.base import BaseDAO, identity_membership_query
-from app.models.user import Identity, User
 from app.models.tenant import Tenant
+from app.models.user import Identity, User
 
 
 class UserDAO(BaseDAO[User]):
@@ -48,7 +48,7 @@ class UserDAO(BaseDAO[User]):
                 .options(selectinload(User.identity))
             )
             result = await db.execute(query)
-            return result.all()
+            return [(row[0], row[1]) for row in result.all()]
 
     async def get_by_identity_username(self, username: str) -> User | None:
         """Find user by identity username."""

@@ -238,7 +238,7 @@ class DefaultRuntimeFinalizer:
     def _verified_refs(
         verification: VerificationResult,
         field_name: str,
-    ) -> list[JsonValue]:
+    ) -> list[str]:
         raw_refs = verification.details.get(field_name, [])
         if not isinstance(raw_refs, list) or any(
             not isinstance(reference, str) or not reference.strip()
@@ -248,7 +248,11 @@ class DefaultRuntimeFinalizer:
                 "invalid_verification_result",
                 f"verified {field_name} must be a list of non-empty strings",
             )
-        return list(dict.fromkeys(reference.strip() for reference in raw_refs))
+        references: list[str] = []
+        for reference in raw_refs:
+            if isinstance(reference, str):
+                references.append(reference.strip())
+        return list(dict.fromkeys(references))
 
     async def finalize(
         self,
@@ -265,17 +269,17 @@ class DefaultRuntimeFinalizer:
             result_summary={
                 "summary": answer,
                 "verification": dict(verification.details),
-                "artifact_refs": artifact_refs,
-                "evidence_refs": evidence_refs,
+                "artifact_refs": cast(list[JsonValue], artifact_refs),
+                "evidence_refs": cast(list[JsonValue], evidence_refs),
             },
             session_context_delta={
                 "source_run_id": source_run_id,
-                "new_requirements": [],
-                "new_decisions": [],
-                "resolved_open_items": [],
-                "new_open_items": [],
-                "evidence_refs": evidence_refs,
-                "workspace_refs": [],
+                "new_requirements": cast(list[JsonValue], []),
+                "new_decisions": cast(list[JsonValue], []),
+                "resolved_open_items": cast(list[JsonValue], []),
+                "new_open_items": cast(list[JsonValue], []),
+                "evidence_refs": cast(list[JsonValue], evidence_refs),
+                "workspace_refs": cast(list[JsonValue], []),
                 "result_summary": answer,
             },
         )
@@ -457,7 +461,7 @@ def _message_for_channel(message: JsonObject) -> JsonObject:
                     },
                 }
             )
-        normalized["tool_calls"] = calls
+        normalized["tool_calls"] = cast(list[JsonValue], calls)
     return cast(JsonObject, normalized)
 
 
@@ -642,19 +646,17 @@ class DeterministicRuntimeNodeExecutor:
                     "invalid_thread_compact_result",
                     "successful Thread Compact requires summary, recent messages, and watermark",
                 )
-            update.update(
-                {
-                    "thread_summary": dict(result.thread_summary),
-                    "summary_covered_through_message_id": result.covered_through_message_id,
-                    "messages": [
-                        RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                        *[
-                            _message_for_channel(dict(message))
-                            for message in result.recent_messages
-                        ],
-                    ],
-                }
+            update["thread_summary"] = dict(result.thread_summary)
+            update["summary_covered_through_message_id"] = (
+                result.covered_through_message_id
             )
+            update["messages"] = [
+                RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *[
+                    _message_for_channel(dict(message))
+                    for message in result.recent_messages
+                ],
+            ]
         lifecycle["next_route"] = "model"
         update["lifecycle"] = cast(RuntimeLifecycle, lifecycle)
         return update
@@ -1476,7 +1478,9 @@ class DeterministicRuntimeNodeExecutor:
                     "run_not_terminal",
                     "terminal node requires a terminal lifecycle",
                 )
-            return {"lifecycle": dict(state["lifecycle"])}
+            return {
+                "lifecycle": cast(RuntimeLifecycle, dict(state["lifecycle"]))
+            }
         raise RuntimeNodeTransitionError(
             "unsupported_runtime_node",
             f"unsupported Runtime node {node!r}",

@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent
-from app.models.chat_session import ChatSession
 from app.models.channel_config import ChannelConfig
+from app.models.chat_session import ChatSession
+from app.services.agent_runtime.state import JsonObject
 from app.services.channel_session import find_or_create_channel_session
 from app.services.feishu_service import FeishuAPIError, feishu_service
 
@@ -122,7 +123,7 @@ class FeishuGroupTarget:
     display_name: str
     chat_id: str
 
-    def delivery_target(self) -> dict[str, object]:
+    def delivery_target(self) -> JsonObject:
         return {
             "kind": "session",
             "session_id": str(self.session_id),

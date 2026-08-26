@@ -78,15 +78,15 @@ class SandboxBackend(Protocol):
         """
         ...
 
+    def _format_result(self, result: ExecutionResult) -> str:
+        """Format an execution result for a human-readable Tool summary."""
+        ...
+
 
 class BaseSandboxBackend(ABC):
     """Base class providing common functionality for sandbox backends."""
 
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Backend name for identification."""
-        pass
+    name: str
 
     @abstractmethod
     async def execute(

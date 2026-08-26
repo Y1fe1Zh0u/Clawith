@@ -33,6 +33,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
         prs = Presentation()
         prs.slide_width = Inches(13.333)
         prs.slide_height = Inches(7.5)
+        slide_width_inches = 13.333
+        slide_height_inches = 7.5
         blank_layout = prs.slide_layouts[6]
 
         named_colors = {
@@ -81,7 +83,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
                 style.update(css_rules.get(f"{el.name}.{cls}", {}))
             if el.get("id"):
                 style.update(css_rules.get(f"#{el.get('id')}", {}))
-            style.update(parse_style(el.get("style")))
+            raw_style = el.get("style")
+            style.update(parse_style(str(raw_style) if raw_style is not None else None))
             return style
 
         def color_tuple(value: str | None) -> tuple[int, int, int, float] | None:
@@ -208,11 +211,11 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
                 return 0.0
             try:
                 if raw.endswith("px"):
-                    return float(raw[:-2]) * (prs.slide_width / 914400) / axis_px
+                    return float(raw[:-2]) * slide_width_inches / axis_px
                 if raw.endswith("rem"):
-                    return float(raw[:-3]) * 16 * (prs.slide_width / 914400) / axis_px
+                    return float(raw[:-3]) * 16 * slide_width_inches / axis_px
                 if raw.endswith("em"):
-                    return float(raw[:-2]) * 16 * (prs.slide_width / 914400) / axis_px
+                    return float(raw[:-2]) * 16 * slide_width_inches / axis_px
             except ValueError:
                 return 0.0
             return 0.0
@@ -269,7 +272,7 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
                 border = None
             if not bg and not border:
                 return None
-            radius = length_to_inches(style.get("border-radius"), prs.slide_width / 914400, design_w_px) or 0
+            radius = length_to_inches(style.get("border-radius"), slide_width_inches, design_w_px) or 0
             shape_type = MSO_SHAPE.ROUNDED_RECTANGLE if radius > 0.03 else MSO_SHAPE.RECTANGLE
             shape = slide.shapes.add_shape(shape_type, Inches(x), Inches(y), Inches(w), Inches(h))
             if bg:
@@ -299,8 +302,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
             return None
 
         def element_box(style: dict[str, str]) -> tuple[float | None, float | None, float | None, float | None]:
-            sw = prs.slide_width / 914400
-            sh = prs.slide_height / 914400
+            sw = slide_width_inches
+            sh = slide_height_inches
             return (
                 length_to_inches(style.get("left") or style.get("x"), sw, design_w_px),
                 length_to_inches(style.get("top") or style.get("y"), sh, design_h_px),
@@ -319,7 +322,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
                 render_absolute_element(slide, el, left or x, top or y, box_w or width, box_h)
                 return y
             if name == "img":
-                p = image_path(el.get("src"))
+                raw_src = el.get("src")
+                p = image_path(str(raw_src) if raw_src is not None else None)
                 if p:
                     h = box_h or 2.2
                     slide.shapes.add_picture(str(p), Inches(x), Inches(y), width=Inches(box_w or min(width, 5.5)), height=Inches(h))
@@ -380,7 +384,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
             style = element_style(el)
             name = el.name or ""
             if name == "img":
-                p = image_path(el.get("src"))
+                raw_src = el.get("src")
+                p = image_path(str(raw_src) if raw_src is not None else None)
                 if p:
                     slide.shapes.add_picture(str(p), Inches(x), Inches(y), width=Inches(w), height=Inches(h or 2.0))
                 return
@@ -401,8 +406,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
             slides = layout.get("slides") or []
             if not slides:
                 return False
-            slide_w = prs.slide_width / 914400
-            slide_h = prs.slide_height / 914400
+            slide_w = slide_width_inches
+            slide_h = slide_height_inches
 
             for slide_data in slides:
                 slide_bg_value = slide_data.get("backgroundColor") or ""
@@ -494,8 +499,8 @@ async def render_html_to_pptx(src_file: Path, tgt_file: Path, target_path: str, 
             screenshots = layout.get("screenshots") or []
             if not slides or not screenshots:
                 return False
-            slide_w = prs.slide_width / 914400
-            slide_h = prs.slide_height / 914400
+            slide_w = slide_width_inches
+            slide_h = slide_height_inches
 
             for slide_data, screenshot in zip(slides, screenshots):
                 if not screenshot or not Path(screenshot).exists():

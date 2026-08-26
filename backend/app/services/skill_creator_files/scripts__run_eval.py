@@ -6,6 +6,7 @@ for a set of queries. Outputs results as JSON.
 """
 
 import argparse
+import importlib
 import json
 import os
 import select
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from scripts.utils import parse_skill_md
+parse_skill_md = importlib.import_module("scripts.utils").parse_skill_md
 
 
 def find_project_root() -> Path:
@@ -100,18 +101,21 @@ def run_single_query(
         accumulated_json = ""
 
         try:
+            stdout = process.stdout
+            if stdout is None:
+                raise RuntimeError("Claude process stdout pipe is unavailable")
             while time.time() - start_time < timeout:
                 if process.poll() is not None:
-                    remaining = process.stdout.read()
+                    remaining = stdout.read()
                     if remaining:
                         buffer += remaining.decode("utf-8", errors="replace")
                     break
 
-                ready, _, _ = select.select([process.stdout], [], [], 1.0)
+                ready, _, _ = select.select([stdout], [], [], 1.0)
                 if not ready:
                     continue
 
-                chunk = os.read(process.stdout.fileno(), 8192)
+                chunk = os.read(stdout.fileno(), 8192)
                 if not chunk:
                     break
                 buffer += chunk.decode("utf-8", errors="replace")

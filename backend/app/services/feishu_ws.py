@@ -1,10 +1,12 @@
 """Feishu WebSocket Long Connection Manager."""
 
 import asyncio
-from typing import Any, Dict
+import json
 import uuid
+from typing import TYPE_CHECKING, Any, Dict
 
 from loguru import logger
+
 try:
     import lark_oapi as lark
     import lark_oapi.ws as ws
@@ -13,7 +15,12 @@ except ImportError:
     lark = None  # type: ignore
     ws = None    # type: ignore
     _HAS_LARK = False
+if TYPE_CHECKING:
+    from lark_oapi import EventDispatcherHandler as LarkEventDispatcherHandler
+    from lark_oapi.ws import Client as LarkWSClient
 
+_websockets = None
+_orig_websockets_connect = None
 if _HAS_LARK:
     try:
         import websockets as _websockets
@@ -59,7 +66,7 @@ def _make_no_proxy_connect(orig_connect):
     async def _scoped_no_proxy():
         """Context manager that temporarily replaces websockets.connect for
         the duration of the lark-oapi connection handshake only."""
-        if not _PROXY_PATCH_AVAILABLE:
+        if not _PROXY_PATCH_AVAILABLE or _websockets is None:
             yield
             return
         old = _websockets.connect
@@ -73,10 +80,10 @@ def _make_no_proxy_connect(orig_connect):
 
     return _scoped_no_proxy
 
-from app.dao import query_dao
-from app.models.channel_config import ChannelConfig
 from sqlalchemy import select
 
+from app.dao import query_dao
+from app.models.channel_config import ChannelConfig
 
 if not _HAS_LARK:
     logger.warning(
@@ -90,12 +97,17 @@ class FeishuWSManager:
     """Manages Feishu WebSocket clients for all agents."""
 
     def __init__(self):
-        self._clients: Dict[uuid.UUID, ws.Client] = {}
+        self._clients: Dict[uuid.UUID, LarkWSClient] = {}
         # Tasks for reconnection or ping loops if we want to cancel them later
         self._tasks: Dict[uuid.UUID, asyncio.Task] = {}
 
-    def _create_event_handler(self, agent_id: uuid.UUID) -> lark.EventDispatcherHandler:
+    def _create_event_handler(
+        self,
+        agent_id: uuid.UUID,
+    ) -> LarkEventDispatcherHandler:
         """Create an event dispatcher for a specific agent."""
+        if lark is None:
+            raise RuntimeError("lark-oapi is unavailable")
 
         def handle_message(data: Any) -> None:
             """Handle im.message.receive_v1 events from Feishu WebSocket."""
@@ -126,7 +138,6 @@ class FeishuWSManager:
                         if hasattr(data, "event"):
                             body_dict["event"] = data.event
                         elif hasattr(data, "content") and isinstance(getattr(data, "content"), str):
-                            import json
                             try:
                                 body_dict["event"] = json.loads(data.content)
                             except json.JSONDecodeError:
@@ -183,7 +194,6 @@ class FeishuWSManager:
                     if hasattr(data, "event"):
                         body_dict["event"] = data.event
                     elif hasattr(data, "content") and isinstance(getattr(data, "content"), str):
-                        import json
                         try:
                             body_dict["event"] = json.loads(data.content)
                         except json.JSONDecodeError:
@@ -248,6 +258,9 @@ class FeishuWSManager:
 
         # Instantiate Client — SDK manages connect + receive + ping internally.
         # We set auto_reconnect=True so the SDK handles reconnections.
+        if ws is None or lark is None:
+            logger.warning("[Feishu WS] lark-oapi is unavailable")
+            return
         client = ws.Client(
             app_id,
             app_secret,
@@ -261,7 +274,7 @@ class FeishuWSManager:
         # permanently replacing websockets.connect for the whole process.
         _no_proxy_ctx = (
             _make_no_proxy_connect(_orig_websockets_connect)
-            if _PROXY_PATCH_AVAILABLE
+            if _PROXY_PATCH_AVAILABLE and _orig_websockets_connect is not None
             else None
         )
 

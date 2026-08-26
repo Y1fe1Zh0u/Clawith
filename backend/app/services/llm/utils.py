@@ -8,12 +8,16 @@ This module also exports the unified LLM client classes from client.py
 for convenient access.
 """
 
-from app.core.security import decrypt_data
 from app.config import get_settings
+from app.core.security import decrypt_data
 from app.models.llm import LLMModel
 
 # Re-export all client classes and functions from client.py
 from .client import (
+    PROVIDER_ALIASES,
+    PROVIDER_REGISTRY,
+    PROVIDER_URLS,
+    TOOL_CHOICE_PROVIDERS,
     AnthropicClient,
     GeminiClient,
     LLMClient,
@@ -23,17 +27,13 @@ from .client import (
     LLMStreamChunk,
     OpenAICompatibleClient,
     OpenAIResponsesClient,
-    PROVIDER_ALIASES,
-    PROVIDER_REGISTRY,
     ProviderSpec,
-    PROVIDER_URLS,
-    TOOL_CHOICE_PROVIDERS,
     chat_complete,
     chat_stream,
     create_llm_client,
     get_max_tokens,
-    get_provider_manifest,
     get_provider_base_url,
+    get_provider_manifest,
     get_provider_spec,
     normalize_provider,
 )
@@ -69,7 +69,7 @@ def get_tool_params(provider: str) -> dict:
     spec = get_provider_spec(provider)
     if spec is None or not spec.supports_tool_choice:
         return {}
-    params = {"tool_choice": "auto"}
+    params: dict[str, object] = {"tool_choice": "auto"}
     if spec.supports_parallel_tool_calls:
         params["parallel_tool_calls"] = True
     return params

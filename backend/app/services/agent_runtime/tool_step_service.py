@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from loguru import logger
 from sqlalchemy import func, select
@@ -26,6 +26,11 @@ from app.services.agent_runtime.a2a_runtime import (
 )
 from app.services.agent_runtime.cancel_source import RuntimeToolCancelToken
 from app.services.agent_runtime.command_worker import RuntimeSessionFactory
+from app.services.agent_runtime.feishu_approval_authorization import (
+    FeishuApprovalCreateAuthorization,
+    feishu_approval_create_arguments_hash,
+    issue_feishu_approval_create_authorization,
+)
 from app.services.agent_runtime.group_at import (
     AT_TOOL_NAME,
     GroupAtArgumentsError,
@@ -53,6 +58,7 @@ from app.services.agent_runtime.node_executor import (
 )
 from app.services.agent_runtime.state import (
     JsonObject,
+    JsonValue,
     RuntimeContext,
     RuntimeGraphState,
     runtime_messages_as_json,
@@ -68,8 +74,8 @@ from app.services.agent_runtime.tool_contracts import (
     ToolWorksetEntry,
     deadline_policy_for_tool,
     parse_step_tool_context,
-    resolve_tool_deadline_seconds,
     resolve_local_code_execution_seconds,
+    resolve_tool_deadline_seconds,
     tool_cancel_capability,
     workset_version,
 )
@@ -103,18 +109,13 @@ from app.services.agent_runtime.tool_validation import (
     ToolValidationContractError,
     validate_tool_arguments,
 )
-from app.services.agent_runtime.feishu_approval_authorization import (
-    FeishuApprovalCreateAuthorization,
-    feishu_approval_create_arguments_hash,
-    issue_feishu_approval_create_authorization,
-)
-from app.services.autonomy_service import autonomy_service
 from app.services.agent_tools import (
     agentbay_run_scope_id,
     execute_builtin_tool_outcome,
     get_runtime_agent_tools_for_llm,
     validate_feishu_approval_create_arguments,
 )
+from app.services.autonomy_service import autonomy_service
 from app.services.builtin_tool_definitions import (
     BUILTIN_TOOL_NAMES,
     builtin_cross_space_action,
@@ -219,6 +220,7 @@ class ToolExecutor(Protocol):
         runtime_execution_id: str | None = None,
         runtime_lease_owner: str | None = None,
         runtime_tenant_id: str | None = None,
+        runtime_code_timeout_seconds: float | None = None,
         execution_binding: Mapping[str, object] | None = None,
     ) -> ToolExecutionOutcome | str: ...
 
@@ -1377,13 +1379,20 @@ class RuntimeToolStepService:
                 and bool(operation.get("operation_key"))
             )
             if terminal_async:
+                terminal_status: Literal["succeeded", "failed", "unknown"]
+                if normalized.status == "succeeded":
+                    terminal_status = "succeeded"
+                elif normalized.status == "failed":
+                    terminal_status = "failed"
+                else:
+                    terminal_status = "unknown"
                 execution = await settle_async_operation_executions(
                     db,
                     tenant_id=tenant_id,
                     run_id=reservation.execution.run_id,
                     execution_id=reservation.execution.id,
                     lease_owner=lease_owner,
-                    status=normalized.status,
+                    status=terminal_status,
                     result_summary=normalized.result_summary,
                     result_ref=normalized.result_ref,
                     error_code=normalized.error_code,
@@ -1571,17 +1580,7 @@ class RuntimeToolStepService:
         agentbay_run_token = None
         if accepted.entry.tool_name.startswith("agentbay_"):
             agentbay_run_token = agentbay_run_scope_id.set(context.run_id)
-        executor_arguments: dict[str, object] = {
-            "runtime_run_id": context.run_id,
-            "runtime_tool_call_id": accepted.call_instance_id,
-            "runtime_execution_id": str(reservation.execution.id),
-            "runtime_lease_owner": lease_owner,
-            "runtime_tenant_id": context.tenant_id,
-        }
-        if local_code_execution_seconds is not None:
-            executor_arguments["runtime_code_timeout_seconds"] = (
-                local_code_execution_seconds
-            )
+        runtime_authorization: FeishuApprovalCreateAuthorization | None = None
         if confirmation_granted:
             runtime_authorization = issue_feishu_approval_create_authorization(
                 run_id=context.run_id,
@@ -1593,25 +1592,65 @@ class RuntimeToolStepService:
                 actor_user_id=context.actor_user_id or "",
                 arguments=arguments,
             )
-            executor_arguments["runtime_authorization"] = runtime_authorization
+        execution_binding: Mapping[str, object] | None = None
         try:
             if accepted.entry.binding.kind == "mcp":
-                executor_arguments["execution_binding"] = (
-                    accepted.entry.binding.to_json()
-                )
-            operation_task = asyncio.create_task(
-                self._tool_executor(
+                execution_binding = accepted.entry.binding.to_json()
+            user_id = (
+                uuid.UUID(context.actor_user_id)
+                if context.actor_user_id
+                else agent.creator_id
+            )
+            common_arguments = {
+                "runtime_authorization": runtime_authorization,
+                "runtime_run_id": context.run_id,
+                "runtime_tool_call_id": accepted.call_instance_id,
+                "runtime_execution_id": str(reservation.execution.id),
+                "runtime_lease_owner": lease_owner,
+                "runtime_tenant_id": context.tenant_id,
+            }
+            if local_code_execution_seconds is not None and execution_binding is not None:
+                operation = self._tool_executor(
                     accepted.entry.binding.handler_key,
                     arguments,
                     agent.id,
-                    (
-                        uuid.UUID(context.actor_user_id)
-                        if context.actor_user_id
-                        else agent.creator_id
-                    ),
+                    user_id,
                     context.session_id or "",
-                    **executor_arguments,
+                    runtime_code_timeout_seconds=local_code_execution_seconds,
+                    execution_binding=execution_binding,
+                    **common_arguments,
                 )
+            elif local_code_execution_seconds is not None:
+                operation = self._tool_executor(
+                    accepted.entry.binding.handler_key,
+                    arguments,
+                    agent.id,
+                    user_id,
+                    context.session_id or "",
+                    runtime_code_timeout_seconds=local_code_execution_seconds,
+                    **common_arguments,
+                )
+            elif execution_binding is not None:
+                operation = self._tool_executor(
+                    accepted.entry.binding.handler_key,
+                    arguments,
+                    agent.id,
+                    user_id,
+                    context.session_id or "",
+                    execution_binding=execution_binding,
+                    **common_arguments,
+                )
+            else:
+                operation = self._tool_executor(
+                    accepted.entry.binding.handler_key,
+                    arguments,
+                    agent.id,
+                    user_id,
+                    context.session_id or "",
+                    **common_arguments,
+                )
+            operation_task = asyncio.create_task(
+                operation
             )
         finally:
             if agentbay_run_token is not None:
@@ -1960,6 +1999,259 @@ class RuntimeToolStepService:
             None,
         )
 
+    async def _resolve_execution_step_context(
+        self,
+        *,
+        state: RuntimeGraphState,
+        context: RuntimeContext,
+        agent_id: uuid.UUID,
+        assistant_message_id: str,
+        assistant_message: Mapping[str, JsonValue],
+    ) -> tuple[StepToolContext, JsonObject | None, str | None]:
+        try:
+            step_context = parse_step_tool_context(
+                state["lifecycle"].get("step_tool_context"),
+                allow_legacy_missing=True,
+            )
+        except ToolContractError as exc:
+            raise ToolExecutionError("tool_context_corrupt", str(exc)) from exc
+        async_origin_call_id: str | None = None
+        if assistant_message.get("runtime_intent") == "async_poll":
+            raw_origin_call_id = assistant_message.get(
+                "runtime_origin_tool_call_id"
+            )
+            if not isinstance(raw_origin_call_id, str) or not raw_origin_call_id:
+                raise ToolExecutionError(
+                    "tool_context_corrupt",
+                    "async poll is missing its origin Tool Call ID",
+                )
+            async_origin_call_id = raw_origin_call_id
+        elif (
+            step_context is not None
+            and step_context.assistant_message_id != assistant_message_id
+        ):
+            raise ToolExecutionError(
+                "tool_context_corrupt",
+                "Step Tool Context does not match the pending Assistant message",
+            )
+        if step_context is not None:
+            return step_context, None, async_origin_call_id
+
+        legacy_tools = with_group_runtime_tools(
+            await self._tool_provider(agent_id),
+            state,
+        )
+        if AT_TOOL_NAME not in _allowed_tool_names(legacy_tools):
+            legacy_tools.append(group_at_tool_definition())
+        if _is_group_agent_run(state):
+            known_names = _allowed_tool_names(legacy_tools)
+            for name in GROUP_SCOPED_WORKSPACE_TOOL_NAMES - known_names:
+                legacy_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "parameters": {
+                                "type": "object",
+                                "properties": {},
+                            },
+                        },
+                    }
+                )
+        step_context = _legacy_step_tool_context(
+            state,
+            assistant_message_id=assistant_message_id,
+            tools=legacy_tools,
+        )
+        logger.warning(
+            "[RuntimeToolCompatibility] event=legacy_tool_context_resolved "
+            "run_id={} assistant_message_id={} accepted_call_count={} "
+            "delete_gate={!r}",
+            context.run_id,
+            assistant_message_id,
+            len(step_context.accepted_calls),
+            LEGACY_TOOL_CONTEXT_DELETE_GATE,
+        )
+        return step_context, step_context.to_json(), None
+
+    @staticmethod
+    def _preflight_local_call(
+        *,
+        state: RuntimeGraphState,
+        run_id: uuid.UUID,
+        call_id: str,
+        tool_name: str,
+        arguments: JsonObject,
+        accepted: AcceptedToolCall,
+        async_origin_call_id: str | None,
+    ) -> tuple[JsonObject | None, bool, JsonObject | None]:
+        if async_origin_call_id is not None:
+            validation_issues = ()
+        else:
+            try:
+                validation_issues = validate_tool_arguments(
+                    arguments,
+                    accepted.entry.parameters_schema,
+                )
+            except ToolValidationContractError as exc:
+                raise ToolExecutionError(
+                    "tool_context_corrupt",
+                    f"Accepted Tool schema is invalid: {exc}",
+                ) from exc
+        if validation_issues:
+            issue_summary = "; ".join(
+                issue.summary for issue in validation_issues
+            )[:2000]
+            return (
+                _result_message(
+                    run_id=run_id,
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    outcome=ToolExecutionOutcome(
+                        status="failed",
+                        result_summary=issue_summary,
+                        result_ref=None,
+                        error_code="tool_arguments_invalid",
+                        model_action="repair_arguments",
+                        side_effect_state="none",
+                        safe_remediation=(
+                            "Correct the listed argument paths and call "
+                            "the same Tool again."
+                        ),
+                    ),
+                ),
+                False,
+                None,
+            )
+        if tool_name != AT_TOOL_NAME:
+            return None, False, None
+        if not _is_group_agent_run(state):
+            raise ToolExecutionError(
+                "group_at_unavailable",
+                "the at tool is available only in a validated Group Agent Run",
+            )
+        try:
+            participant_ids = parse_group_at_participant_ids(arguments)
+        except GroupAtArgumentsError as exc:
+            return (
+                _result_message(
+                    run_id=run_id,
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    outcome=ToolExecutionOutcome(
+                        status="failed",
+                        result_summary=str(exc),
+                        result_ref=None,
+                        error_code="group_at_arguments_invalid",
+                    ),
+                ),
+                False,
+                None,
+            )
+        pending_group_at: JsonObject | None = (
+            {
+                "participant_ids": cast(list[JsonValue], list(participant_ids)),
+                "tool_call_id": call_id,
+                "staged_at_model_step": int(
+                    state["lifecycle"].get("model_step_count", 0)
+                ),
+            }
+            if participant_ids
+            else None
+        )
+        return (
+            _result_message(
+                run_id=run_id,
+                call_id=call_id,
+                tool_name=tool_name,
+                outcome=ToolExecutionOutcome(
+                    status="succeeded",
+                    result_summary=json.dumps(
+                        {
+                            "status": "staged",
+                            "participant_count": len(participant_ids),
+                        },
+                        separators=(",", ":"),
+                    ),
+                    result_ref=None,
+                ),
+            ),
+            True,
+            pending_group_at,
+        )
+
+    async def _handle_reusable_reservation(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        run_id: uuid.UUID,
+        reservation: ToolExecutionReservation,
+        call_id: str,
+        async_origin_call_id: str | None,
+        tool_name: str,
+        arguments: JsonObject,
+        messages: list[JsonObject],
+        tail_calls: tuple[JsonObject, ...],
+        step_tool_context: JsonObject | None,
+    ) -> ToolStepResult | bool:
+        reusable = reservation.reusable_result
+        if reusable is None:
+            return False
+        if reusable.status == "pending":
+            return _async_pending_step_result(
+                run_id=run_id,
+                execution_id=reservation.execution.id,
+                call_id=call_id,
+                origin_call_id=async_origin_call_id or call_id,
+                tool_name=tool_name,
+                outcome=reusable,
+                prior_messages=messages,
+                tail_calls=tail_calls,
+            )
+        messages.append(
+            _result_message(
+                run_id=run_id,
+                call_id=call_id,
+                tool_name=tool_name,
+                outcome=reusable,
+            )
+        )
+        async with self._session_factory() as db, db.begin():
+            await _insert_runtime_activity(
+                db,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                key=f"activity:tool:{call_id}:{reusable.status}",
+                summary=f"Runtime tool {tool_name} {reusable.status}",
+                payload={
+                    "status": "done",
+                    "activity_type": "tool_call",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "args": dict(
+                        reservation.execution.sanitized_arguments or {}
+                    ),
+                    "result": reusable.result_summary or "",
+                    "execution_status": reusable.status,
+                    "error_code": reusable.error_code,
+                },
+            )
+        if tool_name == "send_message_to_agent" and self._a2a_service:
+            waiting_request = a2a_waiting_request(
+                source_run_id=run_id,
+                tool_call_id=call_id,
+                arguments=arguments,
+                result_ref=reusable.result_ref,
+            )
+            if waiting_request is not None:
+                return ToolStepResult(
+                    messages=tuple(messages),
+                    waiting_request=waiting_request,
+                    pending_tool_calls=tail_calls,
+                    step_tool_context=step_tool_context,
+                )
+        return True
+
     async def execute_pending(
         self,
         state: RuntimeGraphState,
@@ -1996,72 +2288,17 @@ class RuntimeToolStepService:
                 if isinstance(assistant_message, Mapping)
                 else False
             )
-            try:
-                step_context = parse_step_tool_context(
-                    state["lifecycle"].get("step_tool_context"),
-                    allow_legacy_missing=True,
-                )
-            except ToolContractError as exc:
-                raise ToolExecutionError("tool_context_corrupt", str(exc)) from exc
-            is_async_poll = assistant_message.get("runtime_intent") == "async_poll"
-            if is_async_poll:
-                raw_origin_call_id = assistant_message.get(
-                    "runtime_origin_tool_call_id"
-                )
-                if not isinstance(raw_origin_call_id, str) or not raw_origin_call_id:
-                    raise ToolExecutionError(
-                        "tool_context_corrupt",
-                        "async poll is missing its origin Tool Call ID",
-                    )
-                async_origin_call_id = raw_origin_call_id
-            elif (
-                step_context is not None
-                and step_context.assistant_message_id != assistant_message_id
-            ):
-                raise ToolExecutionError(
-                    "tool_context_corrupt",
-                    "Step Tool Context does not match the pending Assistant message",
-                )
-            if step_context is None:
-                legacy_tools = with_group_runtime_tools(
-                    await self._tool_provider(agent.id),
-                    state,
-                )
-                if AT_TOOL_NAME not in _allowed_tool_names(legacy_tools):
-                    legacy_tools.append(group_at_tool_definition())
-                if _is_group_agent_run(state):
-                    # Historical checkpoints may still contain hidden legacy calls.
-                    # Keep them executable without exposing the names to new model turns.
-                    known_names = _allowed_tool_names(legacy_tools)
-                    for name in GROUP_SCOPED_WORKSPACE_TOOL_NAMES - known_names:
-                        legacy_tools.append(
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {},
-                                    },
-                                },
-                            }
-                        )
-                step_context = _legacy_step_tool_context(
-                    state,
-                    assistant_message_id=assistant_message_id,
-                    tools=legacy_tools,
-                )
-                step_context_update = step_context.to_json()
-                async_origin_call_id = None
-                logger.warning(
-                    "[RuntimeToolCompatibility] event=legacy_tool_context_resolved "
-                    "run_id={} assistant_message_id={} accepted_call_count={} "
-                    "delete_gate={!r}",
-                    context.run_id,
-                    assistant_message_id,
-                    len(step_context.accepted_calls),
-                    LEGACY_TOOL_CONTEXT_DELETE_GATE,
-                )
+            (
+                step_context,
+                step_context_update,
+                async_origin_call_id,
+            ) = await self._resolve_execution_step_context(
+                state=state,
+                context=context,
+                agent_id=agent.id,
+                assistant_message_id=assistant_message_id,
+                assistant_message=assistant_message,
+            )
             allowed_names = frozenset(
                 call.entry.tool_name for call in step_context.accepted_calls
             )
@@ -2104,102 +2341,24 @@ class RuntimeToolStepService:
                         "Accepted Tool Call is missing from Step Tool Context",
                     )
                 inflight_cancel: CancelSignal | None = None
-                # Runtime-generated async polls carry an internal continuation
-                # contract, not Model-facing arguments.  Their Tool name is still
-                # bound to the frozen origin call above, while the scheduler and
-                # Tool handler validate the durable poll metadata and operation-
-                # specific arguments.  Reapplying the public schema here can reject
-                # intentionally hidden fields such as Vercel's operation/deployment_id.
-                if async_origin_call_id is not None:
-                    validation_issues = ()
-                else:
-                    try:
-                        validation_issues = validate_tool_arguments(
-                            arguments,
-                            accepted.entry.parameters_schema,
-                        )
-                    except ToolValidationContractError as exc:
-                        raise ToolExecutionError(
-                            "tool_context_corrupt",
-                            f"Accepted Tool schema is invalid: {exc}",
-                        ) from exc
-                if validation_issues:
-                    issue_summary = "; ".join(
-                        issue.summary for issue in validation_issues
-                    )[:2000]
-                    messages.append(
-                        _result_message(
-                            run_id=run_id,
-                            call_id=call_id,
-                            tool_name=tool_name,
-                            outcome=ToolExecutionOutcome(
-                                status="failed",
-                                result_summary=issue_summary,
-                                result_ref=None,
-                                error_code="tool_arguments_invalid",
-                                model_action="repair_arguments",
-                                side_effect_state="none",
-                                safe_remediation=(
-                                    "Correct the listed argument paths and call "
-                                    "the same Tool again."
-                                ),
-                            ),
-                        )
+                preflight_message, handled_at, staged_group_at = (
+                    self._preflight_local_call(
+                        state=state,
+                        run_id=run_id,
+                        call_id=call_id,
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        accepted=accepted,
+                        async_origin_call_id=async_origin_call_id,
                     )
-                    continue
-                if tool_name == AT_TOOL_NAME:
-                    if not _is_group_agent_run(state):
-                        raise ToolExecutionError(
-                            "group_at_unavailable",
-                            "the at tool is available only in a validated Group Agent Run",
-                        )
-                    try:
-                        participant_ids = parse_group_at_participant_ids(arguments)
-                    except GroupAtArgumentsError as exc:
-                        messages.append(
-                            _result_message(
-                                run_id=run_id,
-                                call_id=call_id,
-                                tool_name=tool_name,
-                                outcome=ToolExecutionOutcome(
-                                    status="failed",
-                                    result_summary=str(exc),
-                                    result_ref=None,
-                                    error_code="group_at_arguments_invalid",
-                                ),
-                            )
-                        )
-                        continue
+                )
+                if preflight_message is not None:
+                    messages.append(preflight_message)
+                if handled_at:
                     pending_group_at_changed = True
-                    pending_group_at = (
-                        {
-                            "participant_ids": list(participant_ids),
-                            "tool_call_id": call_id,
-                            "staged_at_model_step": int(
-                                state["lifecycle"].get("model_step_count", 0)
-                            ),
-                        }
-                        if participant_ids
-                        else None
-                    )
-                    messages.append(
-                        _result_message(
-                            run_id=run_id,
-                            call_id=call_id,
-                            tool_name=tool_name,
-                            outcome=ToolExecutionOutcome(
-                                status="succeeded",
-                                result_summary=json.dumps(
-                                    {
-                                        "status": "staged",
-                                        "participant_count": len(participant_ids),
-                                    },
-                                    separators=(",", ":"),
-                                ),
-                                result_ref=None,
-                            ),
-                        )
-                    )
+                    pending_group_at = staged_group_at
+                    continue
+                if preflight_message is not None:
                     continue
                 if (
                     _is_group_agent_run(state)
@@ -2277,59 +2436,21 @@ class RuntimeToolStepService:
                     assistant_content=assistant_content,
                     assistant_content_streamed=assistant_content_streamed,
                 )
-                if reservation.reusable_result is not None:
-                    if reservation.reusable_result.status == "pending":
-                        return _async_pending_step_result(
-                            run_id=run_id,
-                            execution_id=reservation.execution.id,
-                            call_id=call_id,
-                            origin_call_id=async_origin_call_id or call_id,
-                            tool_name=tool_name,
-                            outcome=reservation.reusable_result,
-                            prior_messages=messages,
-                            tail_calls=tool_calls[index + 1 :],
-                        )
-                    messages.append(
-                        _result_message(
-                            run_id=run_id,
-                            call_id=call_id,
-                            tool_name=tool_name,
-                            outcome=reservation.reusable_result,
-                        )
-                    )
-                    async with self._session_factory() as db, db.begin():
-                        reused = reservation.reusable_result
-                        await _insert_runtime_activity(
-                            db,
-                            tenant_id=tenant_id,
-                            run_id=run_id,
-                            key=f"activity:tool:{call_id}:{reused.status}",
-                            summary=f"Runtime tool {tool_name} {reused.status}",
-                            payload={
-                                "status": "done",
-                                "activity_type": "tool_call",
-                                "call_id": call_id,
-                                "name": tool_name,
-                                "args": dict(reservation.execution.sanitized_arguments or {}),
-                                "result": reused.result_summary or "",
-                                "execution_status": reused.status,
-                                "error_code": reused.error_code,
-                            },
-                        )
-                    if tool_name == "send_message_to_agent" and self._a2a_service:
-                        waiting_request = a2a_waiting_request(
-                            source_run_id=run_id,
-                            tool_call_id=call_id,
-                            arguments=arguments,
-                            result_ref=reservation.reusable_result.result_ref,
-                        )
-                        if waiting_request is not None:
-                            return ToolStepResult(
-                                messages=tuple(messages),
-                                waiting_request=waiting_request,
-                                pending_tool_calls=tool_calls[index + 1 :],
-                                step_tool_context=step_context_update,
-                            )
+                reusable_result = await self._handle_reusable_reservation(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    reservation=reservation,
+                    call_id=call_id,
+                    async_origin_call_id=async_origin_call_id,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    messages=messages,
+                    tail_calls=tool_calls[index + 1 :],
+                    step_tool_context=step_context_update,
+                )
+                if isinstance(reusable_result, ToolStepResult):
+                    return reusable_result
+                if reusable_result:
                     continue
                 if reservation.blocked:
                     if reservation.prior_failure is not None:

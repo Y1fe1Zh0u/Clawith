@@ -4,18 +4,18 @@ Supports all major email providers via preset configurations.
 Each agent stores its own email credentials in per-agent tool config.
 """
 
+import email as email_lib
 import imaplib
 import smtplib
 import ssl
-import email as email_lib
 import uuid
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
+from datetime import datetime
 from email import encoders
 from email.header import decode_header
-from email.utils import parseaddr, make_msgid
-from datetime import datetime
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import make_msgid, parseaddr
 from pathlib import Path
 from typing import Optional
 
@@ -301,7 +301,10 @@ async def read_emails(
                 _, msg_data = mail.fetch(mid, "(RFC822)")
                 if not msg_data or not msg_data[0]:
                     continue
-                raw = msg_data[0][1]
+                first_item = msg_data[0]
+                if not isinstance(first_item, tuple) or not isinstance(first_item[1], bytes):
+                    continue
+                raw = first_item[1]
                 msg = email_lib.message_from_bytes(raw)
 
                 from_addr = _decode_header_value(msg.get("From", ""))
@@ -371,7 +374,12 @@ async def reply_email(
                 return f"❌ Original email not found with Message-ID: {message_id}"
 
             _, msg_data = mail.fetch(msg_ids[0], "(RFC822)")
-            raw = msg_data[0][1]
+            if not msg_data:
+                return f"❌ Original email could not be fetched: {message_id}"
+            first_item = msg_data[0]
+            if not isinstance(first_item, tuple) or not isinstance(first_item[1], bytes):
+                return f"❌ Original email returned invalid content: {message_id}"
+            raw = first_item[1]
             original = email_lib.message_from_bytes(raw)
             original_from = original.get("From", "")
             original_subject = _decode_header_value(original.get("Subject", ""))

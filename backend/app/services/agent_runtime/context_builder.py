@@ -7,28 +7,28 @@ projection as execution state.
 
 from __future__ import annotations
 
+import math
+import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime
-import math
 from typing import TYPE_CHECKING, Any
-import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.models.chat_session import ChatSession
+from app.services.agent_runtime.session_context_completion import (
+    SessionCompactRequest,
+    SessionContextCompactor,
+)
 from app.services.agent_runtime.session_context_service import (
     MessagePosition,
     SessionContextPack,
     SessionContextService,
     SessionContextSnapshot,
-)
-from app.services.agent_runtime.session_context_completion import (
-    SessionCompactRequest,
-    SessionContextCompactor,
 )
 from app.services.agent_runtime.state import (
     JsonObject,
@@ -437,6 +437,8 @@ class ContextBuilder:
                         session_id=session_id,
                         cutoff=cutoff,
                     )
+                    if agent_id is None:
+                        raise ValueError("Group context requires a source Agent")
                     pack = await self._rebuild_group_context_pack(
                         tenant_id=tenant_id,
                         session_id=session_id,

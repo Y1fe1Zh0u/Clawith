@@ -10,7 +10,8 @@ import re
 import uuid
 from typing import Any
 
-from app.dao import query_dao
+from loguru import logger
+
 from app.core.security import hash_password_async
 from app.dao import (
     identity_dao,
@@ -18,15 +19,15 @@ from app.dao import (
     invitation_code_dao,
     org_member_dao,
     participant_dao,
+    query_dao,
     tenant_dao,
     user_dao,
 )
 from app.models.identity import IdentityProvider
 from app.models.tenant import Tenant
-from app.models.user import User, Identity
+from app.models.user import Identity, User
 from app.services.sso_service import sso_service
 from app.services.system_email_service import resolve_email_config_async
-from loguru import logger
 
 
 class RegistrationService:
@@ -220,7 +221,7 @@ class RegistrationService:
                 db,
                 lookup_provider_user_id,
                 provider_type,
-                tenant_id=tenant_id,
+                tenant_id=str(tenant_id) if tenant_id else None,
                 identity_data=user_info,
             )
             if existing:
@@ -233,7 +234,11 @@ class RegistrationService:
                     provider_type,
                     lookup_provider_user_id,
                     user_info,
-                    tenant_id=str(existing_user.tenant_id) if existing_user.tenant_id else tenant_id,
+                    tenant_id=(
+                        str(existing_user.tenant_id)
+                        if existing_user.tenant_id
+                        else (str(tenant_id) if tenant_id else None)
+                    ),
                 )
                 return existing_user, False
 
@@ -267,7 +272,7 @@ class RegistrationService:
         provider_type: str,
         code: str,
         auth_provider,
-    ) -> tuple[User, bool, str | None]:
+    ) -> tuple[User | None, bool, str | None]:
         """Register or login user via SSO."""
         try:
             token_data = await auth_provider.exchange_code_for_token(code)
@@ -289,7 +294,7 @@ class RegistrationService:
             tenant_id = None
             if email_addr:
                 tenant = await self.detect_tenant_by_email(email_addr)
-                tenant_id = tenant.id if tenant else None
+                tenant_id = str(tenant.id) if tenant else None
 
             lookup_provider_user_id = (
                 user_info_obj.provider_union_id or user_info_obj.provider_user_id
@@ -343,7 +348,7 @@ class RegistrationService:
         self,
         email: str | None = None,
         invitation_code: str | None = None,
-    ) -> tuple[Tenant | None, str]:
+    ) -> tuple[Tenant | None, str | None]:
         """Determine tenant for new user registration."""
         if invitation_code:
             inv = await invitation_code_dao.get_active_by_code(invitation_code)

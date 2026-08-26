@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 import json
 import re
-from typing import Protocol, cast
 import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Protocol, cast
 
 from app.models.llm import LLMModel
 from app.services.agent_runtime.command_worker import RuntimeSessionFactory
@@ -30,10 +30,9 @@ from app.services.agent_runtime.state import (
     RuntimeStateUpdate,
 )
 from app.services.llm.client import LLMMessage
-from app.services.llm.single_step import LLMCompletionStep, complete_llm_once
 from app.services.llm.model_resolution import load_active_model
+from app.services.llm.single_step import LLMCompletionStep, complete_llm_once
 from app.services.llm.utils import get_max_tokens
-
 
 _PLANNING_ROLE = "group_planning"
 _PLAN_VERSION = 2
@@ -345,13 +344,13 @@ def validate_planning_output(
             }
         )
 
-    return {
+    return cast(JsonObject, {
         "version": _PLAN_VERSION,
         "mode": cast(str, mode),
         "goal": goal,
         "plan_prompt": plan_prompt,
         "entry_steps": entries,
-    }
+    })
 
 
 def _parse_json_output(content: str | None) -> object:
@@ -640,7 +639,9 @@ class PlanningRuntimeNodeExecutor:
         if node == "model":
             return await self._model(state, context)
         if node == "terminal":
-            return {"lifecycle": dict(state["lifecycle"])}
+            return {
+                "lifecycle": cast(RuntimeLifecycle, dict(state["lifecycle"]))
+            }
         raise PlanningContractError(
             "invalid_planning_route",
             f"Planning Graph cannot execute {node}",

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from copy import deepcopy
 import fnmatch
 import hashlib
 import json
-from pathlib import Path
 import re
 import uuid
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -19,7 +19,6 @@ from app.models.org import OrgMember
 from app.models.participant import Participant
 from app.models.user import User
 from app.services import group_chat_service, group_file_service
-from app.services.agent_tools import _read_file_binary_error, read_document_bytes
 from app.services.agent_runtime.command_worker import RuntimeSessionFactory
 from app.services.agent_runtime.state import RuntimeContext, RuntimeGraphState
 from app.services.agent_runtime.tool_execution import (
@@ -28,8 +27,8 @@ from app.services.agent_runtime.tool_execution import (
     ToolExecutionReconciliationPending,
     assert_tool_execution_fence,
 )
+from app.services.agent_tools import _read_file_binary_error, read_document_bytes
 from app.services.builtin_tool_definitions import GROUP_RUNTIME_TOOL_DEFINITIONS
-
 
 _ACTIVE_AGENT_STATUSES = frozenset({"creating", "running", "idle"})
 GROUP_QUERY_MEMBERS = "group_query_members"
@@ -388,7 +387,8 @@ def _scope(
     agent: Agent,
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     initial_input = state["snapshots"].initial_input
-    if not isinstance(initial_input.get("group_context"), Mapping):
+    group_context = initial_input.get("group_context")
+    if not isinstance(group_context, Mapping):
         raise GroupRuntimeToolError(
             "group_tool_scope_unavailable",
             "Group tools require a validated group context snapshot",
@@ -403,7 +403,7 @@ def _scope(
             "group_tool_scope_invalid",
             "Group tool checkpoint scope is incomplete",
         ) from exc
-    context_agent = initial_input["group_context"].get("agent")
+    context_agent = group_context.get("agent")
     context_agent_id = (
         context_agent.get("agent_id") if isinstance(context_agent, Mapping) else None
     )
@@ -653,6 +653,11 @@ class GroupRuntimeToolService:
                         "write_file",
                         "edit_file",
                     }:
+                        if content is None:
+                            raise GroupRuntimeToolError(
+                                "workspace_content_missing",
+                                "Workspace write content is required",
+                            )
                         prepared = (
                             await group_file_service.prepare_runtime_workspace_write(
                                 db,

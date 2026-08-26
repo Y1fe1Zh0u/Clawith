@@ -153,6 +153,11 @@ async def _try_enqueue_runtime_task(
                     "agent_not_found",
                     "Task Agent does not exist",
                 )
+            if agent.tenant_id is None:
+                raise TaskRuntimeIntakeError(
+                    "agent_tenant_missing",
+                    "Task Agent does not belong to a tenant",
+                )
             with tenant_context(agent.tenant_id):
                 return await enqueue_task_runtime(
                     db,

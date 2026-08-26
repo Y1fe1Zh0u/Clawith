@@ -6,19 +6,40 @@ using Claude with extended thinking.
 """
 
 import argparse
+import importlib
 import json
 import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
-import anthropic
 from loguru import logger
 
-from scripts.utils import parse_skill_md
+anthropic = importlib.import_module("anthropic")
+parse_skill_md = importlib.import_module("scripts.utils").parse_skill_md
+
+
+class _ContentBlock(Protocol):
+    type: str
+    thinking: str
+    text: str
+
+
+class _MessageResponse(Protocol):
+    content: Sequence[_ContentBlock]
+
+
+class _MessagesClient(Protocol):
+    def create(self, **kwargs: object) -> _MessageResponse: ...
+
+
+class _AnthropicClient(Protocol):
+    messages: _MessagesClient
 
 
 def improve_description(
-    client: anthropic.Anthropic,
+    client: _AnthropicClient,
     skill_name: str,
     skill_content: str,
     current_description: str,

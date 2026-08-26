@@ -9,18 +9,20 @@ Runs as a background task inside the FastAPI process.
 
 import asyncio
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
+from sqlalchemy import or_, select, update
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging_config import new_trace_id
+from app.services.agent_runtime.state import JsonObject
 from app.services.heartbeat_runtime import (
     HeartbeatRuntimeIntakeError,
     enqueue_oneshot_runtime,
 )
-from sqlalchemy import select, update, or_
-from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.storage import agent_storage_key, get_storage_backend
 
 if TYPE_CHECKING:
@@ -61,7 +63,7 @@ Heartbeat privacy policy:
 async def _build_heartbeat_instruction(
     db: AsyncSession,
     agent: "Agent",
-) -> tuple[str, dict[str, list[dict[str, str]]]]:
+) -> tuple[str, JsonObject]:
     """Build a short directive plus bounded data and drain notifications."""
     instruction = DEFAULT_HEARTBEAT_INSTRUCTION
     storage = get_storage_backend()
@@ -148,10 +150,10 @@ async def _build_heartbeat_instruction(
     except Exception as exc:
         logger.warning("Failed to drain agent notifications: {}", exc)
 
-    return instruction, {
+    return instruction, cast(JsonObject, {
         "recent_activity": recent_activity_context,
         "inbox": inbox_context,
-    }
+    })
 
 
 def _is_in_active_hours(active_hours: str, tz_name: str = "UTC") -> bool:
@@ -187,6 +189,7 @@ async def _heartbeat_tick():
     from app.config import get_settings
     from app.database import async_session
     from app.models.agent import Agent
+    from app.models.tenant import Tenant
     from app.services.agent_runtime.config import decide_runtime_v2
     from app.services.audit_logger import write_audit_log
     from app.services.heartbeat_runtime import (
@@ -194,7 +197,6 @@ async def _heartbeat_tick():
         enqueue_heartbeat_runtime,
     )
     from app.services.timezone_utils import get_agent_timezone_sync
-    from app.models.tenant import Tenant
 
     new_trace_id()
     now = datetime.now(timezone.utc)
@@ -233,9 +235,12 @@ async def _heartbeat_tick():
                     agent.heartbeat_enabled = False
                     agent.status = "stopped"
                     continue
-
                 # Resolve timezone
-                tenant = tenants_by_id.get(agent.tenant_id)
+                tenant = (
+                    tenants_by_id.get(agent.tenant_id)
+                    if agent.tenant_id is not None
+                    else None
+                )
                 tz_name = get_agent_timezone_sync(agent, tenant)
 
                 # Check active hours (in agent's timezone)
@@ -277,7 +282,7 @@ async def _heartbeat_tick():
                             )
                             .values(last_heartbeat_at=now)
                         )
-                        if (claim_result.rowcount or 0) != 1:
+                        if (cast(CursorResult[Any], claim_result).rowcount or 0) != 1:
                             continue
                         instruction, heartbeat_context = await _build_heartbeat_instruction(
                             db,

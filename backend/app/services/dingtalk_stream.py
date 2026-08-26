@@ -21,7 +21,6 @@ from app.models.channel_config import ChannelConfig
 from app.services.dingtalk_token import dingtalk_token_manager
 from app.services.storage import store_agent_upload
 
-
 # ─── DingTalk Media Helpers ─────────────────────────────
 
 
@@ -468,7 +467,10 @@ class DingTalkStreamManager:
         class ClawithChatbotHandler(dingtalk_stream.ChatbotHandler):
             """Custom handler that dispatches messages to the Clawith LLM pipeline."""
 
-            async def process(self, callback: dingtalk_stream.CallbackMessage):
+            async def _process(
+                self,
+                message: dingtalk_stream.CallbackMessage,
+            ) -> tuple[int, str]:
                 """Handle incoming bot message from DingTalk Stream.
 
                 NOTE: The SDK invokes this method in the thread's own asyncio loop,
@@ -476,8 +478,8 @@ class DingTalkStreamManager:
                 """
                 try:
                     # Parse the raw data
-                    incoming = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
-                    msg_data = callback.data if isinstance(callback.data, dict) else json.loads(callback.data)
+                    incoming = dingtalk_stream.ChatbotMessage.from_dict(message.data)
+                    msg_data = message.data if isinstance(message.data, dict) else json.loads(message.data)
 
                     msgtype = msg_data.get("msgtype", "text")
                     sender_staff_id = incoming.sender_staff_id or incoming.sender_id or ""
@@ -554,6 +556,12 @@ class DingTalkStreamManager:
                     import traceback
                     traceback.print_exc()
                     return dingtalk_stream.AckMessage.STATUS_SYSTEM_EXCEPTION, str(e)
+
+        setattr(
+            ClawithChatbotHandler,
+            "process",
+            ClawithChatbotHandler._process,
+        )
 
         while not stop_event.is_set() and retries <= MAX_RETRIES:
             try:

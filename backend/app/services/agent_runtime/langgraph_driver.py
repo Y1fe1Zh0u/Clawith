@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import cast
-import uuid
 
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
@@ -22,8 +22,8 @@ from app.services.agent_runtime.command_worker import (
     RuntimeCommandRecord,
     RuntimeRunRecord,
 )
-from app.services.agent_runtime.contracts import RUNTIME_COMMAND_METADATA_KEY
 from app.services.agent_runtime.context_builder import ContextBuilder
+from app.services.agent_runtime.contracts import RUNTIME_COMMAND_METADATA_KEY
 from app.services.agent_runtime.graph import AgentRuntimeGraph
 from app.services.agent_runtime.state import (
     JsonObject,
@@ -33,7 +33,6 @@ from app.services.agent_runtime.state import (
     RuntimeNodeExecutor,
 )
 from app.services.llm.multimodal_content import parse_multimodal_content
-
 
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 _WAITING_RESUME_TYPES = {
@@ -434,7 +433,7 @@ class LangGraphRuntimeDriver:
                 run=run,
                 command=command,
             )
-            initial_state: RuntimeGraphState = {
+            initial_state = cast(RuntimeGraphState, {
                 "snapshots": snapshots,
                 "messages": [_initial_thread_message(run, snapshots)],
                 "lifecycle": {
@@ -448,7 +447,7 @@ class LangGraphRuntimeDriver:
                     "verification_attempt_count": 0,
                     "pending_tool_calls": [],
                 },
-            }
+            })
             await graph.compiled.ainvoke(
                 initial_state,
                 config,

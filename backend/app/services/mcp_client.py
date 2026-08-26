@@ -10,10 +10,10 @@ because its response was lost on one transport.
 Reference: https://modelcontextprotocol.io/docs
 """
 
-import httpx
 import json
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+import httpx
 from loguru import logger
 
 
@@ -147,6 +147,7 @@ class MCPClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         messages_url = None
+        event_type = ""
 
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             async with client.stream("GET", sse_url, headers=headers) as resp:

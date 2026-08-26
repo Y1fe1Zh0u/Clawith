@@ -7,7 +7,7 @@ from typing import Any, Callable, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
+from langgraph.graph.state import CompiledStateGraph, StateNode
 from langgraph.runtime import Runtime
 from langgraph.types import RetryPolicy, interrupt
 
@@ -22,10 +22,9 @@ from app.services.agent_runtime.state import (
     runtime_messages_as_json,
 )
 from app.services.agent_runtime.tool_execution import (
-    RetryableToolNodeError,
     SAFE_READ_MAX_ATTEMPTS,
+    RetryableToolNodeError,
 )
-
 
 CONTROL_GUARD_NODE = "control_guard"
 COMPACT_NODE = "compact_run_if_needed"
@@ -110,7 +109,12 @@ class AgentRuntimeGraph:
     """Currently deployed compiled graph plus its trace identity."""
 
     identity: RuntimeGraphIdentity
-    compiled: CompiledStateGraph
+    compiled: CompiledStateGraph[
+        RuntimeGraphState,
+        RuntimeContext,
+        RuntimeGraphState,
+        RuntimeGraphState,
+    ]
 
 
 def _require_invocation_scope(
@@ -193,19 +197,19 @@ async def _execute_node(
 def _make_node(
     node: RuntimeNodeName,
     identity: RuntimeGraphIdentity,
-) -> Callable[[RuntimeGraphState, Runtime[RuntimeContext]], Any]:
+) -> StateNode[RuntimeGraphState, RuntimeContext]:
     async def execute(
         state: RuntimeGraphState,
         runtime: Runtime[RuntimeContext],
     ) -> RuntimeStateUpdate:
         return await _execute_node(node, state, runtime, identity)
 
-    return execute
+    return cast(StateNode[RuntimeGraphState, RuntimeContext], execute)
 
 
 def _make_wait_node(
     identity: RuntimeGraphIdentity,
-) -> Callable[[RuntimeGraphState, Runtime[RuntimeContext]], Any]:
+) -> StateNode[RuntimeGraphState, RuntimeContext]:
     async def wait_for_resume(
         state: RuntimeGraphState,
         runtime: Runtime[RuntimeContext],
@@ -223,7 +227,7 @@ def _make_wait_node(
             resume_value=resume_value,
         )
 
-    return wait_for_resume
+    return cast(StateNode[RuntimeGraphState, RuntimeContext], wait_for_resume)
 
 
 def route_after_control(state: RuntimeGraphState) -> ControlRoute:

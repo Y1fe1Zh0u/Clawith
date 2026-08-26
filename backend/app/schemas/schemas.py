@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import cast
 
 from pydantic import BaseModel, EmailStr, Field, field_serializer, field_validator
 
@@ -488,7 +489,7 @@ class ChannelConfigOut(BaseModel):
         """
         if value is None:
             return None
-        return _redact_channel_secrets(value)
+        return cast(dict, _redact_channel_secrets(value))
 
 
 _CHANNEL_SECRET_KEY_PARTS = (

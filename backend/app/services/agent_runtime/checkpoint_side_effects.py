@@ -582,7 +582,7 @@ async def _record_direct_tool_history(
         db,
         tenant_id=run.tenant_id,
         agent_id=uuid.UUID(run.agent_id),
-        session_id=run.session_id,
+        session_id=uuid.UUID(run.session_id),
         run_id=run.run_id,
     )
 
@@ -892,9 +892,11 @@ class RuntimeCheckpointSideEffects:
                     and delivery.lifecycle_status == "completed"
                 ):
                     try:
+                        if run.agent_id is None:
+                            raise ValueError("Run citation telemetry requires an Agent")
                         await record_experience_citations(
                             delivery.content,
-                            agent_id=run.agent_id,
+                            agent_id=uuid.UUID(run.agent_id),
                             session_id=receipt.actual_session_id,
                             message_id=receipt.message_id,
                         )

@@ -11,17 +11,36 @@ from loguru import logger
 
 
 async def main():
+    from sqlalchemy import select
+
     from app.database import async_session
     from app.models import (  # noqa: F401
-        activity_log, agent, audit, channel_config, chat_session,
-        gateway_message, identity, invitation_code, llm, notification, org,
-        participant, plaza, schedule, skill, system_settings, task,
-        tenant, tenant_setting, tool, trigger, user,
+        activity_log,
+        agent,
+        audit,
+        channel_config,
+        chat_session,
+        gateway_message,
+        identity,
+        invitation_code,
+        llm,
+        notification,
+        org,
+        participant,
+        plaza,
+        schedule,
+        skill,
+        system_settings,
+        task,
+        tenant,
+        tenant_setting,
+        tool,
+        trigger,
+        user,
     )
     from app.models.identity import IdentityProvider
     from app.models.org import OrgDepartment, OrgMember
     from app.services.org_sync_adapter import build_department_path_map
-    from sqlalchemy import select
 
     async with async_session() as db:
         provider_result = await db.execute(select(IdentityProvider.id))
@@ -39,7 +58,7 @@ async def main():
             if not departments:
                 continue
 
-            path_map = build_department_path_map(departments)
+            path_map = build_department_path_map(list(departments))
             for dept in departments:
                 new_path = path_map.get(dept.id, (dept.name or "").strip())
                 if dept.path != new_path:

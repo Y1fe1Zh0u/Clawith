@@ -11,44 +11,67 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from sqlalchemy import or_, select, update
 
 import httpx
 from loguru import logger
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dao import query_dao
 from app.models.identity import IdentityProvider
 from app.models.org import OrgDepartment, OrgMember
-from app.models.user import User, Identity
+from app.models.user import Identity, User
 
 try:
-    from anyascii import anyascii as _anyascii
+    from anyascii import anyascii as _anyascii_impl
 except ImportError:  # pragma: no cover - lightweight fallback for minimal test envs
-    def _anyascii(value: str) -> str:
-        return value
+    _anyascii_impl = None
+
+
+def _anyascii(value: str) -> str:
+    return _anyascii_impl(value) if _anyascii_impl is not None else value
+
 
 try:
-    from pypinyin import Style, lazy_pinyin, pinyin
+    from pypinyin import Style as _PinyinStyle
+    from pypinyin import lazy_pinyin as _lazy_pinyin_impl
+    from pypinyin import pinyin as _pinyin_impl
+
+    _FIRST_LETTER_STYLE: object = _PinyinStyle.FIRST_LETTER
 except ImportError:  # pragma: no cover - lightweight fallback for minimal test envs
-    class Style:
-        FIRST_LETTER = "first_letter"
+    _lazy_pinyin_impl = None
+    _pinyin_impl = None
+    _FIRST_LETTER_STYLE = "first_letter"
 
-    def lazy_pinyin(value: str, errors: str = "default") -> list[str]:
-        ascii_value = _anyascii(value)
-        return list(ascii_value) if ascii_value else list(value)
 
-    def pinyin(value: str, style: str | None = None) -> list[list[str]]:
-        ascii_value = _anyascii(value) or value
-        if style == Style.FIRST_LETTER:
-            return [[ch.lower()] for ch in ascii_value if ch.strip()]
-        return [[ascii_value]]
+def lazy_pinyin(value: str, errors: str = "default") -> list[str]:
+    if _lazy_pinyin_impl is not None:
+        return list(_lazy_pinyin_impl(value, errors=errors))
+    ascii_value = _anyascii(value)
+    return list(ascii_value) if ascii_value else list(value)
+
+
+def pinyin(value: str, *, first_letter: bool = False) -> list[list[str]]:
+    if _pinyin_impl is not None:
+        if first_letter:
+            from pypinyin import Style
+
+            return [
+                list(item)
+                for item in _pinyin_impl(value, style=Style.FIRST_LETTER)
+            ]
+        return [list(item) for item in _pinyin_impl(value)]
+    ascii_value = _anyascii(value) or value
+    if first_letter:
+        return [[ch.lower()] for ch in ascii_value if ch.strip()]
+    return [[ascii_value]]
+
+from jose import jwt
 
 from app.config import get_settings
 from app.core.security import decrypt_data
 from app.services.auth_provider import GoogleWorkspaceAuthProvider
 from app.services.google_workspace_oauth import GOOGLE_HTTP_PROXY
-from jose import jwt
 
 
 def _utcnow() -> datetime:
@@ -129,7 +152,11 @@ async def derive_member_department_paths(
     dept_path_map = build_department_path_map(list(departments.values()))
 
     return {
-        member.id: dept_path_map.get(member.department_id, member.department_path or "")
+        member.id: (
+            dept_path_map.get(member.department_id, member.department_path or "")
+            if member.department_id is not None
+            else (member.department_path or "")
+        )
         for member in members
     }
 
@@ -190,6 +217,7 @@ class BaseOrgSyncAdapter(ABC):
             tenant_id: Tenant ID for org sync
         """
         self.provider = provider
+        self.provider_id = provider.id if provider is not None else None
         self.config = config or {}
         self.tenant_id = tenant_id
         self._client: httpx.AsyncClient | None = None
@@ -353,7 +381,7 @@ class BaseOrgSyncAdapter(ABC):
 
     async def _update_member_counts(self, db: AsyncSession, provider_id: uuid.UUID):
         """Update member_count for all departments to include all their recursive sub-department members."""
-        from sqlalchemy import update, select, func
+        from sqlalchemy import func, select, update
 
         # 1. Update all departments to show their DIRECT member counts
         direct_subquery = (
@@ -611,7 +639,7 @@ class BaseOrgSyncAdapter(ABC):
             # 1. pypinyin converts CJK characters to pinyin
             # 2. anyascii handles remaining non-ASCII scripts (Korean, Japanese kana, Arabic, etc.)
             existing_member.name_translit_full = _anyascii("".join(lazy_pinyin(user.name, errors="default")))
-            existing_member.name_translit_initial = "".join([i[0] for i in pinyin(user.name, style=Style.FIRST_LETTER)])
+            existing_member.name_translit_initial = "".join([i[0] for i in pinyin(user.name, first_letter=True)])
             
             if email is not None:
                 existing_member.email = email
@@ -638,7 +666,7 @@ class BaseOrgSyncAdapter(ABC):
             # 1. pypinyin converts CJK characters to pinyin
             # 2. anyascii handles remaining non-ASCII scripts (Korean, Japanese kana, Arabic, etc.)
             translit_full = _anyascii("".join(lazy_pinyin(user.name, errors="default")))
-            translit_initial = "".join([i[0] for i in pinyin(user.name, style=Style.FIRST_LETTER)])
+            translit_initial = "".join([i[0] for i in pinyin(user.name, first_letter=True)])
             
             new_member = OrgMember(
                 external_id=user.external_id,
@@ -666,7 +694,11 @@ class BaseOrgSyncAdapter(ABC):
         # Sync email/phone from OrgMember to User (if linked)
         target_user = platform_user
         if not target_user and (user_id or (existing_member and existing_member.user_id)):
-            target_id = user_id or existing_member.user_id
+            target_id = user_id or (
+                existing_member.user_id if existing_member is not None else None
+            )
+            if target_id is None:
+                return stats
             user_res = await query_dao.execute(db, select(User).where(User.id == target_id))
             target_user = user_res.scalars().first()
 
@@ -1458,7 +1490,10 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
             data = resp.json()
             if resp.status_code >= 400 or "access_token" not in data:
                 raise RuntimeError(f"Google OAuth token error: {data}")
-            self._access_token = data["access_token"]
+            access_token = data["access_token"]
+            if not isinstance(access_token, str) or not access_token:
+                raise RuntimeError("Google OAuth token omitted access_token")
+            self._access_token = access_token
             expires_in = int(data.get("expires_in") or 3600)
             self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
             return self._access_token
@@ -1477,7 +1512,10 @@ class GoogleWorkspaceOrgSyncAdapter(BaseOrgSyncAdapter):
         data = await provider.refresh_access_token(self.admin_refresh_token)
         if "access_token" not in data:
             raise RuntimeError(f"Google OAuth refresh error: {data}")
-        self._access_token = data["access_token"]
+        access_token = data["access_token"]
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError("Google OAuth refresh omitted access_token")
+        self._access_token = access_token
         expires_in = int(data.get("expires_in") or 3600)
         self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
         return self._access_token

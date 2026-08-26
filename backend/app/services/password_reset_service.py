@@ -71,6 +71,8 @@ async def consume_password_reset_token(raw_token: str) -> dict | None:
     if not identity_id_str:
         return None
         
+    if isinstance(identity_id_str, bytes):
+        identity_id_str = identity_id_str.decode("utf-8")
     identity_id = uuid.UUID(identity_id_str)
     user_key = f"{USER_PREFIX}{identity_id}"
     

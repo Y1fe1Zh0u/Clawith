@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import logging
 from typing import Literal
-import uuid
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,12 +25,12 @@ from app.services.agent_runtime.adapter import (
     RuntimeCommandIntake,
 )
 from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
-from app.services.agent_runtime.persistence import RuntimePersistenceError
 from app.services.agent_runtime.model_capabilities import (
     PlatformModelConfigurationError,
     resolve_multi_agent_planning_model,
 )
-
+from app.services.agent_runtime.persistence import RuntimePersistenceError
+from app.services.agent_runtime.state import JsonObject
 
 _ACTIVE_AGENT_STATUSES = frozenset({"creating", "running", "idle"})
 _MAX_CONTENT_LENGTH = 1_000_000
@@ -67,7 +67,7 @@ class ResolvedGroupMention:
     agent: Agent | None = None
     model: LLMModel | None = None
 
-    def payload(self) -> dict[str, object]:
+    def payload(self) -> JsonObject:
         return {
             "participant_id": str(self.participant_id),
             "participant_type": self.participant_type,
@@ -290,6 +290,7 @@ async def _resolve_mentions(
     users: dict[uuid.UUID, User] = {}
     agents: dict[uuid.UUID, Agent] = {}
     models: dict[uuid.UUID, LLMModel] = {}
+    default_model_id: uuid.UUID | None = None
     if user_ref_ids:
         user_result = await db.execute(
             select(User).where(
@@ -367,19 +368,23 @@ async def _resolve_mentions(
         if participant.type != "agent":
             output.append(_invalid_mention(participant_id, reason="participant_type_invalid"))
             continue
+        if participant.ref_id is None:
+            output.append(_invalid_mention(participant_id, reason="agent_unavailable"))
+            continue
         agent = agents.get(participant.ref_id)
         if agent is None:
             output.append(_invalid_mention(participant_id, reason="agent_unavailable"))
             continue
         model = next(
             (
-                models[model_id]
+                candidate
                 for model_id in (
                     agent.primary_model_id,
                     agent.fallback_model_id,
                     default_model_id,
                 )
-                if model_id in models
+                if model_id is not None
+                if (candidate := models.get(model_id)) is not None
             ),
             None,
         )
@@ -687,7 +692,9 @@ async def enqueue_group_message(
             RuntimePersistenceError,
         ) as exc:
             error_code = (
-                exc.code if hasattr(exc, "code") else "planning_model_unavailable"
+                exc.code
+                if isinstance(exc, (RuntimeAdapterError, RuntimePersistenceError))
+                else "planning_model_unavailable"
             )
             error_message = _planning_public_error_message(error_code)
             logger.warning(
@@ -725,6 +732,7 @@ async def enqueue_group_message(
             new_public_messages=(message,) if created else (),
         )
 
+    target = next(iter(agent_mentions))
     try:
         handle = await adapter.start_run(
             _single_mention_command(
@@ -732,7 +740,7 @@ async def enqueue_group_message(
                 scope=scope,
                 message=message,
                 mentions=mentions,
-                target=agent_mentions[0],
+                target=target,
             )
         )
     except (RuntimeAdapterError, RuntimePersistenceError) as exc:
@@ -780,7 +788,7 @@ async def list_group_messages(
     if after is not None:
         statement = (
             statement.where(
-                tuple_(ChatMessage.created_at, ChatMessage.id) > tuple_(after[0], after[1])
+                tuple_(ChatMessage.created_at, ChatMessage.id) > after
             )
             .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
             .limit(limit)
@@ -790,7 +798,7 @@ async def list_group_messages(
 
     if before is not None:
         statement = statement.where(
-            tuple_(ChatMessage.created_at, ChatMessage.id) < tuple_(before[0], before[1])
+            tuple_(ChatMessage.created_at, ChatMessage.id) < before
         )
     statement = statement.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(limit)
     result = await db.execute(statement)

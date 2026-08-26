@@ -11,11 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.dao.chat_message_dao import chat_message_dao
 from app.core.permissions import (
     evaluate_agent_relationship_status,
     evaluate_roster_agent_visibility,
 )
+from app.dao.chat_message_dao import chat_message_dao
 from app.models.agent import Agent
 from app.models.agent_run import AgentRun
 from app.models.agent_tool_execution import AgentToolExecution
@@ -450,7 +450,7 @@ async def _resolve_target(
             "a2a_relationship_missing",
             f"Agent {source_agent.name} has no relationship with {target.name}",
         )
-    relationship.__dict__["target_agent"] = target
+    relationship.target_agent = target
     relationship_status = await evaluate_agent_relationship_status(
         db,
         relationship,

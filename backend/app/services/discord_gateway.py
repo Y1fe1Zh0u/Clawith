@@ -10,7 +10,7 @@ Requires:  pip install discord.py>=2.3.0
 
 import asyncio
 import uuid
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from loguru import logger
 from sqlalchemy import select
@@ -24,6 +24,9 @@ try:
 except ImportError:
     discord = None  # type: ignore
     _HAS_DISCORD = False
+if TYPE_CHECKING:
+    from discord import Client as DiscordClient
+    from discord import Message as DiscordMessage
 
 if not _HAS_DISCORD:
     logger.warning(
@@ -39,7 +42,7 @@ class DiscordGatewayManager:
     """Manages Discord Gateway bot clients for all agents."""
 
     def __init__(self):
-        self._clients: Dict[uuid.UUID, discord.Client] = {}
+        self._clients: Dict[uuid.UUID, DiscordClient] = {}
         self._tasks: Dict[uuid.UUID, asyncio.Task] = {}
 
     async def start_client(
@@ -50,7 +53,7 @@ class DiscordGatewayManager:
         stop_existing: bool = True,
     ):
         """Start a Discord Gateway client for the given agent."""
-        if not _HAS_DISCORD:
+        if not _HAS_DISCORD or discord is None:
             logger.warning("[Discord GW] discord.py not installed, cannot start client")
             return
         if not bot_token:
@@ -58,6 +61,7 @@ class DiscordGatewayManager:
             return
 
         logger.info(f"[Discord GW] Starting Gateway client for agent {agent_id}")
+        login_failure = discord.LoginFailure
 
         # Stop existing client if any
         if stop_existing and agent_id in self._tasks:
@@ -71,13 +75,16 @@ class DiscordGatewayManager:
 
         @client.event
         async def on_ready():
+            if client.user is None:
+                logger.warning("[Discord GW] Client became ready without a bot user")
+                return
             logger.info(
                 f"[Discord GW] Bot connected for agent {agent_id}: "
                 f"{client.user.name}#{client.user.discriminator} ({client.user.id})"
             )
 
         @client.event
-        async def on_message(message: discord.Message):
+        async def on_message(message: DiscordMessage):
             # Ignore own messages
             if message.author == client.user:
                 return
@@ -119,7 +126,7 @@ class DiscordGatewayManager:
                 await client.start(bot_token, reconnect=True)
             except asyncio.CancelledError:
                 logger.info(f"[Discord GW] Bot task cancelled for agent {agent_id}")
-            except discord.LoginFailure:
+            except login_failure:
                 logger.error(f"[Discord GW] Invalid bot token for agent {agent_id}")
             except Exception as e:
                 logger.exception(f"[Discord GW] Bot error for agent {agent_id}: {e}")
@@ -135,7 +142,7 @@ class DiscordGatewayManager:
     async def _handle_message(
         self,
         agent_id: uuid.UUID,
-        message: "discord.Message",
+        message: DiscordMessage,
         user_text: str,
     ) -> Optional[str]:
         """Attach an incoming Discord message to the durable Agent Runtime."""

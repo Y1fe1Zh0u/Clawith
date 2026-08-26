@@ -1,7 +1,7 @@
 """Canonical, backward-compatible HTTP error responses."""
 
-from http import HTTPStatus
 import re
+from http import HTTPStatus
 from typing import Any, NotRequired, TypedDict
 
 from fastapi import FastAPI, Request
@@ -223,6 +223,18 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 def register_error_handlers(app: FastAPI) -> None:
     """Install the canonical handlers on a FastAPI application."""
-    app.add_exception_handler(HTTPException, http_exception_handler)
-    app.add_exception_handler(RequestValidationError, request_validation_error_handler)
+    async def handle_http(request: Request, exc: Exception) -> JSONResponse:
+        if not isinstance(exc, HTTPException):
+            raise TypeError("HTTPException handler received an invalid exception")
+        return await http_exception_handler(request, exc)
+
+    async def handle_validation(request: Request, exc: Exception) -> JSONResponse:
+        if not isinstance(exc, RequestValidationError):
+            raise TypeError(
+                "RequestValidationError handler received an invalid exception"
+            )
+        return await request_validation_error_handler(request, exc)
+
+    app.add_exception_handler(HTTPException, handle_http)
+    app.add_exception_handler(RequestValidationError, handle_validation)
     app.add_exception_handler(Exception, unhandled_exception_handler)

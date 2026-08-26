@@ -3,9 +3,10 @@
 import os
 import time
 
+from loguru import logger
+
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
-from loguru import logger
 
 # Lazy import docker to make it optional
 _docker = None
@@ -146,6 +147,7 @@ class DockerBackend(BaseSandboxBackend):
         # Network config
         network = None if not self.config.allow_network else "bridge"
 
+        container = None
         try:
             # Pull image if needed
             try:
@@ -158,13 +160,13 @@ class DockerBackend(BaseSandboxBackend):
             container = self.client.containers.run(
                 image,
                 cmd,
-                detach=False,
+                detach=True,
                 mem_limit=memory_limit,
                 cpu_period=100000,  # Docker default
                 cpu_quota=int(float(cpu_limit) * 100000),
                 network_mode=network,
                 environment=env,
-                remove=True,
+                remove=False,
                 stdout=True,
                 stderr=True,
             )
@@ -212,3 +214,9 @@ class DockerBackend(BaseSandboxBackend):
                 duration_ms=duration_ms,
                 error=f"Docker execution error: {error_msg[:200]}"
             )
+        finally:
+            if container is not None:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    logger.warning("[Docker] Failed to remove execution container")

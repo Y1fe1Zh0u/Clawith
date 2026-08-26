@@ -1,24 +1,24 @@
 """Seed default agents (Morty & Meeseeks) on first platform startup."""
 
 import uuid
+from collections.abc import Mapping
 
 from loguru import logger
-
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy.exc import IntegrityError
 
+from app.config import get_settings
 from app.database import async_session
 from app.models.agent import Agent, AgentPermission
+from app.models.okr import OKRSettings
 from app.models.org import AgentAgentRelationship
 from app.models.skill import Skill
 from app.models.tenant_setting import TenantSetting
-from app.models.tool import Tool, AgentTool
+from app.models.tool import AgentTool, Tool
 from app.models.trigger import AgentTrigger
 from app.models.user import User
-from app.models.okr import OKRSettings
-from app.config import get_settings
 from app.services.agent_manager import agent_manager
 from app.services.storage import get_storage_backend, store_agent_bytes
 
@@ -74,7 +74,7 @@ def _parse_legacy_default_agent_ids(marker: str) -> dict[str, uuid.UUID | None]:
 
 
 def _default_agent_setting_value(
-    agent_ids: dict[str, uuid.UUID | None],
+    agent_ids: Mapping[str, uuid.UUID | None],
     *,
     source: str,
 ) -> dict:
@@ -99,7 +99,7 @@ async def _lock_default_agent_seed(db: AsyncSession, tenant_id: uuid.UUID) -> No
 async def _load_default_agents_by_ids(
     db: AsyncSession,
     tenant_id: uuid.UUID,
-    agent_ids: dict[str, uuid.UUID | None],
+    agent_ids: Mapping[str, uuid.UUID | None],
 ) -> dict[str, Agent | None]:
     wanted_ids = {agent_id for agent_id in agent_ids.values() if agent_id is not None}
     if not wanted_ids:
@@ -143,7 +143,7 @@ async def _load_historical_default_agents(
 
 async def _repair_seeded_default_agents(
     db: AsyncSession,
-    agents: dict[str, Agent | None],
+    agents: Mapping[str, Agent | None],
     *,
     created_keys: set[str] | None = None,
 ) -> None:
@@ -177,7 +177,7 @@ async def _repair_seeded_default_agents(
 
 
 async def _append_default_agent_seed_marker(
-    agent_ids: dict[str, uuid.UUID | None],
+    agent_ids: Mapping[str, uuid.UUID | None],
 ) -> None:
     """Preserve other bootstrap entries while recording default-Agent IDs."""
     await _append_seed_marker("seeded")
@@ -407,7 +407,7 @@ MEESEEKS_SKILLS = [
 
 async def seed_default_agents():
     """Initialize default Agents once, then only repair surviving Agent storage."""
-    marker_ids_to_write: dict[str, uuid.UUID | None] | None = None
+    marker_ids_to_write: Mapping[str, uuid.UUID | None] | None = None
     async with async_session() as db:
         # Get platform admin as creator
         admin_result = await db.execute(
@@ -416,6 +416,11 @@ async def seed_default_agents():
         admin = admin_result.scalar_one_or_none()
         if not admin:
             logger.warning("[AgentSeeder] No platform admin found, skipping default agents")
+            return
+        if admin.tenant_id is None:
+            logger.warning(
+                "[AgentSeeder] Platform admin has no tenant, skipping default agents"
+            )
             return
 
         await _lock_default_agent_seed(db, admin.tenant_id)

@@ -4,21 +4,20 @@ This module provides a base class for all identity providers (Feishu, DingTalk, 
 and concrete implementations for each supported provider.
 """
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 import httpx
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dao import query_dao
 from app.models.identity import IdentityProvider
-from app.models.user import User, Identity
+from app.models.user import Identity, User
 from app.services.google_workspace_oauth import GOOGLE_HTTP_PROXY
 from app.services.identity_provider_lookup import get_preferred_identity_provider
-from loguru import logger
 
 
 @dataclass
@@ -32,7 +31,7 @@ class ExternalUserInfo:
     email: str = ""
     avatar_url: str = ""
     mobile: str = ""
-    raw_data: dict = None
+    raw_data: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.raw_data is None:
@@ -109,7 +108,11 @@ class BaseAuthProvider(ABC):
         await self._ensure_provider(db, tenant_id)
 
         # 1. Try lookup via sso_service (which now uses OrgMember)
-        provider_user_id = user_info.provider_user_id
+        provider_user_id = (
+            user_info.provider_user_id or user_info.provider_union_id
+        )
+        if not provider_user_id:
+            raise ValueError("Provider user identity is missing")
         user = await sso_service.resolve_user_identity(
             db,
             provider_user_id,
@@ -210,8 +213,9 @@ class BaseAuthProvider(ABC):
         self, db: AsyncSession, user_info: ExternalUserInfo, tenant_id: str | None
     ) -> User:
         """Create new user from external identity."""
-        from app.services.registration_service import registration_service
         import uuid
+
+        from app.services.registration_service import registration_service
         
         # 1. Prepare user fields and resolve global identity
         effective_id = user_info.provider_user_id or user_info.provider_union_id or "unknown"
@@ -299,8 +303,11 @@ class FeishuAuthProvider(BaseAuthProvider):
                 json={"app_id": self.app_id, "app_secret": self.app_secret},
             )
             data = resp.json()
-            self._app_access_token = data.get("app_access_token", "")
-            return self._app_access_token
+            access_token = data.get("app_access_token")
+            if not isinstance(access_token, str) or not access_token:
+                raise RuntimeError("Feishu response omitted app_access_token")
+            self._app_access_token = access_token
+            return access_token
 
     async def exchange_code_for_token(self, code: str, redirect_uri: str | None = None) -> dict:
         app_token = await self.get_app_access_token()

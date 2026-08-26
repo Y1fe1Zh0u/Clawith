@@ -1,20 +1,21 @@
 """Resource discovery — search Smithery & ModelScope registries and import MCP servers."""
 
 import uuid
+from collections.abc import Sequence
 from urllib.parse import quote, urlparse
 
 import httpx
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import delete, select
+
 from app.database import async_session
-from app.models.tool import Tool, AgentTool
+from app.models.tool import AgentTool, Tool
+from app.services.agent_runtime.tool_execution import ToolExecutionOutcome
 from app.services.tool_config import (
     decrypt_sensitive_fields,
     get_tenant_tool_config,
     set_tenant_tool_config,
 )
-from app.services.agent_runtime.tool_execution import ToolExecutionOutcome
-
 
 # ── Smithery Registry Search ────────────────────────────────────
 
@@ -493,8 +494,8 @@ async def _existing_smithery_import_outcome(
     *,
     display_name: str,
     server_id: str,
-    existing_tools: list[Tool],
-    assignments: list[AgentTool],
+    existing_tools: Sequence[Tool],
+    assignments: Sequence[AgentTool],
     api_key: str,
 ) -> ToolExecutionOutcome:
     """Re-check an already imported connection instead of trusting local rows."""
@@ -894,7 +895,7 @@ async def import_mcp_from_smithery_outcome(
             old_generic = old_generic_r.scalar_one_or_none()
             if old_generic:
                 await db.execute(
-                    AgentTool.__table__.delete().where(AgentTool.tool_id == old_generic.id)
+                    delete(AgentTool).where(AgentTool.tool_id == old_generic.id)
                 )
                 await db.delete(old_generic)
                 await db.flush()

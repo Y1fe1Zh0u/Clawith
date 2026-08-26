@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +20,8 @@ from app.models.chat_session import ChatSession
 from app.models.llm import LLMModel
 from app.models.user import User
 from app.services.agent_runtime.adapter import RuntimeCommandIntake
-from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.channel_delivery import build_channel_delivery_route
+from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.contracts import (
     ResumeRunCommand,
     RunHandle,
@@ -29,15 +29,15 @@ from app.services.agent_runtime.contracts import (
     StartRunCommand,
 )
 from app.services.agent_runtime.run_state_reader import (
-    RunStateReadError,
     RunStateReader,
+    RunStateReadError,
 )
+from app.services.agent_runtime.state import JsonObject
 from app.services.llm.multimodal_content import (
     MultimodalContentError,
     parse_multimodal_content,
 )
 from app.services.participant_identity import get_or_create_user_participant
-
 
 _ACTIVE_AGENT_STATUSES = frozenset({"creating", "running", "idle"})
 _ONBOARDING_SOURCE_PREFIX = "onboarding"
@@ -662,7 +662,7 @@ async def enqueue_chat_runtime(
         )
 
     source_execution_id = normalized_source_execution_id or f"chat:{resolved_message_id}"
-    delivery_target = (
+    delivery_target: JsonObject = (
         {
             "kind": "direct",
             "session_id": str(session.id),

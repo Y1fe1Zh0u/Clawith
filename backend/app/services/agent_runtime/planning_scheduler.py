@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import logging
 import uuid
+from collections.abc import Mapping, Sequence
+from typing import cast
 
 from sqlalchemy import select
 
@@ -20,15 +21,15 @@ from app.services.agent_runtime.command_worker import (
 from app.services.agent_runtime.contracts import StartRunCommand
 from app.services.agent_runtime.delivery import DeliveryRequest, deliver_runtime_message
 from app.services.agent_runtime.planning import checkpoint_plan
+from app.services.agent_runtime.state import JsonObject
 from app.services.group_message_service import (
     GroupMessageServiceError,
     ResolvedGroupMention,
-    _SenderScope,
     _load_sender_scope,
     _resolve_mentions,
+    _SenderScope,
 )
 from app.services.group_realtime import publish_stored_group_message
-
 
 _PLANNING_ROLE = "group_planning"
 logger = logging.getLogger(__name__)
@@ -57,13 +58,18 @@ def _uuid(value: object, *, field: str) -> uuid.UUID:
         ) from exc
 
 
-def _required_mapping(value: object, *, field: str) -> Mapping[object, object]:
+def _required_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise PlanningSchedulingError(
             "invalid_planning_checkpoint",
             f"{field} must be an object",
         )
-    return value
+    if any(not isinstance(key, str) for key in value):
+        raise PlanningSchedulingError(
+            "invalid_planning_checkpoint",
+            f"{field} keys must be strings",
+        )
+    return cast(Mapping[str, object], value)
 
 
 def _required_sequence(value: object, *, field: str) -> Sequence[object]:
@@ -309,7 +315,11 @@ def _entry_command(
     instruction = entry["instruction"]
     mode = plan["mode"]
     plan_prompt = plan["plan_prompt"]
-    if not all(isinstance(value, str) for value in (instruction, mode, plan_prompt)):
+    if (
+        not isinstance(instruction, str)
+        or not isinstance(mode, str)
+        or not isinstance(plan_prompt, str)
+    ):
         raise PlanningSchedulingError(
             "invalid_planning_checkpoint",
             "Planning text fields must be strings",
@@ -337,7 +347,7 @@ def _entry_command(
             "group_id": str(scope.group.id),
         },
         idempotency_key=f"start:{source_execution_id}",
-        payload={
+        payload=cast(JsonObject, {
             "message_id": str(message.id),
             "group_id": str(scope.group.id),
             "session_id": str(scope.session.id),
@@ -352,7 +362,7 @@ def _entry_command(
                 "created_at": message.created_at.isoformat(),
             },
             "source_channel": scope.session.source_channel,
-        },
+        }),
         origin_user_id=root.origin_user_id,
         origin_agent_id=root.origin_agent_id,
         actor_user_id=root.origin_user_id,

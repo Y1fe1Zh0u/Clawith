@@ -2,6 +2,7 @@
 
 from loguru import logger
 from sqlalchemy import select
+
 from app.dao import query_dao
 from app.models.tenant import Tenant
 from app.models.tenant_setting import TenantSetting
@@ -108,8 +109,8 @@ BUILTIN_TOOLS = BUILTIN_TOOL_SEEDS
 
 async def seed_builtin_tools():
     """Insert or update builtin tools in the database."""
-    from app.models.tool import AgentTool
     from app.models.agent import Agent
+    from app.models.tool import AgentTool
 
 
     async with query_dao.session() as db:
@@ -468,8 +469,9 @@ async def clean_orphaned_mcp_tools():
     shared Tool record remains. We run this periodically/on-startup to prevent
     the database from filling up with abandoned tool records.
     """
-    from app.models.tool import AgentTool
     from sqlalchemy import and_, delete
+
+    from app.models.tool import AgentTool
     
     async with query_dao.session() as db:
         # 1. Get all currently assigned tool IDs
@@ -478,13 +480,10 @@ async def clean_orphaned_mcp_tools():
         
         # 2. Delete MCP tools that have NO tenant_id AND are NOT in the assigned list
         # tenant_id == None ensures we don't delete Global Tools manually added by company admins
-        stmt = delete(Tool).where(
-            and_(
-                Tool.type == "mcp",
-                Tool.tenant_id.is_(None),
-                ~Tool.id.in_(assigned_ids) if assigned_ids else True
-            )
-        )
+        conditions = [Tool.type == "mcp", Tool.tenant_id.is_(None)]
+        if assigned_ids:
+            conditions.append(~Tool.id.in_(assigned_ids))
+        stmt = delete(Tool).where(and_(*conditions))
         result = await query_dao.execute(db, stmt)
         deleted_count = result.rowcount
         await query_dao.commit(db)

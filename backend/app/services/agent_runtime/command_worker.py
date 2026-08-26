@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from datetime import datetime
 import asyncio
 import logging
-from typing import Literal, Protocol, cast
 import uuid
+from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Literal, Protocol, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
@@ -18,6 +18,7 @@ from app.config import Settings, get_settings
 from app.core.logging_config import set_trace_id
 from app.models.agent_run import AgentRun
 from app.models.agent_run_command import AgentRunCommand
+from app.services.agent_runtime.node_executor import RuntimeInvocationCancelled
 from app.services.agent_runtime.persistence import (
     begin_command_attempt,
     claim_next_command,
@@ -28,7 +29,6 @@ from app.services.agent_runtime.persistence import (
     release_command_claim,
     renew_command_claim,
 )
-from app.services.agent_runtime.node_executor import RuntimeInvocationCancelled
 from app.services.agent_runtime.state import (
     JsonObject,
     RuntimeGraphState,
@@ -37,12 +37,11 @@ from app.services.agent_runtime.thread_lock import ThreadLockNotAcquired, run_wi
 from app.services.agent_runtime.tool_execution import (
     ToolExecutionReconciliationPending,
 )
+from app.services.group_realtime import publish_stored_group_message
 from app.services.sandbox.local.subprocess_backend import close_subprocess_sandbox_run
+from app.services.sandbox.run_scope import sandbox_run_scope_id
 from app.services.storage import get_storage_backend
 from app.services.workspace_reconciliation import WorkspaceReconciliationService
-from app.services.sandbox.run_scope import sandbox_run_scope_id
-from app.services.group_realtime import publish_stored_group_message
-
 
 logger = logging.getLogger(__name__)
 
@@ -939,6 +938,7 @@ class RuntimeCommandWorker:
             self._heartbeat(command, stop_heartbeat),
             name=f"runtime-command-heartbeat-{command.id}",
         )
+        run: RuntimeRunRecord | None = None
         try:
             try:
                 try:

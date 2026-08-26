@@ -11,25 +11,44 @@ Usage:
 """
 
 import asyncio
+
 from loguru import logger
 
 
 async def main():
     # Import ALL models so SQLAlchemy can resolve all FK relationships
-    from app.models import (  # noqa: F401
-        activity_log, agent, audit, channel_config, chat_session,
-        gateway_message, invitation_code, llm, notification, org,
-        participant, plaza, schedule, skill, system_settings, task,
-        tenant, tenant_setting, tool, trigger, user,
-    )
-    from app.database import async_session
-    from app.models.user import User
-    from app.models.org import OrgMember
-    from app.services.auth_registry import auth_provider_registry
-    from app.models.chat_session import ChatSession
-    from app.models.audit import ChatMessage
-    from sqlalchemy import select, update, func
     import httpx
+    from sqlalchemy import func, select, update
+
+    from app.database import async_session
+    from app.models import (  # noqa: F401
+        activity_log,
+        agent,
+        audit,
+        channel_config,
+        chat_session,
+        gateway_message,
+        invitation_code,
+        llm,
+        notification,
+        org,
+        participant,
+        plaza,
+        schedule,
+        skill,
+        system_settings,
+        task,
+        tenant,
+        tenant_setting,
+        tool,
+        trigger,
+        user,
+    )
+    from app.models.audit import ChatMessage
+    from app.models.chat_session import ChatSession
+    from app.models.org import OrgMember
+    from app.models.user import User
+    from app.services.auth_registry import auth_provider_registry
 
     async with async_session() as db:
         # ── Step 0: Load org sync app credentials ──
@@ -225,8 +244,6 @@ async def main():
                 if dup.email and "@" in dup.email and not dup.email.endswith("@feishu.local"):
                     if not primary.email or primary.email.endswith("@feishu.local"):
                         primary.email = dup.email
-                if dup.feishu_user_id and not primary.feishu_user_id:
-                    primary.feishu_user_id = dup.feishu_user_id
                 # Clear identity fields on duplicate before delete to avoid constraint violations
                 dup.email = f"deleted_{dup.id}@deleted.local"
                 dup.username = f"deleted_{dup.id}"
@@ -257,6 +274,8 @@ async def main():
 
         for sess in sessions:
             old_conv = sess.external_conv_id
+            if old_conv is None:
+                continue
             # Extract the ID part
             old_id = old_conv.replace("feishu_p2p_", "")
 

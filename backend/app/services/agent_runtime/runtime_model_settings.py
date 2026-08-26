@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.llm import LLMModel
 from app.models.system_settings import SystemSetting
 
-
 RUNTIME_MODEL_SETTING_KEY = "multi_agent_runtime_models"
 
 
@@ -57,7 +56,11 @@ async def resolve_runtime_model_settings(
         # The legacy global row could only contain validated platform models,
         # so it is a safe compatibility bridge until each tenant saves once.
         setting = settings_by_key.get(RUNTIME_MODEL_SETTING_KEY)
-    value = setting.value if isinstance(getattr(setting, "value", None), dict) else {}
+    value = (
+        setting.value
+        if setting is not None and isinstance(setting.value, dict)
+        else {}
+    )
 
     configured_planning = _configured_uuid(
         value.get("planning_model_id"),

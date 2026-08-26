@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import UTC, datetime
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +12,7 @@ from app.models.agent import Agent
 from app.services.agent_runtime.adapter import RuntimeCommandIntake
 from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
+from app.services.agent_runtime.state import JsonObject
 from app.services.feishu_group_targets import resolve_feishu_group_target
 
 
@@ -85,7 +85,7 @@ async def enqueue_heartbeat_runtime(
     agent: Agent,
     occurrence_at: datetime,
     instruction: str,
-    context: Mapping[str, object] | None = None,
+    context: JsonObject | None = None,
     settings_override: Settings | None = None,
 ) -> RunHandle | None:
     """Register one claimed heartbeat in the caller transaction when v2 is selected."""

@@ -1,15 +1,15 @@
 """Centralized logging configuration using loguru."""
 
-import sys
 import logging
+import sys
 from contextvars import ContextVar
-
-from loguru import logger
 
 # Context variable for trace ID
 from uuid import uuid4
 
-trace_id_var: ContextVar[str] = ContextVar("trace_id", default=None)
+from loguru import logger
+
+trace_id_var: ContextVar[str] = ContextVar("trace_id", default="")
 
 
 NOISY_CONNECTION_LOGGERS = {
@@ -53,7 +53,11 @@ def _disable_agentbay_logger_override():
         try:
             from agentbay._common.logger import AgentBayLogger
             AgentBayLogger._initialized = True
-            AgentBayLogger.setup = classmethod(lambda cls, *args, **kwargs: None)
+            setattr(
+                AgentBayLogger,
+                "setup",
+                classmethod(lambda cls, *args, **kwargs: None),
+            )
         except Exception:
             pass
 
@@ -98,7 +102,7 @@ def intercept_standard_logging():
 
             # Find the caller's frame
             frame, depth = logging.currentframe(), 2
-            while frame.f_code.co_filename == logging.__file__:
+            while frame is not None and frame.f_code.co_filename == logging.__file__:
                 frame = frame.f_back
                 depth += 1
 

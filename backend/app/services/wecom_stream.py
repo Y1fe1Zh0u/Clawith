@@ -6,7 +6,7 @@ No callback URL or domain verification needed.
 
 import asyncio
 import uuid
-from typing import Dict
+from typing import Dict, Protocol
 
 from loguru import logger
 from sqlalchemy import select
@@ -28,7 +28,7 @@ def _disable_wecom_sdk_proxy() -> None:
         kwargs.setdefault("proxy", None)
         return original_connect(*args, **kwargs)
 
-    connect_no_proxy.__clawith_no_proxy_patch__ = True
+    setattr(connect_no_proxy, "__clawith_no_proxy_patch__", True)
     sdk_ws.websockets.connect = connect_no_proxy
 
 
@@ -62,11 +62,17 @@ def _build_wecom_conv_id(sender_id: str, chat_id: str, chat_type: str) -> str:
     return f"wecom_p2p_{sender_id}"
 
 
+class _WeComClient(Protocol):
+    async def disconnect(self) -> object: ...
+
+    async def send_message(self, chatid: str, body: dict) -> object: ...
+
+
 class WeComStreamManager:
     """Manages WeCom AI Bot WebSocket clients for all agents."""
 
     def __init__(self):
-        self._clients: Dict[uuid.UUID, object] = {}
+        self._clients: Dict[uuid.UUID, _WeComClient] = {}
         self._tasks: Dict[uuid.UUID, asyncio.Task] = {}
         self._connected: Dict[uuid.UUID, bool] = {}
 
@@ -103,7 +109,7 @@ class WeComStreamManager:
     ):
         """Run the WeCom WebSocket client (async, runs in the main event loop)."""
         try:
-            from wecom_aibot_sdk import WSClient, generate_req_id
+            from wecom_aibot_sdk import WSClient, WSClientOptions, generate_req_id
         except ImportError:
             self._connected[agent_id] = False
             logger.warning(
@@ -114,12 +120,14 @@ class WeComStreamManager:
 
         try:
             _disable_wecom_sdk_proxy()
-            client = WSClient({
-                "bot_id": bot_id,
-                "secret": bot_secret,
-                "max_reconnect_attempts": -1,  # infinite reconnect
-                "heartbeat_interval": 30000,   # 30s heartbeat
-            })
+            client = WSClient(
+                WSClientOptions(
+                    bot_id=bot_id,
+                    secret=bot_secret,
+                    max_reconnect_attempts=-1,
+                    heartbeat_interval=30000,
+                )
+            )
             self._clients[agent_id] = client
 
             # ── Message handler: text ──

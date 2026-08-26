@@ -33,7 +33,6 @@ from app.models.okr import (
 )
 from app.services.storage import agent_storage_key, get_storage_backend, store_agent_bytes
 
-
 # ─── Focus File Parsing ───────────────────────────────────────────────────────
 
 # Matches lines like:
@@ -323,7 +322,7 @@ async def _build_okr_snapshot(
         for kr in kr_result.scalars().all():
             krs_by_obj.setdefault(str(kr.objective_id), []).append(kr)
 
-    return objectives, krs_by_obj, ps, pe
+    return list(objectives), krs_by_obj, ps, pe
 
 
 def _format_report_body(

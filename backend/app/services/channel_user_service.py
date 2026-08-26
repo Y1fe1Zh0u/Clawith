@@ -125,14 +125,22 @@ class ChannelUserService:
         mobile = extra_info.get("mobile")
 
         if not user and email:
-            user = await sso_service.match_user_by_email(db, email, tenant_id)
+            user = await sso_service.match_user_by_email(
+                db,
+                email,
+                str(tenant_id) if tenant_id else None,
+            )
             if user:
                 logger.info(
                     f"[{channel_type}] Matched user by email: {user.id}"
                 )
 
         if not user and mobile:
-            user = await sso_service.match_user_by_mobile(db, mobile, tenant_id)
+            user = await sso_service.match_user_by_mobile(
+                db,
+                mobile,
+                str(tenant_id) if tenant_id else None,
+            )
             if user:
                 logger.info(
                     f"[{channel_type}] Matched user by mobile: {user.id}"
@@ -536,9 +544,17 @@ async def get_platform_user_by_org_member(
     # Case 2: Try to find User by email/mobile from OrgMember
     user = None
     if org_member.email:
-        user = await sso_service.match_user_by_email(db, org_member.email, agent_tenant_id)
+        user = await sso_service.match_user_by_email(
+            db,
+            org_member.email,
+            str(agent_tenant_id) if agent_tenant_id else None,
+        )
     if not user and org_member.phone:
-        user = await sso_service.match_user_by_mobile(db, org_member.phone, agent_tenant_id)
+        user = await sso_service.match_user_by_mobile(
+            db,
+            org_member.phone,
+            str(agent_tenant_id) if agent_tenant_id else None,
+        )
 
     if user:
         # Link existing User to OrgMember
@@ -588,8 +604,9 @@ async def get_platform_user_by_org_member(
     # Using registration_service.find_or_create_identity would route through
     # identity_dao which opens its own session (no _session_ctx here), causing
     # the Identity to be rolled back before the User FK reference is resolved.
-    from sqlalchemy import or_
     import re as _re_pu
+
+    from sqlalchemy import or_
 
     identity: Identity | None = None
     lookup_conditions = [Identity.email == email]

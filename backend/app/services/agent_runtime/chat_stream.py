@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
-import uuid
 
 from sqlalchemy import select
 
@@ -17,7 +17,6 @@ from app.services.agent_runtime.contracts import (
     RuntimeEventCursor,
 )
 from app.services.agent_runtime.event_stream import DatabaseRuntimeEventStream
-
 
 ChatStreamStatus = Literal["completed", "failed", "cancelled", "waiting_user"]
 PacketSender = Callable[[dict], Awaitable[None]]
@@ -133,7 +132,12 @@ async def stream_web_chat_run(
         payload = event.payload
 
         activity_type = payload.get("activity_type")
-        packet_position = {
+        if event.created_at is None:
+            raise ChatRuntimeStreamError(
+                "invalid_runtime_event_position",
+                "Runtime event has no creation timestamp",
+            )
+        packet_position: dict[str, object] = {
             "run_id": str(handle.run_id),
             "event_id": str(event.event_id),
             "event_cursor": f"{event.created_at.isoformat()}|{event.event_id}",
@@ -156,7 +160,11 @@ async def stream_web_chat_run(
                 else _text(raw_content)
             )
             if content is not None:
-                packet = {"type": "chunk", "content": content, **packet_position}
+                packet: dict[str, object] = {
+                    "type": "chunk",
+                    "content": content,
+                    **packet_position,
+                }
                 if activity_type == "assistant_delta":
                     attempt_id = _text(payload.get("attempt_id"))
                     sequence = payload.get("sequence")
@@ -235,8 +243,19 @@ async def stream_web_chat_run(
                 "Runtime delivery has no reconnect position",
             )
 
-        receipt_status = payload.get("lifecycle_status")
-        if receipt_status not in {None, "waiting_user", "completed", "failed", "cancelled"}:
+        raw_receipt_status = payload.get("lifecycle_status")
+        receipt_status: ChatStreamStatus | None
+        if raw_receipt_status is None:
+            receipt_status = None
+        elif raw_receipt_status == "waiting_user":
+            receipt_status = "waiting_user"
+        elif raw_receipt_status == "completed":
+            receipt_status = "completed"
+        elif raw_receipt_status == "failed":
+            receipt_status = "failed"
+        elif raw_receipt_status == "cancelled":
+            receipt_status = "cancelled"
+        else:
             raise ChatRuntimeStreamError(
                 "invalid_runtime_delivery_receipt",
                 "Runtime delivery receipt has an invalid lifecycle status",
@@ -309,7 +328,7 @@ async def stream_web_chat_run(
             session_id=session_id,
             user_id=user_id,
         )
-        packet = {
+        packet: dict[str, object] = {
             "type": "done",
             "role": "assistant",
             "content": message.content,

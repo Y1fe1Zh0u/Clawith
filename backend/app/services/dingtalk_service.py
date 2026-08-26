@@ -1,6 +1,7 @@
 """DingTalk service for sending messages via Open API."""
 
 import json
+
 import httpx
 from loguru import logger
 
@@ -37,7 +38,7 @@ async def send_dingtalk_v1_robot_oto_message(
     user_ids: list[str],
     message: str,
     msg_type: str = "text",
-    robot_code: str = None,
+    robot_code: str | None = None,
 ) -> dict:
     """Send single chat messages via Robot using modern v1.0 API (RECOMMENDED).
     
@@ -129,7 +130,7 @@ async def send_dingtalk_message(
     app_secret: str,
     user_id: str,
     message: str,
-    agent_id: str = None,
+    agent_id: str | None = None,
     use_robot: bool = True,
     msg_type: str = "text",
 ) -> dict:

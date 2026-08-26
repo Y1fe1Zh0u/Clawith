@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from contextlib import AbstractAsyncContextManager
 from typing import Any, cast
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
-import uuid
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.serde.encrypted import EncryptedSerializer
@@ -30,7 +31,7 @@ def runtime_thread_config(
     thread_id: str | uuid.UUID,
     *,
     checkpoint_id: str | None = None,
-) -> dict[str, dict[str, str]]:
+) -> RunnableConfig:
     """Build an exact LangGraph Thread/checkpoint identity.
 
     A Thread is not necessarily a Run. Direct Chat can place multiple logical
@@ -55,9 +56,9 @@ def runtime_command_config(
     run_id: uuid.UUID,
     command_id: uuid.UUID,
     checkpoint_id: str | None = None,
-) -> dict[str, Any]:
+) -> RunnableConfig:
     """Bind one Graph invocation to Clawith Run/Command metadata."""
-    config: dict[str, Any] = runtime_thread_config(
+    config: RunnableConfig = runtime_thread_config(
         thread_id,
         checkpoint_id=checkpoint_id,
     )

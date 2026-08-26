@@ -11,12 +11,14 @@ Example:
 """
 
 import fnmatch
+import importlib
 import sys
 import zipfile
 from pathlib import Path
 
 from loguru import logger
-from scripts.quick_validate import validate_skill
+
+validate_skill = importlib.import_module("scripts.quick_validate").validate_skill
 
 # Patterns to exclude when packaging skills.
 EXCLUDE_DIRS = {"__pycache__", "node_modules"}

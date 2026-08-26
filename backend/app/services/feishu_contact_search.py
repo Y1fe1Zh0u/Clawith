@@ -113,13 +113,13 @@ async def _get(
     token: str,
     url: str,
     *,
-    params: dict[str, object],
+    params: Mapping[str, object],
     stage: str,
 ) -> Mapping[str, object]:
     response = await client.get(
         url,
         headers={"Authorization": f"Bearer {token}"},
-        params=params,
+        params={key: str(value) for key, value in params.items()},
     )
     payload = feishu_service._parse_api_response(response, stage=stage)
     if not isinstance(payload, Mapping):

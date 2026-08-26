@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,6 @@ from app.services.agent_runtime.context_builder import ContextBuildError
 from app.services.agent_runtime.state import JsonObject
 from app.services.group_chat_service import GroupChatServiceError
 from app.services.group_file_service import GroupFileServiceError
-
 
 _ACTIVE_AGENT_STATUSES = frozenset({"creating", "running", "idle"})
 
@@ -78,7 +77,7 @@ class GroupContextBuilder:
     async def _enrich_recent_messages(
         self,
         db: AsyncSession,
-        messages: Sequence[Mapping[str, object]],
+        messages: Sequence[JsonObject],
     ) -> tuple[JsonObject, ...]:
         participant_ids = {
             _uuid_value(message.get("participant_id"), field="recent participant_id")
@@ -119,9 +118,9 @@ class GroupContextBuilder:
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         agent_id: uuid.UUID | None,
-        initial_input: Mapping[str, object],
-        pending_messages: Sequence[Mapping[str, object]] = (),
-        recent_messages: Sequence[Mapping[str, object]],
+        initial_input: JsonObject,
+        pending_messages: Sequence[JsonObject] = (),
+        recent_messages: Sequence[JsonObject],
     ) -> GroupContextCapture:
         """Add group context only to concrete Agent Runs, never Planning roots."""
         raw_group_id = initial_input.get("group_id")

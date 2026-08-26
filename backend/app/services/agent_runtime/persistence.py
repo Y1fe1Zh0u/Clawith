@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable
-import uuid
+from typing import Any, Callable, cast
 
 from sqlalchemy import and_, exists, or_, select, tuple_, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -15,7 +16,6 @@ from sqlalchemy.orm import aliased
 from app.models.agent_run import AgentRun
 from app.models.agent_run_command import AgentRunCommand
 from app.models.agent_run_event import AgentRunEvent
-
 
 _SOURCE_TYPES = frozenset({"chat", "trigger", "task", "a2a", "heartbeat"})
 _RUN_KINDS = frozenset({"foreground", "background", "delegated", "orchestration"})
@@ -829,7 +829,7 @@ async def reject_unstarted_run_for_cancel(
             AgentRunCommand.run_id == run_id,
             AgentRunCommand.command_type == "start",
             tuple_(AgentRunCommand.created_at, AgentRunCommand.id)
-            < tuple_(cancel.created_at, cancel.id),
+            < (cancel.created_at, cancel.id),
             or_(
                 AgentRunCommand.status == "pending",
                 and_(
@@ -929,7 +929,7 @@ def _release_rejected_start_lanes_statement():
 async def release_rejected_start_lanes(db: AsyncSession) -> int:
     """Repair lanes left behind by start rejections from older workers."""
     result = await db.execute(_release_rejected_start_lanes_statement())
-    return max(result.rowcount or 0, 0)
+    return max(cast(CursorResult[Any], result).rowcount or 0, 0)
 
 
 async def renew_command_claim(

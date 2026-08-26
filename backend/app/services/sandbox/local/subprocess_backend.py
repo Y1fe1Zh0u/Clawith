@@ -1,7 +1,6 @@
 """Local subprocess-based sandbox backend."""
 
 import asyncio
-from dataclasses import dataclass
 import os
 import shlex
 import shutil
@@ -9,6 +8,7 @@ import signal
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
@@ -555,8 +555,8 @@ class SubprocessBackend(BaseSandboxBackend):
         """Scan staging directory, enforce safety checks, sanitize HTML/SVG, and merge to workspace with DB revisions."""
         import shutil
         try:
-            from lxml.html.clean import Cleaner
             import lxml.html
+            from lxml.html.clean import Cleaner
             cleaner = Cleaner(
                 scripts=True,
                 javascript=True,
@@ -707,7 +707,7 @@ class SubprocessBackend(BaseSandboxBackend):
         if agent_id and record_revisions:
             try:
                 from app.database import async_session
-                from app.services.workspace_collaboration import write_workspace_file, delete_workspace_file
+                from app.services.workspace_collaboration import delete_workspace_file, write_workspace_file
             except ImportError:
                 pass
 
@@ -721,9 +721,22 @@ class SubprocessBackend(BaseSandboxBackend):
                     content = file_path.read_text(encoding="utf-8")
                     if cleaner:
                         try:
-                            doc = lxml.html.fragment_fromstring(content, create_parent='div')
+                            import lxml.html
+
+                            doc = lxml.html.fragment_fromstring(
+                                content,
+                                create_parent=True,
+                            )
                             clean_doc = cleaner.clean_html(doc)
-                            cleaned = lxml.html.tostring(clean_doc, encoding="utf-8").decode("utf-8")
+                            serialized = lxml.html.tostring(
+                                clean_doc,
+                                encoding="utf-8",
+                            )
+                            cleaned = (
+                                serialized.decode("utf-8")
+                                if isinstance(serialized, bytes)
+                                else serialized
+                            )
                             if cleaned.startswith("<div>") and cleaned.endswith("</div>"):
                                 cleaned = cleaned[5:-6]
                         except Exception:
@@ -734,6 +747,10 @@ class SubprocessBackend(BaseSandboxBackend):
                         cleaned = re.sub(r"\bon[a-z]+\s*=\s*\"[^\"]*\"", "", cleaned, flags=re.IGNORECASE)
                         cleaned = re.sub(r"\bon[a-z]+\s*=\s*'[^']*'", "", cleaned, flags=re.IGNORECASE)
 
+                    if isinstance(cleaned, bytes):
+                        cleaned = cleaned.decode("utf-8")
+                    if not isinstance(cleaned, str):
+                        raise TypeError("HTML sanitizer returned non-text content")
                     file_path.write_text(cleaned, encoding="utf-8")
                 except Exception as e:
                     logger.error(f"[Sandbox Gateway] Failed to sanitize file '{rel_path}': {e}")
@@ -1228,6 +1245,8 @@ class SubprocessBackend(BaseSandboxBackend):
         staging_path = work_path / ".tmp" / f"staging_{staging_id}"
         self._clone_workspace_to_staging(work_path, staging_path)
         (staging_path / "workspace" / ".tmp").mkdir(parents=True, exist_ok=True)
+        pip_stop_event: asyncio.Event | None = None
+        pip_watcher_task: asyncio.Task[None] | None = None
 
         # Determine command and file extension
         if language == "python":
@@ -1375,13 +1394,14 @@ class SubprocessBackend(BaseSandboxBackend):
                     error=f"Code execution timed out after {timeout}s. If you expect this code to take longer, try calling the tool again with a higher 'timeout' parameter (up to 3600s)."
                 )
 
+            exit_code = proc.returncode if proc.returncode is not None else 1
             return ExecutionResult(
-                success=proc.returncode == 0,
+                success=exit_code == 0,
                 stdout=stdout_str,
                 stderr=stderr_str,
-                exit_code=proc.returncode,
+                exit_code=exit_code,
                 duration_ms=duration_ms,
-                error=None if proc.returncode == 0 else f"Exit code: {proc.returncode}"
+                error=None if exit_code == 0 else f"Exit code: {exit_code}"
             )
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
@@ -1403,7 +1423,7 @@ class SubprocessBackend(BaseSandboxBackend):
                     logger.exception("[Subprocess] Failed to reap sandbox process during cleanup")
 
             # Stop the pip watcher task
-            if 'pip_stop_event' in locals() and 'pip_watcher_task' in locals():
+            if pip_stop_event is not None and pip_watcher_task is not None:
                 try:
                     pip_stop_event.set()
                     await pip_watcher_task

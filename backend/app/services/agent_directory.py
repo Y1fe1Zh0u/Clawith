@@ -7,7 +7,8 @@ from sqlalchemy import case, exists, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import evaluate_roster_agent_visibility, evaluate_roster_human_visibility
-from app.models.agent import Agent as AgentModel, AgentPermission
+from app.models.agent import Agent as AgentModel
+from app.models.agent import AgentPermission
 from app.models.chat_session import ChatSession
 from app.models.identity import IdentityProvider
 from app.models.org import AgentAgentRelationship, OrgDepartment, OrgMember
@@ -394,6 +395,7 @@ async def query_agent_directory(
 
     fetch_size = limit + 1
     members: list[dict] = []
+    human_row_count = 0
 
     source = (await db.execute(select(AgentModel).where(AgentModel.id == source_agent_id))).scalar_one_or_none()
     if not source:
@@ -632,6 +634,7 @@ async def query_agent_directory(
             .limit(fetch_size)
         )
         human_rows = human_result.all()
+        human_row_count = len(human_rows)
         for member, provider, department, platform_user in human_rows[:limit]:
             payload = format_roster_human(
                 source,
@@ -652,6 +655,6 @@ async def query_agent_directory(
         "returned_count": len(members),
         "limit": limit,
         "offset": offset,
-        "has_more": len(human_rows) > limit,
+        "has_more": human_row_count > limit,
         "members": members,
     }

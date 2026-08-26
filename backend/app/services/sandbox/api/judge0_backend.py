@@ -1,12 +1,13 @@
 """Judge0 API-based sandbox backend."""
 
+import asyncio
 import time
 
 import httpx
+from loguru import logger
 
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
-from loguru import logger
 
 # Judge0 language IDs
 _JUDGE0_LANGUAGE_IDS = {
@@ -139,7 +140,7 @@ class Judge0Backend(BaseSandboxBackend):
 
                         # Check if still processing
                         if status.get("id") <= 2:  # In Queue or Processing
-                            await client.sleep(0.5)
+                            await asyncio.sleep(0.5)
                             continue
 
                         # Completed
@@ -161,7 +162,7 @@ class Judge0Backend(BaseSandboxBackend):
                             error=None if status.get("id") == 3 else status.get("description", "Execution failed")
                         )
 
-                    await client.sleep(0.5)
+                    await asyncio.sleep(0.5)
 
                 # Timeout waiting for result
                 return ExecutionResult(

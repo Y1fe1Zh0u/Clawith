@@ -73,13 +73,13 @@ from app.services.agent_runtime.tool_contracts import (
     deadline_policy_for_tool,
     workset_version,
 )
-from app.services.agent_runtime.tool_result_store import (
-    ToolResultStore,
-    ToolResultStoreError,
-)
 from app.services.agent_runtime.tool_registry import (
     RUNTIME_TOOL_BINDING_KEY,
     resolve_registered_tool,
+)
+from app.services.agent_runtime.tool_result_store import (
+    ToolResultStore,
+    ToolResultStoreError,
 )
 from app.services.agent_tools import get_runtime_agent_tools_for_llm
 from app.services.builtin_tool_definitions import (
@@ -1049,13 +1049,13 @@ def _with_call_instances(
         provider_call_ids[cast(str, call["id"])] = provider_call_id.strip()
         calls.append(call)
     assistant_message = cast(JsonObject, deepcopy(result.assistant_message))
-    assistant_message["tool_calls"] = [
+    assistant_message["tool_calls"] = cast(list[JsonValue], [
         {key: value for key, value in call.items() if key != "provider_call_id"}
         for call in calls
-    ]
-    assistant_message["additional_kwargs"] = {
+    ])
+    assistant_message["additional_kwargs"] = cast(JsonObject, {
         "provider_call_ids": provider_call_ids,
-    }
+    })
     return replace(
         result,
         assistant_message=assistant_message,

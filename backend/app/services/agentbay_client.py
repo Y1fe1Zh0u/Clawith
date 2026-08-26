@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
+
 from loguru import logger
 from pydantic import RootModel
 
@@ -17,9 +18,10 @@ class GenericExtractSchema(RootModel[Any]):
     pass
 
 
-from agentbay import AgentBay, CreateSessionParams
-from app.dao import query_dao
+from agentbay import AgentBay, CreateSessionParams, Session
+
 from app.core.logging_config import _disable_agentbay_logger_override, configure_logging
+from app.dao import query_dao
 
 _disable_agentbay_logger_override()
 configure_logging()
@@ -62,8 +64,14 @@ class AgentBayClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self._sdk = AgentBay(api_key=api_key)
-        self._session = None
-        self._image_type = None
+        self._session: Session | None = None
+        self._image_type: str | None = None
+
+    def _active_session(self) -> Session:
+        session = self._session
+        if session is None:
+            raise RuntimeError("No active AgentBay session")
+        return session
 
     async def create_session(
         self,
@@ -94,14 +102,14 @@ class AgentBayClient:
             self._sdk.create,
             CreateSessionParams(image_id=image_id, labels=labels or {}),
         )
-        if not result.success:
+        if not result.success or result.session is None:
             raise RuntimeError(f"Failed to create session: {result.error_message}")
 
         self._session = result.session
         self._browser_initialized = False
         logger.info(f"[AgentBay] Created session with image {image_id}")
         return AgentBaySession(
-            session_id=self._session.session_id,
+            session_id=result.session.session_id,
             image=image,
             created_at=datetime.now(),
             expires_at=datetime.now() + timedelta(hours=1),
@@ -128,14 +136,14 @@ class AgentBayClient:
             raise RuntimeError("No active browser session")
         if not getattr(self, "_browser_initialized", False):
             from agentbay import BrowserOption
-            from agentbay._common.models.browser import BrowserViewport, BrowserScreen
+            from agentbay._common.models.browser import BrowserScreen, BrowserViewport
             
             # Use high-res viewport for clearer screenshots and better layout
             options = BrowserOption(
                 viewport=BrowserViewport(width=1920, height=1080),
                 screen=BrowserScreen(width=1920, height=1080)
             )
-            success = await asyncio.to_thread(self._session.browser.initialize, options)
+            success = await asyncio.to_thread(self._active_session().browser.initialize, options)
             if success is False:
                 raise RuntimeError("SDK failed to initialize browser (returned False).")
             self._browser_initialized = True
@@ -160,7 +168,7 @@ class AgentBayClient:
         # no longer block the agent loop waiting for it.
         try:
             await asyncio.wait_for(
-                asyncio.to_thread(self._session.browser.operator.navigate, url),
+                asyncio.to_thread(self._active_session().browser.operator.navigate, url),
                 timeout=40.0,
             )
         except asyncio.TimeoutError:
@@ -178,7 +186,7 @@ class AgentBayClient:
             # Wait for dynamic content and SPA rendering (React/Vue) before screenshotting
             await asyncio.sleep(3)
             screenshot_data = await asyncio.to_thread(
-                self._session.browser.operator.screenshot, full_page=False
+                self._active_session().browser.operator.screenshot, full_page=False
             )
             result["screenshot"] = screenshot_data
 
@@ -196,7 +204,7 @@ class AgentBayClient:
         await asyncio.sleep(3)
         
         screenshot_data = await asyncio.to_thread(
-            self._session.browser.operator.screenshot, full_page=False
+            self._active_session().browser.operator.screenshot, full_page=False
         )
         return {"success": True, "screenshot": screenshot_data}
 
@@ -206,7 +214,7 @@ class AgentBayClient:
         await self._ensure_browser_initialized()
 
         from agentbay import ActOptions
-        await asyncio.to_thread(self._session.browser.operator.act, ActOptions(action=f"click on {selector}"))
+        await asyncio.to_thread(self._active_session().browser.operator.act, ActOptions(action=f"click on {selector}"))
         return {"success": True, "selector": selector}
 
     async def browser_type(self, selector: str, text: str) -> dict:
@@ -238,7 +246,7 @@ class AgentBayClient:
                 f"This ensures modern web frameworks like React register the input."
             )
 
-        await asyncio.to_thread(self._session.browser.operator.act, ActOptions(action=action_msg))
+        await asyncio.to_thread(self._active_session().browser.operator.act, ActOptions(action=action_msg))
         return {"success": True, "selector": selector, "text": text}
 
     async def browser_login(self, url: str, login_config: str) -> dict:
@@ -257,11 +265,11 @@ class AgentBayClient:
         await self._ensure_browser_initialized()
 
         # Navigate to the login page first
-        await asyncio.to_thread(self._session.browser.operator.navigate, url)
+        await asyncio.to_thread(self._active_session().browser.operator.navigate, url)
 
         # Execute the login skill
         result = await asyncio.to_thread(
-            self._session.browser.operator.login,
+            self._active_session().browser.operator.login,
             login_config,
             use_vision=True,
         )
@@ -287,7 +295,7 @@ class AgentBayClient:
             await self.create_session("code_latest")
 
         result = await asyncio.wait_for(
-            asyncio.to_thread(self._session.code.run_code, code, sdk_lang),
+            asyncio.to_thread(self._active_session().code.run_code, code, sdk_lang),
             timeout=timeout,
         )
 
@@ -304,7 +312,7 @@ class AgentBayClient:
             await self.create_session("code_latest")
         return await asyncio.wait_for(
             asyncio.to_thread(
-                self._session.file_system.read_file,
+                self._active_session().file_system.read_file,
                 remote_path,
             ),
             timeout=timeout,
@@ -332,7 +340,7 @@ class AgentBayClient:
             selector=selector or None,
         )
         success, data = await asyncio.wait_for(
-            asyncio.to_thread(self._session.browser.operator.extract, options),
+            asyncio.to_thread(self._active_session().browser.operator.extract, options),
             timeout=timeout,
         )
         if success and data:
@@ -358,7 +366,7 @@ class AgentBayClient:
             selector=selector or None,
         )
         success, results = await asyncio.wait_for(
-            asyncio.to_thread(self._session.browser.operator.observe, options),
+            asyncio.to_thread(self._active_session().browser.operator.observe, options),
             timeout=timeout,
         )
         # Convert ObserveResult objects to dicts for serialization
@@ -375,7 +383,7 @@ class AgentBayClient:
             await self.create_session("linux_latest")
 
         result = await asyncio.to_thread(
-            self._session.command.exec,
+            self._active_session().command.exec,
             command,
             timeout_ms=timeout_ms,
             cwd=cwd or None,
@@ -413,17 +421,17 @@ class AgentBayClient:
         await asyncio.sleep(2)
 
         try:
-            result = await asyncio.to_thread(self._session.computer.screenshot)
+            result = await asyncio.to_thread(self._active_session().computer.screenshot)
             # Some cloud environments return success=False with a message
             # telling us to use beta_take_screenshot() instead of throwing.
             if not result.success and "beta_take_screenshot" in (result.error_message or ""):
                 logger.info("[AgentBay] screenshot() unsupported, falling back to beta_take_screenshot()")
-                result = await asyncio.to_thread(self._session.computer.beta_take_screenshot)
+                result = await asyncio.to_thread(self._active_session().computer.beta_take_screenshot)
         except Exception as e:
             # Also handle the case where it raises an exception
             if "beta_take_screenshot" in str(e):
                 logger.info("[AgentBay] Falling back to beta_take_screenshot() after exception")
-                result = await asyncio.to_thread(self._session.computer.beta_take_screenshot)
+                result = await asyncio.to_thread(self._active_session().computer.beta_take_screenshot)
             else:
                 raise
         return {
@@ -435,8 +443,8 @@ class AgentBayClient:
     async def computer_click(self, x: int, y: int, button: str = "left") -> dict:
         """Click the mouse at coordinates (x, y)."""
         await self._ensure_computer_session()
-        move_result = await asyncio.to_thread(self._session.computer.move_mouse, x, y)
-        result = await asyncio.to_thread(self._session.computer.click_mouse, x, y, button)
+        move_result = await asyncio.to_thread(self._active_session().computer.move_mouse, x, y)
+        result = await asyncio.to_thread(self._active_session().computer.click_mouse, x, y, button)
         return {
             "success": result.success,
             "moved": getattr(move_result, "success", False),
@@ -448,27 +456,27 @@ class AgentBayClient:
     async def computer_input_text(self, text: str) -> dict:
         """Input text at the current cursor position."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.input_text, text)
+        result = await asyncio.to_thread(self._active_session().computer.input_text, text)
         return {"success": result.success, "text": text}
 
     async def computer_press_keys(self, keys: list, hold: bool = False) -> dict:
         """Press keyboard keys (e.g. ['ctrl', 'c'] for Ctrl+C)."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.press_keys, keys, hold=hold)
+        result = await asyncio.to_thread(self._active_session().computer.press_keys, keys, hold=hold)
         return {"success": result.success, "keys": keys, "hold": hold}
 
     async def computer_scroll(self, x: int, y: int, direction: str = "down", amount: int = 1) -> dict:
         """Scroll the screen at position (x, y)."""
         await self._ensure_computer_session()
         result = await asyncio.to_thread(
-            self._session.computer.scroll, x, y, direction=direction, amount=amount
+            self._active_session().computer.scroll, x, y, direction=direction, amount=amount
         )
         return {"success": result.success, "direction": direction, "amount": amount}
 
     async def computer_move_mouse(self, x: int, y: int) -> dict:
         """Move mouse to coordinates (x, y) without clicking."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.move_mouse, x, y)
+        result = await asyncio.to_thread(self._active_session().computer.move_mouse, x, y)
         return {"success": result.success, "x": x, "y": y}
 
     async def computer_drag_mouse(
@@ -477,14 +485,14 @@ class AgentBayClient:
         """Drag mouse from (from_x, from_y) to (to_x, to_y)."""
         await self._ensure_computer_session()
         result = await asyncio.to_thread(
-            self._session.computer.drag_mouse, from_x, from_y, to_x, to_y, button=button
+            self._active_session().computer.drag_mouse, from_x, from_y, to_x, to_y, button=button
         )
         return {"success": result.success, "from": [from_x, from_y], "to": [to_x, to_y]}
 
     async def computer_get_screen_size(self) -> dict:
         """Get the screen resolution."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.get_screen_size)
+        result = await asyncio.to_thread(self._active_session().computer.get_screen_size)
         return {
             "success": result.success,
             "data": getattr(result, "data", None),
@@ -495,7 +503,7 @@ class AgentBayClient:
         """Start an application by its command."""
         await self._ensure_computer_session()
         result = await asyncio.to_thread(
-            self._session.computer.start_app, cmd, work_directory=work_dir
+            self._active_session().computer.start_app, cmd, work_directory=work_dir
         )
         return _sdk_result_mapping(result)
 
@@ -508,7 +516,7 @@ class AgentBayClient:
         """List installed applications and their launch commands."""
         await self._ensure_computer_session()
         result = await asyncio.to_thread(
-            self._session.computer.get_installed_apps,
+            self._active_session().computer.get_installed_apps,
             start_menu,
             desktop,
             ignore_system_apps,
@@ -525,7 +533,7 @@ class AgentBayClient:
     async def computer_get_cursor_position(self) -> dict:
         """Get current cursor position."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.get_cursor_position)
+        result = await asyncio.to_thread(self._active_session().computer.get_cursor_position)
         return {
             "success": result.success,
             "data": getattr(result, "data", None),
@@ -535,7 +543,7 @@ class AgentBayClient:
     async def computer_get_active_window(self) -> dict:
         """Get info about the currently active window."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.get_active_window)
+        result = await asyncio.to_thread(self._active_session().computer.get_active_window)
         window = getattr(result, "window", None)
         return {
             "success": result.success,
@@ -546,7 +554,7 @@ class AgentBayClient:
     async def computer_list_windows(self, timeout_ms: int = 3000) -> dict:
         """List root desktop windows with IDs and geometry."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.list_root_windows, timeout_ms)
+        result = await asyncio.to_thread(self._active_session().computer.list_root_windows, timeout_ms)
         windows = []
         for window in (getattr(result, "windows", None) or []):
             windows.append(vars(window) if hasattr(window, "__dict__") else str(window))
@@ -559,13 +567,13 @@ class AgentBayClient:
     async def computer_activate_window(self, window_id: int) -> dict:
         """Activate (bring to front) a window by its ID."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.activate_window, window_id)
+        result = await asyncio.to_thread(self._active_session().computer.activate_window, window_id)
         return {"success": result.success, "window_id": window_id}
 
     async def computer_close_window(self, window_id: int) -> dict:
         """Close a desktop window by its ID."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.close_window, window_id)
+        result = await asyncio.to_thread(self._active_session().computer.close_window, window_id)
         return {
             "success": result.success,
             "window_id": window_id,
@@ -575,7 +583,7 @@ class AgentBayClient:
     async def computer_list_visible_apps(self) -> dict:
         """List currently visible/running applications."""
         await self._ensure_computer_session()
-        result = await asyncio.to_thread(self._session.computer.list_visible_apps)
+        result = await asyncio.to_thread(self._active_session().computer.list_visible_apps)
         data = getattr(result, "data", [])
         # Convert process objects to dicts
         apps = []
@@ -638,13 +646,17 @@ class AgentBayClient:
             # Compress to JPEG base64 for live preview
             import base64
             from io import BytesIO
+
             from PIL import Image
 
             img = Image.open(BytesIO(screenshot_data))
             # Resize to max 1920px wide for live preview (up from 1280px to preserve details)
             if img.width > 1920:
                 ratio = 1920 / img.width
-                img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+                img = img.resize(
+                    (int(img.width * ratio), int(img.height * ratio)),
+                    Image.Resampling.LANCZOS,
+                )
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             buffer = BytesIO()
@@ -680,6 +692,7 @@ class AgentBayClient:
             # Compress screenshot to JPEG base64 for efficient transfer
             import base64
             from io import BytesIO
+
             from PIL import Image
 
             if isinstance(screenshot_data, str):
@@ -700,7 +713,10 @@ class AgentBayClient:
             # Resize to max 1920px wide for live preview (up from 1280px to preserve details)
             if img.width > 1920:
                 ratio = 1920 / img.width
-                img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+                img = img.resize(
+                    (int(img.width * ratio), int(img.height * ratio)),
+                    Image.Resampling.LANCZOS,
+                )
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             buffer = BytesIO()
@@ -752,11 +768,12 @@ async def get_agentbay_api_key_for_agent(agent_id: uuid.UUID, db=None) -> Option
     1. Per-agent ChannelConfig (channel_type='agentbay') — set via Agent detail page
     2. Global Tool.config.api_key (category='agentbay') — set via Company Settings
     """
+    from sqlalchemy import select
+
+    from app.config import get_settings
+    from app.core.security import decrypt_data
     from app.models.channel_config import ChannelConfig
     from app.models.tool import Tool
-    from sqlalchemy import select
-    from app.core.security import decrypt_data
-    from app.config import get_settings
 
     async def _fetch(session):
         # 1) Check per-agent ChannelConfig first (highest priority)
@@ -965,10 +982,11 @@ async def get_agentbay_client_for_agent(
         )
         api_key = None
 
-        if tool_config and tool_config.get("api_key"):
-            api_key = tool_config.get("api_key")
-            from app.core.security import decrypt_data
+        configured_api_key = tool_config.get("api_key") if tool_config else None
+        if isinstance(configured_api_key, str):
+            api_key = configured_api_key
             from app.config import get_settings
+            from app.core.security import decrypt_data
             try:
                 api_key = decrypt_data(api_key, get_settings().SECRET_KEY)
             except Exception:
@@ -1043,10 +1061,12 @@ async def _inject_credentials(client: AgentBayClient, agent_id: uuid.UUID):
     exist or injection fails, it logs a warning but does not block the session.
     """
     import json
-    from app.models.agent_credential import AgentCredential
+
     from sqlalchemy import select
-    from app.core.security import decrypt_data
+
     from app.config import get_settings
+    from app.core.security import decrypt_data
+    from app.models.agent_credential import AgentCredential
 
     settings = get_settings()
 
@@ -1152,7 +1172,7 @@ const { chromium } = require('/usr/local/lib/node_modules/playwright');
         # Write script via base64 decode to avoid shell quoting issues and /tmp permission errors
         script_b64 = _base64.b64encode(inject_script.encode('utf-8')).decode('ascii')
         write_result = await asyncio.to_thread(
-            client._session.command.exec,
+            client._active_session().command.exec,
             f"echo '{script_b64}' | /usr/bin/base64 -d > tc_inject_cookies.js",
         )
         write_ok = getattr(write_result, 'success', False)
@@ -1160,7 +1180,7 @@ const { chromium } = require('/usr/local/lib/node_modules/playwright');
 
         # Execute the injection script
         exec_result = await asyncio.to_thread(
-            client._session.command.exec,
+            client._active_session().command.exec,
             "node tc_inject_cookies.js",
             timeout_ms=15000,
         )
