@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { IconRobot, IconSearch, IconUser, IconX } from "@tabler/icons-react";
 import { groupApi } from "../../services/groupApi";
+import { caughtErrorMessage } from "../../services/apiError";
 import { useToast } from "../../components/Toast/ToastProvider";
 import type {
   GroupMember,
@@ -65,8 +66,10 @@ export default function InviteMemberModal({
         }),
       );
       onInvited();
-    } catch (error: any) {
-      toast.error(error?.message ?? t("groups.inviteFailed", "邀请失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.inviteFailed", "邀请失败"),
+      );
     } finally {
       setInviting(null);
     }
