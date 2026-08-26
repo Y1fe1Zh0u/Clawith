@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../stores";
 import { authApi, tenantApi, fetchJson } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 import type { TokenResponse } from "../types";
 import {
   IconAlertTriangle,
@@ -210,9 +211,9 @@ export default function Login() {
       }
 
       navigate("/");
-    } catch (err: any) {
+    } catch (error) {
       setError(
-        err.message ||
+        caughtErrorMessage(error) ||
           (isZh
             ? "验证码无效或已过期"
             : "The verification code is invalid or expired."),
@@ -237,9 +238,9 @@ export default function Login() {
           ? `新的验证码已发送到 ${email}`
           : `A new code has been sent to ${email}.`,
       );
-    } catch (err: any) {
+    } catch (error) {
       setError(
-        err.message ||
+        caughtErrorMessage(error) ||
           (isZh ? "发送验证码失败" : "Failed to resend the verification code."),
       );
     } finally {
@@ -335,12 +336,12 @@ export default function Login() {
             }
             navigate("/onboarding?mode=join");
             return;
-          } catch (joinErr: any) {
+          } catch (error) {
             // If joining fails (code already used, code invalid, already a member),
             // just continue into the user's existing company — don't block login.
             console.warn(
               "[invitation] join failed, entering original company:",
-              joinErr.message,
+              caughtErrorMessage(error),
             );
           }
         }
@@ -436,8 +437,8 @@ export default function Login() {
       } else {
         navigate("/");
       }
-    } catch (err: any) {
-      const msg = err.message || "";
+    } catch (error) {
+      const msg = caughtErrorMessage(error) || "";
       setError(msg || t("auth.loginFailed", "Login failed"));
     } finally {
       setLoading(false);
@@ -461,8 +462,8 @@ export default function Login() {
       if (res?.authorization_url) {
         window.location.href = res.authorization_url;
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to start social login");
+    } catch (error) {
+      setError(caughtErrorMessage(error) || "Failed to start social login");
     }
   };
 
@@ -1091,8 +1092,8 @@ export default function Login() {
                             setAuth(tokenRes.user, tokenRes.access_token);
                             setTenantSelection(null);
                             navigate("/setup-company?from=tenant-selection");
-                          } catch (err: any) {
-                            setError(err.message || "Failed");
+                          } catch (error) {
+                            setError(caughtErrorMessage(error) || "Failed");
                             setTenantSelection(null);
                           } finally {
                             setLoading(false);
