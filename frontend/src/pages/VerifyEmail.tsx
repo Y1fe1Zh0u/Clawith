@@ -16,6 +16,14 @@ import { authApi } from "../services/api";
 import { useAuthStore } from "../stores";
 import { useToast } from "../components/Toast/ToastProvider";
 
+function unknownErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  if (typeof error !== "object" || error === null || !("message" in error)) {
+    return undefined;
+  }
+  return typeof error.message === "string" ? error.message : undefined;
+}
+
 export default function VerifyEmail() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
@@ -75,10 +83,10 @@ export default function VerifyEmail() {
           }
         }, 1500); // Short delay to show success message
       }
-    } catch (err: any) {
+    } catch (error) {
       setStatus("error");
       setMessage(
-        err.message ||
+        unknownErrorMessage(error) ||
           (isChinese
             ? "验证失败，请检查验证码是否正确"
             : "Verification failed, please check the code"),
@@ -111,9 +119,9 @@ export default function VerifyEmail() {
           ? "验证码已重发，请检查您的邮箱"
           : "Verification code resent. Please check your email.",
       );
-    } catch (err: any) {
+    } catch (error) {
       toast.error(isChinese ? "重发失败" : "Failed to resend verification", {
-        details: String(err?.message || err),
+        details: String(unknownErrorMessage(error) || error),
       });
     } finally {
       setLoading(false);
