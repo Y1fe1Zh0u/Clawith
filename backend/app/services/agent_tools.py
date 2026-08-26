@@ -164,8 +164,6 @@ _FEISHU_APPROVAL_IMAGE_MEDIA_TYPES = {
     ".webp": "image/webp",
 }
 TEMP_WORKSPACE_DEFAULT_PATHS = ["skills", "memory", "workspace", "focus.md", "soul.md", "HEARTBEAT.md"]
-MAX_EXEC_STDOUT_CAPTURE_BYTES = 1_000_000
-MAX_EXEC_STDERR_CAPTURE_BYTES = 500_000
 EMAIL_IMAP_DEADLINE_SECONDS = 30.0
 PUBLIC_DNS_DEADLINE_SECONDS = 10.0
 _READ_FILE_BINARY_EXTENSIONS = frozenset(
@@ -2416,15 +2414,24 @@ async def _execute_code_with_workspace_outcome(
         )
 
     from app.config import get_sandbox_config
-    from app.services.sandbox.config import SandboxConfig
-
-    tool_config = await _get_tool_config(agent_id, tool_name)
-    fallback_config = get_sandbox_config()
-    sandbox_config = (
-        SandboxConfig.from_dict(tool_config, fallback_config)
-        if tool_config and tool_name == "execute_code"
-        else None
+    from app.services.sandbox.config import (
+        SandboxConfig,
+        SandboxConfigurationError,
     )
+
+    try:
+        tool_config = await _get_tool_config(agent_id, tool_name)
+        fallback_config = get_sandbox_config()
+        sandbox_config = (
+            SandboxConfig.from_dict(tool_config, fallback_config)
+            if tool_config and tool_name == "execute_code"
+            else None
+        )
+    except SandboxConfigurationError as exc:
+        return _typed_failure(
+            f"Sandbox configuration error: {str(exc)[:300]}",
+            "sandbox_configuration_invalid",
+        )
     if sandbox_config is None:
         sandbox_config = fallback_config
 
@@ -7634,6 +7641,9 @@ async def _resolve_frozen_mcp_execution_target(
         merged_config,
         tool.config_schema,
     )
+    if server_name == "Atlassian Rovo":
+        merged_config.pop("api_key", None)
+        merged_config.pop("atlassian_api_key", None)
     return {
         "full_name": binding.handler_key,
         "raw_name": raw_name,
@@ -7738,6 +7748,9 @@ async def _resolve_mcp_execution_target(
             merged_config,
             tool.config_schema,
         )
+        if str(tool.mcp_server_name or "") == "Atlassian Rovo":
+            merged_config.pop("api_key", None)
+            merged_config.pop("atlassian_api_key", None)
         return {
             "full_name": str(tool.name),
             "raw_name": raw_name or str(tool.name),
@@ -7804,16 +7817,28 @@ async def _execute_resolved_mcp_target_outcome(
             async_completion=async_completion,
         )
 
-    direct_api_key = config.get("api_key") or config.get(
-        "atlassian_api_key"
-    )
-    if not direct_api_key and server_name == "Atlassian Rovo":
-        try:
-            from app.api.atlassian import get_atlassian_api_key_for_agent
+    if server_name == "Atlassian Rovo":
+        from app.api.atlassian import (
+            AtlassianSecretError,
+            get_atlassian_api_key_for_agent,
+        )
 
+        try:
             direct_api_key = await get_atlassian_api_key_for_agent(agent_id)
-        except Exception:
-            direct_api_key = None
+        except AtlassianSecretError:
+            return _typed_failure(
+                "Stored Atlassian credentials are invalid.",
+                "mcp_configuration_invalid",
+            )
+        if direct_api_key is None:
+            return _typed_failure(
+                "Atlassian credentials are not configured.",
+                "mcp_configuration_invalid",
+            )
+    else:
+        direct_api_key = config.get("api_key") or config.get(
+            "atlassian_api_key"
+        )
 
     client = MCPClient(server_url, api_key=direct_api_key)
     try:
@@ -12258,204 +12283,6 @@ async def _execute_code(
         ws,
         arguments,
         tool_name=tool_name,
-        on_output=on_output,
-    )
-    return _legacy_tool_outcome_text(
-        outcome,
-        fallback="Code execution returned no summary.",
-    )
-
-
-async def _execute_code_legacy_outcome(
-    ws: Path,
-    arguments: dict,
-    allow_network: bool = False,
-    default_timeout: int = CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
-    max_timeout: int = CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
-    on_output=None,
-) -> ToolExecutionOutcome:
-    """Legacy subprocess-based code execution (fallback)."""
-    import asyncio
-
-    language = arguments.get("language", "python")
-    if language == "python3":
-        language = "python"
-    code = arguments.get("code", "")
-    try:
-        timeout = min(
-            max(int(arguments.get("timeout", default_timeout)), default_timeout),
-            max_timeout,
-        )
-    except (TypeError, ValueError):
-        return _typed_failure(
-            "execute_code timeout must be an integer.",
-            "invalid_tool_arguments",
-        )
-    if timeout <= 0:
-        return _typed_failure(
-            "execute_code timeout must be positive.",
-            "invalid_tool_arguments",
-        )
-
-    if not isinstance(code, str) or not code.strip():
-        return _typed_failure("No code provided.", "invalid_tool_arguments")
-
-    if language not in ("python", "bash", "node"):
-        return _typed_failure(
-            f"Unsupported language: {language}. Use python, bash, or node.",
-            "invalid_tool_arguments",
-        )
-
-    # Security check
-    safety_error = _check_code_safety(language, code, allow_network)
-    if safety_error:
-        return _typed_failure(safety_error, "sandbox_code_blocked")
-
-    # Working directory is the agent's root directory (must be absolute)
-    # This allows code to access skills/, workspace/, memory/ etc. directly
-    work_dir = ws.resolve()
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    # Determine command and file extension
-    if language == "python":
-        ext = ".py"
-        cmd_prefix = ["python3"]
-    elif language == "bash":
-        ext = ".sh"
-        cmd_prefix = ["bash"]
-    elif language == "node":
-        ext = ".js"
-        cmd_prefix = ["node"]
-    else:
-        return _typed_failure(
-            f"Unsupported language: {language}.",
-            "invalid_tool_arguments",
-        )
-
-    # Write code to a temp file inside workspace
-    script_path = work_dir / f"_exec_tmp{ext}"
-    proc = None
-    try:
-        script_path.write_text(code, encoding="utf-8")
-
-        # Inherit parent environment but override HOME to workspace
-        safe_env = dict(os.environ)
-        safe_env["HOME"] = str(work_dir)
-        safe_env["PYTHONDONTWRITEBYTECODE"] = "1"
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_prefix, str(script_path),
-            cwd=str(work_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=safe_env,
-        )
-
-        stdout_data = bytearray()
-        stderr_data = bytearray()
-
-        async def read_stream(stream, out, label="stdout"):
-            capture_limit = MAX_EXEC_STDERR_CAPTURE_BYTES if label == "stderr" else MAX_EXEC_STDOUT_CAPTURE_BYTES
-            while True:
-                chunk = await stream.read(4096)
-                if not chunk:
-                    break
-                remaining = capture_limit - len(out)
-                if remaining > 0:
-                    out.extend(chunk[:remaining])
-                # Real-time streaming: push each chunk to the WebSocket
-                if on_output:
-                    try:
-                        text = chunk.decode("utf-8", errors="replace")
-                        await on_output(text, label)
-                    except Exception:
-                        pass
-
-        task1 = asyncio.create_task(read_stream(proc.stdout, stdout_data, "stdout"))
-        task2 = asyncio.create_task(read_stream(proc.stderr, stderr_data, "stderr"))
-
-        is_timeout = False
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            is_timeout = True
-
-        await asyncio.gather(task1, task2)
-        stdout = bytes(stdout_data)
-        stderr = bytes(stderr_data)
-
-        stdout_str = stdout.decode("utf-8", errors="replace")[:10000] if stdout else ""
-        stderr_str = stderr.decode("utf-8", errors="replace")[:5000] if stderr else ""
-
-        result_parts = []
-        if stdout_str.strip():
-            result_parts.append(f"📤 Output:\n{stdout_str}")
-        if stderr_str.strip():
-            result_parts.append(f"⚠️ Stderr:\n{stderr_str}")
-
-        if is_timeout:
-            result_parts.append(f"❌ Code execution timed out after {timeout}s. If you expect this code to take longer, try calling the tool again with a higher 'timeout' parameter (up to 3600s).")
-            return _typed_failure(
-                "\n\n".join(result_parts),
-                "sandbox_execution_timeout",
-            )
-
-        if proc.returncode != 0:
-            result_parts.append(f"Exit code: {proc.returncode}")
-            return _typed_failure(
-                "\n\n".join(result_parts),
-                "sandbox_execution_failed",
-            )
-
-        if not result_parts:
-            return _typed_success("Code executed successfully (no output).")
-
-        return _typed_success("\n\n".join(result_parts))
-
-    except asyncio.CancelledError:
-        if proc is not None and proc.returncode is None:
-            proc.kill()
-            await proc.wait()
-        raise
-    except Exception as e:
-        if proc is not None:
-            try:
-                if proc.returncode is None:
-                    proc.kill()
-                    await proc.wait()
-            except Exception:
-                pass
-            return _typed_unknown(
-                f"Local code execution outcome is unknown after {type(e).__name__}.",
-                "sandbox_execution_outcome_unknown",
-            )
-        return _typed_failure(
-            f"Execution could not start: {type(e).__name__}.",
-            "sandbox_execution_failed",
-        )
-    finally:
-        # Clean up temp script
-        try:
-            script_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
-async def _execute_code_legacy(
-    ws: Path,
-    arguments: dict,
-    allow_network: bool = False,
-    default_timeout: int = CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS,
-    max_timeout: int = CODE_EXECUTION_MAX_TIMEOUT_SECONDS,
-    on_output=None,
-) -> str:
-    outcome = await _execute_code_legacy_outcome(
-        ws,
-        arguments,
-        allow_network=allow_network,
-        default_timeout=default_timeout,
-        max_timeout=max_timeout,
         on_output=on_output,
     )
     return _legacy_tool_outcome_text(

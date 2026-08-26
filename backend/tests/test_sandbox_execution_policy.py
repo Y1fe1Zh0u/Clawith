@@ -212,9 +212,6 @@ async def test_configured_backend_error_never_switches_to_legacy_subprocess(
     async def tool_config(*_args):
         return {"sandbox_type": "docker"}
 
-    async def forbidden_legacy(*_args, **_kwargs):
-        raise AssertionError("configured Sandbox must not switch execution venue")
-
     monkeypatch.setattr(agent_tools, "_get_tool_config", tool_config)
     monkeypatch.setattr(
         "app.config.get_sandbox_config",
@@ -224,12 +221,6 @@ async def test_configured_backend_error_never_switches_to_legacy_subprocess(
         "app.services.sandbox.registry.get_sandbox_backend",
         lambda _config: (_ for _ in ()).throw(ValueError("docker unavailable")),
     )
-    monkeypatch.setattr(
-        agent_tools,
-        "_execute_code_legacy_outcome",
-        forbidden_legacy,
-    )
-
     outcome = await agent_tools._execute_code_outcome(
         uuid.uuid4(),
         tmp_path,
@@ -558,6 +549,50 @@ async def test_invalid_session_scope_fails_before_lease(monkeypatch) -> None:
     )
 
     assert outcome.error_code == "sandbox_execution_scope_invalid"
+    assert acquired is False
+    assert materialized is False
+    assert executed is False
+
+
+@pytest.mark.asyncio
+async def test_real_workspace_entry_rejects_invalid_sandbox_config_before_dispatch(
+    monkeypatch,
+) -> None:
+    acquired = False
+    materialized = False
+    executed = False
+
+    async def invalid_tool_config(*_args):
+        return {"sandbox_type": "not-a-backend"}
+
+    async def forbidden_acquire(*_args, **_kwargs):
+        nonlocal acquired
+        acquired = True
+
+    async def forbidden_materialize(*_args, **_kwargs):
+        nonlocal materialized
+        materialized = True
+
+    async def forbidden_execute(*_args, **_kwargs):
+        nonlocal executed
+        executed = True
+
+    monkeypatch.setattr(agent_tools, "_get_tool_config", invalid_tool_config)
+    monkeypatch.setattr(SandboxExecutionLeaseStore, "acquire", forbidden_acquire)
+    monkeypatch.setattr(agent_tools, "_prepare_temp_workspace", forbidden_materialize)
+    monkeypatch.setattr(agent_tools, "_execute_code_outcome", forbidden_execute)
+    monkeypatch.setattr("app.config.get_sandbox_config", lambda: SandboxConfig())
+
+    outcome = await agent_tools._execute_code_with_workspace_outcome(
+        agent_id=uuid.uuid4(),
+        tenant_id=str(uuid.uuid4()),
+        session_id=str(uuid.uuid4()),
+        arguments={"language": "python", "code": "print(1)"},
+        tool_name="execute_code",
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.error_code == "sandbox_configuration_invalid"
     assert acquired is False
     assert materialized is False
     assert executed is False

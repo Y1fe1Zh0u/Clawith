@@ -1,18 +1,22 @@
 """Tool management API — CRUD for tools and per-agent assignments."""
 
 import uuid
-from loguru import logger
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from loguru import logger
 from pydantic import BaseModel
-from sqlalchemy import String, cast, select, delete, or_
+from sqlalchemy import String, cast, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user
 from app.core.permissions import can_manage_agent
+from app.core.security import get_current_user
 from app.database import get_db
-from app.models.tool import Tool, AgentTool
+from app.models.tool import AgentTool, Tool
 from app.models.user import User
+from app.services.resource_discovery import (
+    _get_smithery_api_key,
+    get_smithery_connection_status,
+)
 from app.services.tool_config import (
     decrypt_sensitive_fields,
     encrypt_sensitive_fields,
@@ -21,10 +25,6 @@ from app.services.tool_config import (
     mask_sensitive_fields,
     meaningful_config,
     set_tenant_tool_config,
-)
-from app.services.resource_discovery import (
-    _get_smithery_api_key,
-    get_smithery_connection_status,
 )
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -1124,6 +1124,17 @@ async def update_category_config(
     encrypted_config = _encrypt_sensitive_fields(data.config)
     app_secret = encrypted_config.get("api_key") or encrypted_config.get("api_secret") or encrypted_config.get("app_secret")
     extra = {k: v for k, v in encrypted_config.items() if k not in ("api_key", "api_secret", "app_secret")}
+    if plaintext_key is not None:
+        from app.config import get_settings
+        from app.core.security import encrypt_data
+
+        try:
+            app_secret = encrypt_data(plaintext_key, get_settings().SECRET_KEY)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Atlassian API key encryption failed",
+            ) from exc
 
     result = await db.execute(
         select(ChannelConfig).where(
@@ -1153,7 +1164,7 @@ async def update_category_config(
         from app.api.atlassian import _sync_atlassian_tools_for_agent
 
         try:
-            await _sync_atlassian_tools_for_agent(agent_id, plaintext_key)
+            await _sync_atlassian_tools_for_agent(agent_id, plaintext_key, db)
         except Exception as exc:
             await db.rollback()
             raise HTTPException(

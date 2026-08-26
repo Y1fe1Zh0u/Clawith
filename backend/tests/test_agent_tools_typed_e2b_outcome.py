@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +14,6 @@ from app.services.builtin_tool_definitions import (
     builtin_readiness,
 )
 from app.services.sandbox.base import ExecutionResult
-
 
 VALID_E2B_CONFIG = {
     "sandbox_type": "e2b",
@@ -229,16 +228,7 @@ async def test_e2b_post_dispatch_timeout_is_unknown_and_not_retried(
     async def configured(_agent_id, _name):
         return dict(VALID_E2B_CONFIG)
 
-    async def fallback_forbidden(*args, **kwargs):
-        del args, kwargs
-        raise AssertionError("unknown E2B execution must not run locally")
-
     monkeypatch.setattr(agent_tools, "_get_tool_config", configured)
-    monkeypatch.setattr(
-        agent_tools,
-        "_execute_code_legacy_outcome",
-        fallback_forbidden,
-    )
     outcome = await agent_tools._execute_code_outcome(
         uuid.uuid4(),
         tmp_path,
@@ -271,10 +261,6 @@ async def test_e2b_invalid_config_fails_without_local_fallback(
     async def configured(_agent_id, _name):
         return dict(config)
 
-    async def fallback_forbidden(*args, **kwargs):
-        del args, kwargs
-        raise AssertionError("invalid E2B config must not execute locally")
-
     def local_config_forbidden():
         raise AssertionError("invalid E2B config must not load local fallback")
 
@@ -283,11 +269,6 @@ async def test_e2b_invalid_config_fails_without_local_fallback(
         config_module,
         "get_sandbox_config",
         local_config_forbidden,
-    )
-    monkeypatch.setattr(
-        agent_tools,
-        "_execute_code_legacy_outcome",
-        fallback_forbidden,
     )
     outcome = await agent_tools._execute_code_outcome(
         uuid.uuid4(),

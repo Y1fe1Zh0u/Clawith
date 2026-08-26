@@ -1,0 +1,27 @@
+# Agent Note: Atlassian Credential and Tool-Sync Boundary
+
+Status: implemented — Atlassian credentials and assigned tools now share one fail-closed persistence contract.
+
+## Problem
+
+Atlassian tool synchronization previously stored the plaintext API key in `AgentTool.config`, treated decryption failure as permission to reuse the stored value, and committed tool assignments in a separate transaction from the owning `ChannelConfig`. A failed or partial sync could therefore expose a secret at rest, dispatch ciphertext as a credential, or publish configuration success without matching tool assignments.
+
+## Decision
+
+`ChannelConfig.app_secret` and every Atlassian `AgentTool.config["api_key"]` value are encrypted before persistence. Runtime dispatch ignores credential values merged from Tool and AgentTool records and obtains the decrypted key transiently through the strict Atlassian credential reader. Missing or corrupt ciphertext fails before provider dispatch with an explicit configuration failure.
+
+Atlassian discovery, Tool upsert, AgentTool assignment, and ChannelConfig mutation reuse the request's `AsyncSession`. The route owns the single commit after synchronization succeeds. Missing credentials, discovery failure, empty discovery results, encryption failure, or persistence failure cannot return configuration success; the request rolls back instead. Atlassian configuration routes await this operation directly and do not create unowned background tasks.
+
+## Alternatives considered
+
+- Preserve background synchronization and report eventual status separately. Rejected because no durable synchronization object or consumer currently owns that lifecycle.
+- Keep AgentTool credentials in plaintext as a runtime fallback. Rejected because it duplicates the ChannelConfig authority and exposes secrets at rest.
+- Treat decryption failure as legacy plaintext. Rejected because corrupt ciphertext and plaintext cannot be distinguished safely at the dispatch boundary.
+
+## Consequences
+
+Atlassian configuration may take as long as provider discovery, but success now means the encrypted configuration and assigned tools committed together. Provider unavailability is visible as an HTTP failure and does not publish partial configuration state. Other MCP providers retain their existing credential contracts.
+
+## Verification
+
+Regression coverage verifies missing-key rejection before database work, encrypted AgentTool persistence, shared-session sync before the single commit, rollback on synchronization failure, and corrupt-ciphertext rejection before MCP dispatch. Backend Pyright and the focused Atlassian, dynamic MCP, and LLM capability tests must remain green.
