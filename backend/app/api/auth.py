@@ -289,8 +289,11 @@ async def register_sso(
             data.provider, data.code, auth_provider
         )
 
-        if error:
-            raise HTTPException(status_code=400, detail=error)
+        if error or user is None:
+            raise HTTPException(
+                status_code=400,
+                detail=error or "SSO registration failed",
+            )
 
         # If no tenant, check for email domain match
         if not user.tenant_id and user.email:
