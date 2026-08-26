@@ -97,9 +97,9 @@ After code changes, verification scope is determined by the affected contracts a
 
 Match evidence to the surface.
 
-Select verification by changed contract. Start with focused checks and expand only when the change crosses a documented boundary.
+Use [`docs/testing.md`](docs/testing.md) to select verification by changed contract. Start with focused checks and expand only when the change crosses a documented boundary.
 
-Run relevant checks before pushes and report the exact commands and results. After rebasing, merging, resolving conflicts, or otherwise synchronizing a branch, immediately rerun the checks affected by the resulting diff. Do not merge while required checks are failing.
+Run checks before pushes via [`clawith-pre-push-checks`](.agents/skills/clawith-pre-push-checks/SKILL.md) and report the exact commands and results. After rebasing, merging, resolving conflicts, or otherwise synchronizing a branch, immediately rerun the checks affected by the resulting diff. Do not merge while required checks are failing.
 
 ## Communication
 

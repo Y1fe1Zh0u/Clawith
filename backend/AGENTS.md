@@ -20,7 +20,7 @@ Run Backend commands from `backend/`:
 | Run static type checks | `uv run --extra dev pyright app` |
 | Apply database migrations | `uv run alembic upgrade head` |
 
-Use focused Pytest targets during development. Run the complete Backend suite only when the affected contracts cross multiple Backend areas or when required by the repository testing policy.
+Use focused Pytest targets during development. Use the repository testing policy as the authority for when the complete Backend suite is required.
 
 Read [`alembic/AGENTS.md`](alembic/AGENTS.md) before creating or editing a database migration.
 

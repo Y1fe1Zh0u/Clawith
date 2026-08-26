@@ -22,7 +22,7 @@ Run Frontend commands from `frontend/`:
 | Format supported files | `npm run format` |
 | Build the production bundle | `npm run build` |
 
-Use focused tests during development. Run the complete Frontend suite and production build when the affected contracts cross multiple Frontend areas or change assembled user-visible behavior.
+Use focused tests during development. Use the repository testing policy as the authority for when the complete Frontend suite and production build are required.
 
 ## Application layout
 
