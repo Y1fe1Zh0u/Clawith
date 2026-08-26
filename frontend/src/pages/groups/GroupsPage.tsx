@@ -18,6 +18,7 @@ import {
 } from "@tabler/icons-react";
 import { groupApi } from "../../services/groupApi";
 import { fetchJson } from "../../services/api";
+import { caughtErrorMessage } from "../../services/apiError";
 import {
   compareCursor,
   type GroupActivity,
@@ -643,8 +644,10 @@ export default function GroupsPage() {
           .join(" · ");
         toast.warning(diagnostics ? `${message} (${diagnostics})` : message);
       }
-    } catch (error: any) {
-      toast.error(error?.message ?? t("groups.sendFailed", "发送失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.sendFailed", "发送失败"),
+      );
       throw error;
     }
   };
@@ -661,8 +664,10 @@ export default function GroupsPage() {
       );
       await refetchActiveRuns();
       toast.info(t("groups.cancelAccepted", "已请求停止当前运行"));
-    } catch (error: any) {
-      toast.error(error?.message ?? t("groups.cancelFailed", "停止运行失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.cancelFailed", "停止运行失败"),
+      );
     } finally {
       setCancellingRuns(false);
     }
@@ -710,8 +715,10 @@ export default function GroupsPage() {
       setCreatingGroup(false);
       await refetchGroups();
       navigate(`/groups/${group.id}`);
-    } catch (error: any) {
-      toast.error(error?.message ?? t("groups.createFailed", "建群失败"));
+    } catch (error) {
+      toast.error(
+        caughtErrorMessage(error) ?? t("groups.createFailed", "建群失败"),
+      );
     } finally {
       setCreatingGroupPending(false);
     }
@@ -731,9 +738,10 @@ export default function GroupsPage() {
       });
       setExpandedGroups((current) => new Set(current).add(targetGroupId));
       navigate(`/groups/${targetGroupId}/${session.id}`);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error?.message ?? t("groups.createSessionFailed", "创建会话失败"),
+        caughtErrorMessage(error) ??
+          t("groups.createSessionFailed", "创建会话失败"),
       );
     }
   };
@@ -748,9 +756,10 @@ export default function GroupsPage() {
       await queryClient.invalidateQueries({
         queryKey: ["group-sessions", target.groupId],
       });
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error?.message ?? t("groups.renameSessionFailed", "重命名失败"),
+        caughtErrorMessage(error) ??
+          t("groups.renameSessionFailed", "重命名失败"),
       );
     }
   };
@@ -767,9 +776,10 @@ export default function GroupsPage() {
           { replace: true },
         );
       }
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error?.message ?? t("groups.deleteSessionFailed", "删除会话失败"),
+        caughtErrorMessage(error) ??
+          t("groups.deleteSessionFailed", "删除会话失败"),
       );
     } finally {
       setDeletingSession(null);
@@ -786,9 +796,10 @@ export default function GroupsPage() {
       const next = remaining.data?.find((group) => group.id !== groupId);
       navigate(next ? `/groups/${next.id}` : "/groups", { replace: true });
       toast.success(t("groups.deleteGroupDone", "群聊已删除"));
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error?.message ?? t("groups.deleteGroupFailed", "删除群聊失败"),
+        caughtErrorMessage(error) ??
+          t("groups.deleteGroupFailed", "删除群聊失败"),
       );
     }
   };
