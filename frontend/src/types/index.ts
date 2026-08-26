@@ -42,7 +42,7 @@ export interface Agent {
   heartbeat_interval_minutes: number;
   heartbeat_active_hours: string;
   last_heartbeat_at?: string;
-  timezone?: string;
+  timezone?: string | null;
   context_window_size?: number;
   agent_type?: "native" | "openclaw";
   openclaw_last_seen?: string;

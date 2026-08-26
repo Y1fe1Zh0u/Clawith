@@ -8,7 +8,8 @@
 import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { experienceApi, type ExperienceEntry } from "../services/api";
-import { Drawer, EXP_FIELDS, secondaryBtn } from "./ExperienceDraftEditor";
+import { Drawer } from "./ExperienceDraftEditor";
+import { EXP_FIELDS, secondaryBtn } from "./ExperienceDraftEditor.shared";
 import MarkdownRenderer from "./MarkdownRenderer";
 
 // 2026年7月9日; empty string for null/invalid.

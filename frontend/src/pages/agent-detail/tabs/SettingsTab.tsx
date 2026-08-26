@@ -1,4 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { IconTools, IconWorld } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
@@ -6,6 +7,15 @@ import AgentCredentials from "../../../components/AgentCredentials";
 import ChannelConfig from "../../../components/ChannelConfig";
 import OpenClawSettings from "../../OpenClawSettings";
 import { agentApi } from "../../../services/api";
+import type { LlmModel } from "../../../services/apiContracts";
+import type { Agent } from "../../../types";
+
+type SettingsAgent = Agent & {
+  max_tool_rounds?: number;
+  max_triggers?: number;
+  min_poll_interval_min?: number;
+  webhook_rate_limit?: number;
+};
 
 type SettingsFormState = {
   primary_model_id: string;
@@ -20,10 +30,10 @@ type SettingsFormState = {
 };
 
 interface Props {
-  agent: any;
+  agent: SettingsAgent;
   agentId: string;
   canManage: boolean;
-  llmModels: any[];
+  llmModels: LlmModel[];
   settingsForm: SettingsFormState;
   setSettingsForm: Dispatch<SetStateAction<SettingsFormState>>;
   settingsSaved: boolean;
@@ -36,7 +46,7 @@ interface Props {
   wmSaved: boolean;
   onSaveWelcomeMessage: () => Promise<void>;
   accessPermissionsPanel: ReactNode;
-  queryClient: any;
+  queryClient: QueryClient;
   formatTokens: (n: number) => string;
   showDeleteConfirm: boolean;
   setShowDeleteConfirm: Dispatch<SetStateAction<boolean>>;
@@ -71,7 +81,7 @@ export default function SettingsTab(props: Props) {
   const readOnly = !canManage;
   const canSave = canManage && hasChanges && !settingsSaving;
 
-  if ((agent as any)?.agent_type === "openclaw") {
+  if (agent.agent_type === "openclaw") {
     return (
       <OpenClawSettings agent={agent} agentId={agentId} canManage={canManage} />
     );
@@ -156,10 +166,9 @@ export default function SettingsTab(props: Props) {
                 <option value="">--</option>
                 {llmModels
                   .filter(
-                    (m: any) =>
-                      m.enabled || m.id === settingsForm.primary_model_id,
+                    (m) => m.enabled || m.id === settingsForm.primary_model_id,
                   )
-                  .map((m: any) => (
+                  .map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label || m.model}
                     </option>
@@ -167,8 +176,7 @@ export default function SettingsTab(props: Props) {
               </select>
               {settingsForm.primary_model_id &&
                 llmModels.some(
-                  (m: any) =>
-                    m.id === settingsForm.primary_model_id && !m.enabled,
+                  (m) => m.id === settingsForm.primary_model_id && !m.enabled,
                 ) && (
                   <div
                     style={{
@@ -217,10 +225,9 @@ export default function SettingsTab(props: Props) {
                 <option value="">--</option>
                 {llmModels
                   .filter(
-                    (m: any) =>
-                      m.enabled || m.id === settingsForm.fallback_model_id,
+                    (m) => m.enabled || m.id === settingsForm.fallback_model_id,
                   )
-                  .map((m: any) => (
+                  .map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label || m.model}
                     </option>
@@ -228,8 +235,7 @@ export default function SettingsTab(props: Props) {
               </select>
               {settingsForm.fallback_model_id &&
                 llmModels.some(
-                  (m: any) =>
-                    m.id === settingsForm.fallback_model_id && !m.enabled,
+                  (m) => m.id === settingsForm.fallback_model_id && !m.enabled,
                 ) && (
                   <div
                     style={{
@@ -704,8 +710,7 @@ export default function SettingsTab(props: Props) {
                 desc: t("agent.settings.autonomy.manageTasksDesc"),
               },
             ].map((action) => {
-              const currentLevel =
-                (agent?.autonomy_policy as any)?.[action.key] || "L1";
+              const currentLevel = agent.autonomy_policy[action.key] || "L1";
               return (
                 <div
                   key={action.key}
@@ -738,12 +743,12 @@ export default function SettingsTab(props: Props) {
                     onChange={async (e) => {
                       if (!canManage) return;
                       const newPolicy = {
-                        ...((agent?.autonomy_policy as any) || {}),
+                        ...agent.autonomy_policy,
                         [action.key]: e.target.value,
                       };
                       await agentApi.update(agentId, {
                         autonomy_policy: newPolicy,
-                      } as any);
+                      });
                       queryClient.invalidateQueries({
                         queryKey: ["agent", agentId],
                       });
@@ -836,7 +841,7 @@ export default function SettingsTab(props: Props) {
               onChange={async (e) => {
                 if (!canManage) return;
                 const value = e.target.value || null;
-                await agentApi.update(agentId, { timezone: value } as any);
+                await agentApi.update(agentId, { timezone: value });
                 queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
               }}
               style={{
@@ -943,7 +948,7 @@ export default function SettingsTab(props: Props) {
                     if (!canManage) return;
                     await agentApi.update(agentId, {
                       heartbeat_enabled: e.target.checked,
-                    } as any);
+                    });
                     queryClient.invalidateQueries({
                       queryKey: ["agent", agentId],
                     });
@@ -1022,7 +1027,7 @@ export default function SettingsTab(props: Props) {
                     e.target.value = String(value);
                     await agentApi.update(agentId, {
                       heartbeat_interval_minutes: value,
-                    } as any);
+                    });
                     queryClient.invalidateQueries({
                       queryKey: ["agent", agentId],
                     });
@@ -1073,7 +1078,7 @@ export default function SettingsTab(props: Props) {
                   if (!canManage) return;
                   await agentApi.update(agentId, {
                     heartbeat_active_hours: e.target.value,
-                  } as any);
+                  });
                   queryClient.invalidateQueries({
                     queryKey: ["agent", agentId],
                   });

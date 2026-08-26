@@ -2,6 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { fetchAuth } from "../utils/fetchAuth";
+import type { JsonValue } from "../../../services/apiContracts";
+
+interface Approval {
+  id: string;
+  status: string;
+  action_type: string;
+  details: JsonValue;
+  created_at: string | null;
+  resolved_at: string | null;
+}
 
 export default function ApprovalsTab({
   agentId,
@@ -15,7 +25,7 @@ export default function ApprovalsTab({
   const isChinese = i18n.language?.startsWith("zh");
   const { data: approvals = [], refetch: refetchApprovals } = useQuery({
     queryKey: ["agent-approvals", agentId],
-    queryFn: () => fetchAuth<any[]>(`/agents/${agentId}/approvals`),
+    queryFn: () => fetchAuth<Approval[]>(`/agents/${agentId}/approvals`),
     enabled: !!agentId,
     refetchInterval: 15000,
   });
@@ -45,11 +55,9 @@ export default function ApprovalsTab({
     },
   });
 
-  const pending = approvals.filter(
-    (approval: any) => approval.status === "pending",
-  );
+  const pending = approvals.filter((approval) => approval.status === "pending");
   const resolved = approvals.filter(
-    (approval: any) => approval.status !== "pending",
+    (approval) => approval.status !== "pending",
   );
   const statusStyle = (status: string) => ({
     padding: "2px 8px",
@@ -85,7 +93,7 @@ export default function ApprovalsTab({
               ? `${pending.length} 个待审批`
               : `${pending.length} Pending`}
           </h4>
-          {pending.map((approval: any) => (
+          {pending.map((approval) => (
             <div
               key={approval.id}
               style={{
@@ -205,7 +213,7 @@ export default function ApprovalsTab({
           {isChinese ? "暂无审批记录" : "No approval records"}
         </div>
       )}
-      {resolved.map((approval: any) => (
+      {resolved.map((approval) => (
         <div
           key={approval.id}
           style={{

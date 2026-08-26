@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
   IconBrowser,
@@ -15,6 +17,7 @@ import {
 import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { useToast } from "../../../components/Toast/ToastProvider";
 import { caughtErrorMessage } from "../../../services/apiError";
+import type { JsonValue } from "../../../services/apiContracts";
 import { useAuthStore } from "../../../stores";
 import {
   closeMcpAuthorizationWindow,
@@ -27,7 +30,238 @@ import {
   type McpAuthorizationState,
 } from "../mcpAuthorization";
 
-const getCategoryLabels = (t: any): Record<string, string> => ({
+type ToolConfig = Record<string, JsonValue>;
+type ToolStatusFilter = "all" | "enabled" | "disabled" | "configured";
+
+const TOOL_STATUS_FILTERS: readonly ToolStatusFilter[] = [
+  "all",
+  "enabled",
+  "disabled",
+  "configured",
+];
+
+interface ConfigOption {
+  value: string | number;
+  label: string;
+  help_text?: string;
+  help_url?: string;
+}
+
+interface ConfigField {
+  key: string;
+  label: string;
+  type: string;
+  placeholder?: string;
+  default?: JsonValue;
+  options?: ConfigOption[];
+  min?: number;
+  max?: number;
+  advanced?: boolean;
+  depends_on?: Record<string, JsonValue[]>;
+  read_only_for_roles?: string[];
+}
+
+interface ConfigSchema {
+  title?: string;
+  fields: ConfigField[];
+}
+
+interface AgentTool {
+  id: string;
+  agent_tool_id: string | null;
+  name: string;
+  display_name: string;
+  description: string;
+  type: string;
+  category: string;
+  enabled: boolean;
+  mcp_server_name: string | null;
+  mcp_authorization_provider: string | null;
+  config_schema: ConfigSchema;
+  global_config: ToolConfig;
+  agent_config: ToolConfig;
+  source: string;
+}
+
+interface CategoryConfigResponse {
+  global_config: ToolConfig;
+  agent_config: ToolConfig;
+}
+
+interface EmailTestResponse {
+  ok: boolean;
+  imap?: string;
+  smtp?: string;
+  error?: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isJsonValue = (value: unknown): value is JsonValue => {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isRecord(value) && Object.values(value).every(isJsonValue);
+};
+
+const parseToolConfig = (value: unknown): ToolConfig => {
+  if (!isRecord(value)) return {};
+  const config: ToolConfig = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (isJsonValue(entry)) config[key] = entry;
+  }
+  return config;
+};
+
+const parseConfigOption = (value: unknown): ConfigOption | null => {
+  if (
+    !isRecord(value) ||
+    (typeof value.value !== "string" && typeof value.value !== "number") ||
+    typeof value.label !== "string"
+  ) {
+    return null;
+  }
+  return {
+    value: value.value,
+    label: value.label,
+    ...(typeof value.help_text === "string"
+      ? { help_text: value.help_text }
+      : {}),
+    ...(typeof value.help_url === "string" ? { help_url: value.help_url } : {}),
+  };
+};
+
+const parseConfigField = (value: unknown): ConfigField | null => {
+  if (
+    !isRecord(value) ||
+    typeof value.key !== "string" ||
+    typeof value.label !== "string" ||
+    typeof value.type !== "string"
+  ) {
+    return null;
+  }
+  const dependsOn: Record<string, JsonValue[]> = {};
+  if (isRecord(value.depends_on)) {
+    for (const [key, entries] of Object.entries(value.depends_on)) {
+      if (Array.isArray(entries)) {
+        dependsOn[key] = entries.filter(isJsonValue);
+      }
+    }
+  }
+  return {
+    key: value.key,
+    label: value.label,
+    type: value.type,
+    ...(typeof value.placeholder === "string"
+      ? { placeholder: value.placeholder }
+      : {}),
+    ...(isJsonValue(value.default) ? { default: value.default } : {}),
+    ...(Array.isArray(value.options)
+      ? {
+          options: value.options
+            .map(parseConfigOption)
+            .filter((option): option is ConfigOption => option !== null),
+        }
+      : {}),
+    ...(typeof value.min === "number" ? { min: value.min } : {}),
+    ...(typeof value.max === "number" ? { max: value.max } : {}),
+    ...(typeof value.advanced === "boolean"
+      ? { advanced: value.advanced }
+      : {}),
+    ...(Object.keys(dependsOn).length > 0 ? { depends_on: dependsOn } : {}),
+    ...(Array.isArray(value.read_only_for_roles)
+      ? {
+          read_only_for_roles: value.read_only_for_roles.filter(
+            (role): role is string => typeof role === "string",
+          ),
+        }
+      : {}),
+  };
+};
+
+const parseConfigSchema = (value: unknown): ConfigSchema => {
+  if (!isRecord(value)) return { fields: [] };
+  return {
+    ...(typeof value.title === "string" ? { title: value.title } : {}),
+    fields: Array.isArray(value.fields)
+      ? value.fields
+          .map(parseConfigField)
+          .filter((field): field is ConfigField => field !== null)
+      : [],
+  };
+};
+
+const parseAgentTool = (value: unknown): AgentTool | null => {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.display_name !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: value.id,
+    agent_tool_id:
+      typeof value.agent_tool_id === "string" ? value.agent_tool_id : null,
+    name: value.name,
+    display_name: value.display_name,
+    description: typeof value.description === "string" ? value.description : "",
+    type: typeof value.type === "string" ? value.type : "builtin",
+    category: typeof value.category === "string" ? value.category : "general",
+    enabled: value.enabled === true,
+    mcp_server_name:
+      typeof value.mcp_server_name === "string" ? value.mcp_server_name : null,
+    mcp_authorization_provider:
+      typeof value.mcp_authorization_provider === "string"
+        ? value.mcp_authorization_provider
+        : null,
+    config_schema: parseConfigSchema(value.config_schema),
+    global_config: parseToolConfig(value.global_config),
+    agent_config: parseToolConfig(value.agent_config),
+    source: typeof value.source === "string" ? value.source : "builtin",
+  };
+};
+
+const parseAgentTools = (value: unknown): AgentTool[] =>
+  Array.isArray(value)
+    ? value
+        .map(parseAgentTool)
+        .filter((tool): tool is AgentTool => tool !== null)
+    : [];
+
+const parseCategoryConfig = (value: unknown): CategoryConfigResponse =>
+  isRecord(value)
+    ? {
+        global_config: parseToolConfig(value.global_config),
+        agent_config: parseToolConfig(value.agent_config),
+      }
+    : { global_config: {}, agent_config: {} };
+
+const parseEmailTestResponse = (value: unknown): EmailTestResponse => {
+  if (!isRecord(value)) return { ok: false, error: "Invalid response" };
+  return {
+    ok: value.ok === true,
+    ...(typeof value.imap === "string" ? { imap: value.imap } : {}),
+    ...(typeof value.smtp === "string" ? { smtp: value.smtp } : {}),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+  };
+};
+
+const inputValue = (value: JsonValue | undefined): string | number => {
+  if (typeof value === "string" || typeof value === "number") return value;
+  if (typeof value === "boolean") return String(value);
+  return value === null || value === undefined ? "" : JSON.stringify(value);
+};
+
+const getCategoryLabels = (t: TFunction): Record<string, string> => ({
   file: t("agent.toolCategories.file"),
   task: t("agent.toolCategories.task"),
   communication: t("agent.toolCategories.communication"),
@@ -53,10 +287,10 @@ export default function ToolsManager({
   const { t } = useTranslation();
   const dialog = useDialog();
   const toast = useToast();
-  const [tools, setTools] = useState<any[]>([]);
+  const [tools, setTools] = useState<AgentTool[]>([]);
   const [loading, setLoading] = useState(true);
-  const [configTool, setConfigTool] = useState<any | null>(null);
-  const [configData, setConfigData] = useState<Record<string, any>>({});
+  const [configTool, setConfigTool] = useState<AgentTool | null>(null);
+  const [configData, setConfigData] = useState<ToolConfig>({});
   const [configJson, setConfigJson] = useState("");
   const [configSaving, setConfigSaving] = useState(false);
   const [toolTab, setToolTab] = useState<"company" | "installed">("company");
@@ -68,9 +302,8 @@ export default function ToolsManager({
     () => new Set(),
   );
   const [toolSearch, setToolSearch] = useState("");
-  const [toolStatusFilter, setToolStatusFilter] = useState<
-    "all" | "enabled" | "disabled" | "configured"
-  >("all");
+  const [toolStatusFilter, setToolStatusFilter] =
+    useState<ToolStatusFilter>("all");
   const [mcpAuthorizationStates, setMcpAuthorizationStates] = useState<
     Record<string, McpAuthorizationState>
   >({});
@@ -78,11 +311,9 @@ export default function ToolsManager({
     useState<string | null>(null);
   // Global (company-level) config for the currently open modal — used to show
   // lock hints and prevent agent from overriding company-set fields.
-  const [configGlobalData, setConfigGlobalData] = useState<Record<string, any>>(
-    {},
-  );
+  const [configGlobalData, setConfigGlobalData] = useState<ToolConfig>({});
 
-  const CATEGORY_CONFIG_SCHEMAS: Record<string, any> = {
+  const CATEGORY_CONFIG_SCHEMAS: Record<string, ConfigSchema> = {
     agentbay: {
       title: "AgentBay Settings",
       fields: [
@@ -123,29 +354,48 @@ export default function ToolsManager({
     },
   };
 
-  const loadTools = async () => {
+  const fetchTools = useCallback(async (): Promise<AgentTool[]> => {
+    const token = localStorage.getItem("token");
+    const res = await fetch(`/api/tools/agents/${agentId}/with-config`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) return parseAgentTools(await res.json());
+
+    const fallbackResponse = await fetch(`/api/tools/agents/${agentId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return fallbackResponse.ok
+      ? parseAgentTools(await fallbackResponse.json())
+      : [];
+  }, [agentId]);
+
+  const loadTools = useCallback(async () => {
+    setLoading(true);
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(`/api/tools/agents/${agentId}/with-config`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) setTools(await res.json());
-      else {
-        // Fallback to old endpoint
-        const res2 = await fetch(`/api/tools/agents/${agentId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res2.ok) setTools(await res2.json());
-      }
-    } catch (e) {
-      console.error(e);
+      setTools(await fetchTools());
+    } catch (error) {
+      console.error(error);
     }
     setLoading(false);
-  };
+  }, [fetchTools]);
 
   useEffect(() => {
-    loadTools();
-  }, [agentId]);
+    let active = true;
+    void fetchTools()
+      .then((loadedTools) => {
+        if (!active) return;
+        setTools(loadedTools);
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        console.error(error);
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fetchTools]);
 
   const toggleTool = async (toolId: string, enabled: boolean) => {
     setTools((prev) =>
@@ -176,9 +426,9 @@ export default function ToolsManager({
     "secret",
   ]);
 
-  const getSensitiveKeys = (schema: any): Set<string> => {
+  const getSensitiveKeys = (schema?: ConfigSchema): Set<string> => {
     const keys = new Set(SENSITIVE_KEYS_BASE);
-    if (schema?.fields) {
+    if (schema) {
       for (const field of schema.fields) {
         if (field.type === "password") keys.add(field.key);
       }
@@ -187,8 +437,8 @@ export default function ToolsManager({
   };
 
   const applyConfigDefaults = (
-    fields: any[] = [],
-    config: Record<string, any> = {},
+    fields: ConfigField[] = [],
+    config: ToolConfig = {},
   ) => {
     const next = { ...config };
     for (const field of fields) {
@@ -204,7 +454,7 @@ export default function ToolsManager({
     return next;
   };
 
-  const openConfig = (tool: any) => {
+  const openConfig = (tool: AgentTool) => {
     setConfigTool(tool);
     setShowAdvancedToolConfig(false);
     // Build merged config: start with global defaults, overlay agent overrides.
@@ -213,7 +463,7 @@ export default function ToolsManager({
     const sensitiveKeys = getSensitiveKeys(tool.config_schema);
     const globalCfg = tool.global_config || {};
     const agentCfg = tool.agent_config || {};
-    const merged: Record<string, any> = {};
+    const merged: ToolConfig = {};
     for (const [k, v] of Object.entries(globalCfg)) {
       if (!sensitiveKeys.has(k)) merged[k] = v;
     }
@@ -243,7 +493,7 @@ export default function ToolsManager({
         },
       );
       if (res.ok) {
-        const data = await res.json();
+        const data = parseCategoryConfig(await res.json());
         // global_config: company-level (masked sensitive fields like ****xxxx)
         // agent_config: agent-level overrides only
         const globalCfg = data.global_config || {};
@@ -252,7 +502,7 @@ export default function ToolsManager({
         // Pre-fill only agent-level values; company fields show as hints
         const catSchema = CATEGORY_CONFIG_SCHEMAS[category];
         const sensitiveKeys = getSensitiveKeys(catSchema);
-        const merged: Record<string, any> = {};
+        const merged: ToolConfig = {};
         for (const [k, v] of Object.entries(globalCfg)) {
           // Non-sensitive global fields (e.g. os_type) pre-fill; sensitive ones don't
           if (!sensitiveKeys.has(k)) merged[k] = v;
@@ -276,9 +526,9 @@ export default function ToolsManager({
         const raw = configData;
         // Strip empty sensitive fields so untouched password inputs
         // don't send empty values that would clear an inherited company key
-        const catSchema = CATEGORY_CONFIG_SCHEMAS[configCategory!];
+        const catSchema = CATEGORY_CONFIG_SCHEMAS[configCategory];
         const sensitiveKeys = getSensitiveKeys(catSchema);
-        const payload: Record<string, any> = {};
+        const payload: ToolConfig = {};
         for (const [k, v] of Object.entries(raw)) {
           if (
             sensitiveKeys.has(k) &&
@@ -299,12 +549,15 @@ export default function ToolsManager({
           },
         );
         setConfigCategory(null);
-      } else {
-        const hasSchema = configTool.config_schema?.fields?.length > 0;
-        const raw = hasSchema ? configData : JSON.parse(configJson || "{}");
+      } else if (configTool) {
+        const currentConfigTool = configTool;
+        const hasSchema = currentConfigTool.config_schema.fields.length > 0;
+        const raw = hasSchema
+          ? configData
+          : parseToolConfig(JSON.parse(configJson || "{}"));
         // Strip empty sensitive fields only — agent CAN override company values
-        const sensitiveKeys = getSensitiveKeys(configTool.config_schema);
-        const payload: Record<string, any> = {};
+        const sensitiveKeys = getSensitiveKeys(currentConfigTool.config_schema);
+        const payload: ToolConfig = {};
         for (const [k, v] of Object.entries(raw)) {
           if (
             sensitiveKeys.has(k) &&
@@ -314,7 +567,7 @@ export default function ToolsManager({
           payload[k] = v;
         }
         await fetch(
-          `/api/tools/agents/${agentId}/tool-config/${configTool.id}`,
+          `/api/tools/agents/${agentId}/tool-config/${currentConfigTool.id}`,
           {
             method: "PUT",
             headers: {
@@ -326,7 +579,7 @@ export default function ToolsManager({
         );
         setConfigTool(null);
       }
-      loadTools();
+      await loadTools();
     } catch (error) {
       toast.error(t("common.error.saveFailed"), {
         details: String(caughtErrorMessage(error) || error),
@@ -353,14 +606,14 @@ export default function ToolsManager({
     (t) => t.source === "agent" && t.category !== "system",
   );
 
-  const mcpGroupKey = (tool: any) => {
+  const mcpGroupKey = (tool: AgentTool) => {
     const serverName = String(tool.mcp_server_name || "").trim();
     return tool.type === "mcp" && serverName
       ? `mcp:${serverName.toLowerCase()}`
       : tool.category || "general";
   };
 
-  const getToolGroupMeta = (groupKey: string, toolsInGroup: any[]) => {
+  const getToolGroupMeta = (groupKey: string, toolsInGroup: AgentTool[]) => {
     const first =
       toolsInGroup.find(
         (tool) => tool.type === "mcp" && tool.mcp_server_name,
@@ -385,10 +638,10 @@ export default function ToolsManager({
     };
   };
 
-  const groupByCategory = (toolList: any[]) =>
-    toolList.reduce((acc: Record<string, any[]>, t) => {
-      const cat = mcpGroupKey(t);
-      (acc[cat] = acc[cat] || []).push(t);
+  const groupByCategory = (toolList: AgentTool[]) =>
+    toolList.reduce<Record<string, AgentTool[]>>((acc, tool) => {
+      const cat = mcpGroupKey(tool);
+      (acc[cat] = acc[cat] || []).push(tool);
       return acc;
     }, {});
 
@@ -434,8 +687,8 @@ export default function ToolsManager({
     }
   };
 
-  const switchTrack = (enabled: boolean, mixed = false) => ({
-    position: "absolute" as const,
+  const switchTrack = (enabled: boolean, mixed = false): CSSProperties => ({
+    position: "absolute",
     inset: 0,
     background: enabled
       ? "var(--accent-primary)"
@@ -446,8 +699,8 @@ export default function ToolsManager({
     transition: "background 0.2s",
   });
 
-  const switchKnob = (enabled: boolean) => ({
-    position: "absolute" as const,
+  const switchKnob = (enabled: boolean): CSSProperties => ({
+    position: "absolute",
     left: enabled ? "20px" : "2px",
     top: "2px",
     width: "18px",
@@ -467,7 +720,10 @@ export default function ToolsManager({
     });
   };
 
-  const bulkToggleCategory = async (catTools: any[], enabled: boolean) => {
+  const bulkToggleCategory = async (
+    catTools: AgentTool[],
+    enabled: boolean,
+  ) => {
     const catToolIds = new Set(catTools.map((t) => t.id));
     setTools((prev) =>
       prev.map((t) => (catToolIds.has(t.id) ? { ...t, enabled } : t)),
@@ -488,11 +744,14 @@ export default function ToolsManager({
       });
     } catch (err) {
       console.error("Bulk update failed", err);
-      loadTools();
+      await loadTools();
     }
   };
 
-  const checkMcpAuthorization = async (groupKey: string, groupTools: any[]) => {
+  const checkMcpAuthorization = async (
+    groupKey: string,
+    groupTools: AgentTool[],
+  ) => {
     const authorizationTool = getSmitheryAuthorizationTool(groupTools);
     if (!authorizationTool?.id || checkingMcpAuthorizationGroup) return;
 
@@ -558,7 +817,7 @@ export default function ToolsManager({
     }
   };
 
-  const renderToolRow = (tool: any, category: string) => {
+  const renderToolRow = (tool: AgentTool, category: string) => {
     const hasConfig =
       tool.config_schema?.fields?.length > 0 || tool.type === "mcp";
     const hasAgentOverride =
@@ -779,8 +1038,8 @@ export default function ToolsManager({
   };
 
   const renderToolGroup = (
-    groupedTools: Record<string, any[]>,
-    allGroupedTools: Record<string, any[]>,
+    groupedTools: Record<string, AgentTool[]>,
+    allGroupedTools: Record<string, AgentTool[]>,
   ) =>
     Object.entries(groupedTools)
       .sort(([a, aTools], [b, bTools]) => {
@@ -792,11 +1051,9 @@ export default function ToolsManager({
         const allCatTools = allGroupedTools[category] || catTools;
         const meta = getToolGroupMeta(category, allCatTools);
         const label = meta.label;
-        const enabledCount = allCatTools.filter(
-          (tool: any) => tool.enabled,
-        ).length;
+        const enabledCount = allCatTools.filter((tool) => tool.enabled).length;
         const configuredCount = allCatTools.filter(
-          (tool: any) =>
+          (tool) =>
             tool.agent_config && Object.keys(tool.agent_config).length > 0,
         ).length;
         const allEnabled =
@@ -804,7 +1061,7 @@ export default function ToolsManager({
         const mixed = enabledCount > 0 && enabledCount < allCatTools.length;
         const expanded =
           expandedCategories.has(category) || !!toolSearch.trim();
-        const visibleCount = (catTools as any[]).length;
+        const visibleCount = catTools.length;
         const smitheryAuthorizationTool =
           getSmitheryAuthorizationTool(allCatTools);
         const authorizationState =
@@ -1043,11 +1300,7 @@ export default function ToolsManager({
               </div>
             </div>
             {expanded && (
-              <div>
-                {(catTools as any[]).map((tool: any) =>
-                  renderToolRow(tool, category),
-                )}
-              </div>
+              <div>{catTools.map((tool) => renderToolRow(tool, category))}</div>
             )}
           </div>
         );
@@ -1056,7 +1309,7 @@ export default function ToolsManager({
   const activeTools =
     toolTab === "company" ? companyTools : agentInstalledTools;
   const normalizedToolSearch = toolSearch.trim().toLowerCase();
-  const matchesToolSearch = (tool: any) => {
+  const matchesToolSearch = (tool: AgentTool) => {
     if (!normalizedToolSearch) return true;
     const category = tool.category || "general";
     const haystack = [
@@ -1072,7 +1325,7 @@ export default function ToolsManager({
       .toLowerCase();
     return haystack.includes(normalizedToolSearch);
   };
-  const matchesStatusFilter = (tool: any) => {
+  const matchesStatusFilter = (tool: AgentTool) => {
     if (toolStatusFilter === "enabled") return !!tool.enabled;
     if (toolStatusFilter === "disabled") return !tool.enabled;
     if (toolStatusFilter === "configured")
@@ -1162,38 +1415,36 @@ export default function ToolsManager({
               }}
             />
           </div>
-          {(["all", "enabled", "disabled", "configured"] as const).map(
-            (filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setToolStatusFilter(filter)}
-                style={{
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "999px",
-                  background:
-                    toolStatusFilter === filter
-                      ? "var(--text-primary)"
-                      : "var(--bg-primary)",
-                  color:
-                    toolStatusFilter === filter
-                      ? "var(--bg-primary)"
-                      : "var(--text-secondary)",
-                  padding: "6px 10px",
-                  fontSize: "11px",
-                  cursor: "pointer",
-                }}
-              >
-                {filter === "all"
-                  ? t("common.all", "All")
-                  : filter === "enabled"
-                    ? t("common.enabled", "Enabled")
-                    : filter === "disabled"
-                      ? t("common.disabled", "Disabled")
-                      : t("agent.tools.configured", "Configured")}
-              </button>
-            ),
-          )}
+          {TOOL_STATUS_FILTERS.map((filter) => (
+            <button
+              key={filter}
+              type="button"
+              onClick={() => setToolStatusFilter(filter)}
+              style={{
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "999px",
+                background:
+                  toolStatusFilter === filter
+                    ? "var(--text-primary)"
+                    : "var(--bg-primary)",
+                color:
+                  toolStatusFilter === filter
+                    ? "var(--bg-primary)"
+                    : "var(--text-secondary)",
+                padding: "6px 10px",
+                fontSize: "11px",
+                cursor: "pointer",
+              }}
+            >
+              {filter === "all"
+                ? t("common.all", "All")
+                : filter === "enabled"
+                  ? t("common.enabled", "Enabled")
+                  : filter === "disabled"
+                    ? t("common.disabled", "Disabled")
+                    : t("agent.tools.configured", "Configured")}
+            </button>
+          ))}
           <button
             type="button"
             onClick={() => {
@@ -1256,24 +1507,27 @@ export default function ToolsManager({
       {/* Tool Config Modal */}
       {(configTool || configCategory) &&
         (() => {
-          const target = configTool || CATEGORY_CONFIG_SCHEMAS[configCategory!];
-          const fields = configTool
-            ? configTool.config_schema?.fields || []
-            : target.fields || [];
-          const title = configTool ? configTool.display_name : target.title;
+          const schema = configTool
+            ? configTool.config_schema
+            : configCategory
+              ? CATEGORY_CONFIG_SCHEMAS[configCategory]
+              : undefined;
+          if (!schema) return null;
+          const fields = schema.fields;
+          const title = configTool?.display_name ?? schema.title ?? "Config";
           const isCat = !!configCategory;
-          const visibleFields = fields.filter((field: any) => {
+          const visibleFields = fields.filter((field) => {
             if (!field.depends_on) return true;
             return Object.entries(field.depends_on).every(
-              ([depKey, depVals]: [string, any]) =>
-                (depVals as string[]).includes(configData[depKey] ?? ""),
+              ([dependencyKey, dependencyValues]) =>
+                dependencyValues.includes(configData[dependencyKey] ?? ""),
             );
           });
           const primaryFields = visibleFields.filter(
-            (field: any) => !field.advanced,
+            (field) => !field.advanced,
           );
           const advancedFields = visibleFields.filter(
-            (field: any) => field.advanced,
+            (field) => field.advanced,
           );
           return (
             <div
@@ -1363,11 +1617,12 @@ export default function ToolsManager({
                       gap: "12px",
                     }}
                   >
-                    {primaryFields.map((field: any) => {
+                    {primaryFields.map((field) => {
                       // Get user role from store directly in the map function
                       const userFromStore = useAuthStore.getState().user;
                       const currentUserRole = userFromStore?.role;
                       const isReadOnly =
+                        currentUserRole !== undefined &&
                         field.read_only_for_roles?.includes(currentUserRole);
                       return (
                         <div key={field.key}>
@@ -1427,11 +1682,11 @@ export default function ToolsManager({
                             >
                               <input
                                 type="checkbox"
-                                checked={
+                                checked={Boolean(
                                   configData[field.key] ??
                                   field.default ??
-                                  false
-                                }
+                                  false,
+                                )}
                                 disabled={isReadOnly}
                                 onChange={(e) =>
                                   setConfigData((p) => ({
@@ -1534,7 +1789,7 @@ export default function ToolsManager({
                                     autoComplete="new-password"
                                     className="form-input"
                                     autoFocus={focusedField === field.key}
-                                    value={configData[field.key] ?? ""}
+                                    value={inputValue(configData[field.key])}
                                     placeholder={
                                       globalVal
                                         ? t(
@@ -1565,8 +1820,9 @@ export default function ToolsManager({
                               {field.key === "auth_code" &&
                                 (() => {
                                   const providerField =
-                                    configTool?.config_schema?.fields?.find(
-                                      (f: any) => f.key === "email_provider",
+                                    configTool?.config_schema.fields.find(
+                                      (candidate) =>
+                                        candidate.key === "email_provider",
                                     );
                                   const selectedProvider =
                                     configData["email_provider"] ||
@@ -1574,7 +1830,8 @@ export default function ToolsManager({
                                     "";
                                   const providerOption =
                                     providerField?.options?.find(
-                                      (o: any) => o.value === selectedProvider,
+                                      (option) =>
+                                        option.value === selectedProvider,
                                     );
                                   if (!providerOption?.help_text) return null;
                                   return (
@@ -1611,9 +1868,9 @@ export default function ToolsManager({
                           ) : field.type === "select" ? (
                             <select
                               className="form-input"
-                              value={
-                                configData[field.key] ?? field.default ?? ""
-                              }
+                              value={inputValue(
+                                configData[field.key] ?? field.default,
+                              )}
                               onChange={(e) =>
                                 setConfigData((p) => ({
                                   ...p,
@@ -1621,9 +1878,9 @@ export default function ToolsManager({
                                 }))
                               }
                             >
-                              {(field.options || []).map((o: any) => (
-                                <option key={o.value} value={o.value}>
-                                  {o.label}
+                              {(field.options || []).map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
                                 </option>
                               ))}
                             </select>
@@ -1631,9 +1888,9 @@ export default function ToolsManager({
                             <input
                               type="number"
                               className="form-input"
-                              value={
-                                configData[field.key] ?? field.default ?? ""
-                              }
+                              value={inputValue(
+                                configData[field.key] ?? field.default,
+                              )}
                               placeholder={field.placeholder || ""}
                               min={field.min}
                               max={field.max}
@@ -1649,7 +1906,7 @@ export default function ToolsManager({
                           ) : field.type === "textarea" ? (
                             <textarea
                               className="form-input"
-                              value={configData[field.key] ?? ""}
+                              value={inputValue(configData[field.key])}
                               placeholder={
                                 field.placeholder ||
                                 t(
@@ -1744,7 +2001,7 @@ export default function ToolsManager({
                                     type="text"
                                     className="form-input"
                                     autoFocus={focusedField === field.key}
-                                    value={configData[field.key] ?? ""}
+                                    value={inputValue(configData[field.key])}
                                     placeholder={
                                       globalVal
                                         ? t(
@@ -1808,11 +2065,12 @@ export default function ToolsManager({
                               marginTop: "12px",
                             }}
                           >
-                            {advancedFields.map((field: any) => {
+                            {advancedFields.map((field) => {
                               const userFromStore =
                                 useAuthStore.getState().user;
                               const currentUserRole = userFromStore?.role;
                               const isReadOnly =
+                                currentUserRole !== undefined &&
                                 field.read_only_for_roles?.includes(
                                   currentUserRole,
                                 );
@@ -1853,11 +2111,11 @@ export default function ToolsManager({
                                     >
                                       <input
                                         type="checkbox"
-                                        checked={
+                                        checked={Boolean(
                                           configData[field.key] ??
                                           field.default ??
-                                          false
-                                        }
+                                          false,
+                                        )}
                                         disabled={isReadOnly}
                                         onChange={(e) =>
                                           setConfigData((p) => ({
@@ -1906,11 +2164,9 @@ export default function ToolsManager({
                                   ) : field.type === "select" ? (
                                     <select
                                       className="form-input"
-                                      value={
-                                        configData[field.key] ??
-                                        field.default ??
-                                        ""
-                                      }
+                                      value={inputValue(
+                                        configData[field.key] ?? field.default,
+                                      )}
                                       disabled={isReadOnly}
                                       onChange={(e) =>
                                         setConfigData((p) => ({
@@ -1919,9 +2175,12 @@ export default function ToolsManager({
                                         }))
                                       }
                                     >
-                                      {(field.options || []).map((o: any) => (
-                                        <option key={o.value} value={o.value}>
-                                          {o.label}
+                                      {(field.options || []).map((option) => (
+                                        <option
+                                          key={option.value}
+                                          value={option.value}
+                                        >
+                                          {option.label}
                                         </option>
                                       ))}
                                     </select>
@@ -1929,11 +2188,9 @@ export default function ToolsManager({
                                     <input
                                       type="number"
                                       className="form-input"
-                                      value={
-                                        configData[field.key] ??
-                                        field.default ??
-                                        ""
-                                      }
+                                      value={inputValue(
+                                        configData[field.key] ?? field.default,
+                                      )}
                                       disabled={isReadOnly}
                                       placeholder={field.placeholder || ""}
                                       min={field.min}
@@ -1950,11 +2207,9 @@ export default function ToolsManager({
                                   ) : field.type === "textarea" ? (
                                     <textarea
                                       className="form-input"
-                                      value={
-                                        configData[field.key] ??
-                                        field.default ??
-                                        ""
-                                      }
+                                      value={inputValue(
+                                        configData[field.key] ?? field.default,
+                                      )}
                                       disabled={isReadOnly}
                                       placeholder={
                                         field.placeholder ||
@@ -2001,11 +2256,9 @@ export default function ToolsManager({
                                           : undefined
                                       }
                                       className="form-input"
-                                      value={
-                                        configData[field.key] ??
-                                        field.default ??
-                                        ""
-                                      }
+                                      value={inputValue(
+                                        configData[field.key] ?? field.default,
+                                      )}
                                       disabled={isReadOnly}
                                       placeholder={
                                         field.placeholder ||
@@ -2049,7 +2302,9 @@ export default function ToolsManager({
                             const status =
                               document.getElementById("email-test-status");
                             if (btn) btn.textContent = "Testing...";
-                            if (btn) (btn as HTMLButtonElement).disabled = true;
+                            if (btn instanceof HTMLButtonElement) {
+                              btn.disabled = true;
+                            }
                             try {
                               const token = localStorage.getItem("token");
                               const res = await fetch("/api/tools/test-email", {
@@ -2060,7 +2315,9 @@ export default function ToolsManager({
                                 },
                                 body: JSON.stringify({ config: configData }),
                               });
-                              const data = await res.json();
+                              const data = parseEmailTestResponse(
+                                await res.json(),
+                              );
                               if (status) {
                                 status.textContent = data.ok
                                   ? `${data.imap}\n${data.smtp}`
@@ -2077,7 +2334,9 @@ export default function ToolsManager({
                             } finally {
                               if (btn) {
                                 btn.textContent = "Test Connection";
-                                (btn as HTMLButtonElement).disabled = false;
+                                if (btn instanceof HTMLButtonElement) {
+                                  btn.disabled = false;
+                                }
                               }
                             }
                           }}

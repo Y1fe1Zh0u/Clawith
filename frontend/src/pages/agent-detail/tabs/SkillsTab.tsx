@@ -8,7 +8,15 @@ import type { FileBrowserApi } from "../../../components/FileBrowser";
 import FileBrowser from "../../../components/FileBrowser";
 import { useToast } from "../../../components/Toast/ToastProvider";
 import { fileApi, skillApi } from "../../../services/api";
+import type { ClawhubSkill, Skill } from "../../../services/apiContracts";
 import { caughtErrorMessage } from "../../../services/apiError";
+
+type ClawhubSearchResult = ClawhubSkill & {
+  displayName?: string | null;
+  version?: string | null;
+  summary?: string | null;
+  updatedAt?: string | number | null;
+};
 
 type SafeDisplayIcon = (
   icon?: string | null,
@@ -23,8 +31,8 @@ interface Props {
   setShowAgentClawhub: Dispatch<SetStateAction<boolean>>;
   agentClawhubQuery: string;
   setAgentClawhubQuery: Dispatch<SetStateAction<string>>;
-  agentClawhubResults: any[];
-  setAgentClawhubResults: Dispatch<SetStateAction<any[]>>;
+  agentClawhubResults: ClawhubSearchResult[];
+  setAgentClawhubResults: Dispatch<SetStateAction<ClawhubSearchResult[]>>;
   agentClawhubSearching: boolean;
   setAgentClawhubSearching: Dispatch<SetStateAction<boolean>>;
   agentClawhubInstalling: string | null;
@@ -37,7 +45,7 @@ interface Props {
   setAgentUrlImporting: Dispatch<SetStateAction<boolean>>;
   showImportSkillModal: boolean;
   setShowImportSkillModal: Dispatch<SetStateAction<boolean>>;
-  globalSkillsForImport: any[] | undefined;
+  globalSkillsForImport: Skill[] | undefined;
   importingSkillId: string | null;
   setImportingSkillId: Dispatch<SetStateAction<string | null>>;
 }
@@ -279,7 +287,7 @@ export default function SkillsTab(props: Props) {
                   Search ClawHub to find skills
                 </div>
               )}
-              {agentClawhubResults.map((result: any) => (
+              {agentClawhubResults.map((result) => (
                 <div
                   key={result.slug}
                   style={{
@@ -326,7 +334,7 @@ export default function SkillsTab(props: Props) {
                       }}
                     >
                       {result.summary?.substring(0, 100)}
-                      {result.summary?.length > 100 ? "..." : ""}
+                      {(result.summary?.length ?? 0) > 100 ? "..." : ""}
                     </div>
                     {result.updatedAt && (
                       <div
@@ -596,7 +604,7 @@ export default function SkillsTab(props: Props) {
                   No preset skills available
                 </div>
               ) : (
-                globalSkillsForImport.map((skill: any) => (
+                globalSkillsForImport.map((skill) => (
                   <div
                     key={skill.id}
                     style={{
@@ -652,7 +660,7 @@ export default function SkillsTab(props: Props) {
                           }}
                         >
                           {skill.description?.substring(0, 100)}
-                          {skill.description?.length > 100 ? "..." : ""}
+                          {(skill.description?.length ?? 0) > 100 ? "..." : ""}
                         </div>
                         <div
                           style={{

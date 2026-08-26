@@ -35,13 +35,13 @@ export interface FileItem {
 export interface FileBrowserApi {
   list: (path: string) => Promise<FileItem[]>;
   read: (path: string) => Promise<{ content: string }>;
-  write: (path: string, content: string) => Promise<any>;
-  delete: (path: string) => Promise<any>;
+  write: (path: string, content: string) => Promise<unknown>;
+  delete: (path: string) => Promise<unknown>;
   upload?: (
     file: File,
     path: string,
     onProgress?: (pct: number) => void,
-  ) => Promise<any>;
+  ) => Promise<unknown>;
   downloadUrl?: (path: string, options?: { inline?: boolean }) => string;
 }
 
@@ -117,7 +117,7 @@ export default function FileBrowser({
   // ─── State ─────────────────────────────────────────
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(!singleFile);
   const [contentLoaded, setContentLoaded] = useState(false);
   const [viewing, setViewing] = useState<string | null>(singleFile || null);
   const [content, setContent] = useState("");
@@ -239,29 +239,79 @@ export default function FileBrowser({
   });
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    let active = true;
+    if (singleFile) {
+      void api
+        .read(singleFile)
+        .then((data) => {
+          if (!active) return;
+          setContent(data.content || "");
+          setContentLoaded(true);
+        })
+        .catch(() => {
+          if (!active) return;
+          setContent("");
+          setContentLoaded(true);
+        });
+      return () => {
+        active = false;
+      };
+    }
+
+    void api
+      .list(currentPath)
+      .then((data) => {
+        if (!active) return;
+        const filtered =
+          fileFilter && fileFilter.length > 0
+            ? data.filter(
+                (file) =>
+                  file.is_dir ||
+                  fileFilter.some((extension) =>
+                    file.name.toLowerCase().endsWith(extension),
+                  ),
+              )
+            : data;
+        setFiles(filtered);
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setFiles([]);
+        setLoading(false);
+        showToast(
+          `${t("agent.workspace.loadFailed", "Could not load files")}: ${normalizeUnknownError(error).message}`,
+          "error",
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, [api, currentPath, fileFilter, showToast, singleFile, t]);
 
   // ─── Load file content when viewing ───────────────
 
   useEffect(() => {
     if (!viewing || singleFile) return;
-    if (!isTextFile(viewing)) {
-      setContent("");
-      return;
-    }
+    if (!isTextFile(viewing)) return;
+    let active = true;
     api
       .read(viewing)
       .then((data) => {
+        if (!active) return;
         setContent(data.content || "");
       })
-      .catch((err: any) => {
+      .catch((error: unknown) => {
+        if (!active) return;
         setContent("");
         showToast(
-          `${t("agent.workspace.loadFailed", "Could not load file")}: ${err?.message || ""}`,
+          `${t("agent.workspace.loadFailed", "Could not load file")}: ${normalizeUnknownError(error).message}`,
           "error",
         );
       });
+    return () => {
+      active = false;
+    };
   }, [viewing, api, singleFile, showToast, t]);
 
   // ─── Actions ──────────────────────────────────────

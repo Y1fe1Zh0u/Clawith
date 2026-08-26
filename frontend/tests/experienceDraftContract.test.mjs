@@ -23,14 +23,14 @@ test("editing a published experience saves through an independent revision draft
   );
   assert.match(
     editor,
-    /if \(isRevisionSource\)\s*return experienceApi\.createRevision\(draft\.id!, payload\)/,
+    /const draftId = draft\.id;[\s\S]*?if \(!draftId\) throw new Error\(["']Draft id is required["']\);[\s\S]*?if \(isRevisionSource\)\s*return experienceApi\.createRevision\(draftId, payload\)/,
   );
 });
 
 test("publishing a published-entry edit promotes its revision instead of patching the live source first", () => {
   assert.match(
     editor,
-    /else if \(isRevisionSource\) \{[\s\S]*?experienceApi\.createRevision\(draft\.id!, payload\)[\s\S]*?experienceApi\.publish\(id\)/,
+    /else if \(isRevisionSource\) \{[\s\S]*?if \(!draft\.id\) throw new Error\(["']Draft id is required["']\);[\s\S]*?experienceApi\.createRevision\(draft\.id, payload\)[\s\S]*?experienceApi\.publish\(id\)/,
   );
 });
 

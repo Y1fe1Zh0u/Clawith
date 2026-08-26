@@ -12,11 +12,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { IconBuildingMonument } from "@tabler/icons-react";
 import { experienceApi, type ExperienceEntry } from "../services/api";
-import {
-  DraftEditor,
-  bodyExcerpt,
-  type Draft,
-} from "../components/ExperienceDraftEditor";
+import { DraftEditor, type Draft } from "../components/ExperienceDraftEditor";
+import { bodyExcerpt } from "../components/ExperienceDraftEditor.shared";
 import {
   EntryDrawer,
   Badge,

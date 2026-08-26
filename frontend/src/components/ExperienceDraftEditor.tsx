@@ -9,25 +9,10 @@ import React, { useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation } from "@tanstack/react-query";
 import { experienceApi, type ExperienceEntry } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
+import { primaryBtn, secondaryBtn } from "./ExperienceDraftEditor.shared";
 
 export type Draft = Partial<ExperienceEntry>;
-
-// The body is free-form markdown; only `applicability` keeps a fixed shape, because it is
-// the one field `search_experience` shows the agent as a candidate preview — it must be
-// readable on its own for the agent to decide read-or-skip without fetching the full text.
-export const EXP_FIELDS: {
-  key: keyof ExperienceEntry;
-  label: string;
-  hint?: string;
-  markdown?: boolean;
-}[] = [
-  { key: "body", label: "正文", markdown: true },
-  {
-    key: "applicability",
-    label: "适用条件与失效信号",
-    hint: "必填：此经验何时成立、出现什么信号说明已失效",
-  },
-];
 
 // Seeded into an empty editor: a suggestion, not a schema. Knowledge that isn't a
 // problem→solution story (a config reference, a hidden process rule) should overwrite it.
@@ -41,38 +26,6 @@ const hasProse = (md?: string | null): boolean =>
 // Past this the entry starts costing real tokens on every read_experience call. Advisory only.
 const BODY_SOFT_LIMIT = 2000;
 
-// Flatten the markdown body to plain text for compact previews (cards, summary rows),
-// where raw markers would otherwise show up literally as "## 场景".
-export function bodyExcerpt(md?: string | null): string {
-  return (md || "")
-    .replace(/```[\s\S]*?```/g, " ") // code blocks read as noise at this size
-    .replace(/^\s*#{1,6}\s+/gm, "") // heading markers
-    .replace(/^\s*[-*+]\s+/gm, "") // list bullets
-    .replace(/[*_`]/g, "") // inline emphasis
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export const primaryBtn: React.CSSProperties = {
-  padding: "8px 14px",
-  borderRadius: 8,
-  border: "none",
-  cursor: "pointer",
-  fontSize: 14,
-  background: "var(--accent-primary)",
-  color: "var(--text-inverse)",
-  fontWeight: 500,
-  flexShrink: 0,
-};
-export const secondaryBtn: React.CSSProperties = {
-  padding: "7px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--border-default)",
-  cursor: "pointer",
-  fontSize: 13,
-  background: "var(--bg-card)",
-  color: "var(--text-primary)",
-};
 const labelStyle: React.CSSProperties = {
   display: "block",
   fontSize: 13,
@@ -232,12 +185,15 @@ export function DraftEditor({
     mutationFn: async () => {
       const payload = buildPayload();
       if (isNew) return experienceApi.create(payload);
+      const draftId = draft.id;
+      if (!draftId) throw new Error("Draft id is required");
       if (isRevisionSource)
-        return experienceApi.createRevision(draft.id!, payload);
-      return experienceApi.update(draft.id!, payload);
+        return experienceApi.createRevision(draftId, payload);
+      return experienceApi.update(draftId, payload);
     },
     onSuccess: onSaved,
-    onError: (e: any) => setErr(String(e?.message || e)),
+    onError: (error: unknown) =>
+      setErr(caughtErrorMessage(error) || "Unknown error"),
   });
 
   const publish = useMutation({
@@ -248,21 +204,28 @@ export function DraftEditor({
       if (isNew) {
         id = (await experienceApi.create(payload)).id;
       } else if (isRevisionSource) {
-        id = (await experienceApi.createRevision(draft.id!, payload)).id;
+        if (!draft.id) throw new Error("Draft id is required");
+        id = (await experienceApi.createRevision(draft.id, payload)).id;
       } else {
-        id = draft.id!;
+        if (!draft.id) throw new Error("Draft id is required");
+        id = draft.id;
         await experienceApi.update(id, payload);
       }
       return experienceApi.publish(id);
     },
     onSuccess: onSaved,
-    onError: (e: any) => setErr(String(e?.message || e)),
+    onError: (error: unknown) =>
+      setErr(caughtErrorMessage(error) || "Unknown error"),
   });
 
   const del = useMutation({
-    mutationFn: () => experienceApi.remove(draft.id!),
+    mutationFn: () => {
+      if (!draft.id) throw new Error("Draft id is required");
+      return experienceApi.remove(draft.id);
+    },
     onSuccess: () => onDeleted && onDeleted(),
-    onError: (e: any) => setErr(String(e?.message || e)),
+    onError: (error: unknown) =>
+      setErr(caughtErrorMessage(error) || "Unknown error"),
   });
   const handleDelete = () => {
     const label = draft.status === "retired" ? "这条已下架经验" : "这条草稿";
@@ -275,8 +238,10 @@ export function DraftEditor({
     hasProse(form.body) &&
     !!(form.applicability || "").trim();
   const bodyLen = (form.body || "").length;
-  const set = (k: keyof ExperienceEntry, v: any) =>
-    setForm((p) => ({ ...p, [k]: v }));
+  const set = <K extends keyof ExperienceEntry>(
+    key: K,
+    value: ExperienceEntry[K],
+  ) => setForm((previous) => ({ ...previous, [key]: value }));
 
   const header = (
     <div

@@ -11,23 +11,12 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { caughtErrorMessage } from "../services/apiError";
 import { credentialApi } from "../services/api";
+import type {
+  Credential,
+  CredentialMutationRequest,
+} from "../services/apiContracts";
 
 /* ── Types ── */
-interface Credential {
-  id: string;
-  agent_id: string;
-  credential_type: string;
-  platform: string;
-  display_name: string;
-  status: string;
-  cookies_updated_at: string | null;
-  last_login_at: string | null;
-  last_injected_at: string | null;
-  has_cookies: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
 interface FormData {
   credential_type: string;
   platform: string;
@@ -211,8 +200,23 @@ export default function AgentCredentials({ agentId }: Props) {
   }, [agentId, t]);
 
   useEffect(() => {
-    fetchCredentials();
-  }, [fetchCredentials]);
+    let active = true;
+    void credentialApi
+      .list(agentId)
+      .then((data) => {
+        if (!active) return;
+        setCredentials(data);
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setError(caughtErrorMessage(error) || t("agent.credentials.error"));
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [agentId, t]);
 
   const handleAdd = () => {
     setEditingId(null);
@@ -258,7 +262,7 @@ export default function AgentCredentials({ agentId }: Props) {
 
     try {
       // Build payload — only include non-empty fields for updates
-      const payload: any = {
+      const payload: CredentialMutationRequest = {
         credential_type: form.credential_type,
         platform: form.platform.trim(),
         display_name: form.display_name.trim(),
