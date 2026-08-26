@@ -99,7 +99,9 @@ export default function GroupWorkspaceTab({ groupId }: { groupId: string }) {
                       "groups.workspaceUploadInvalidUtf8",
                       "文件不是有效的 UTF-8 文本，未上传",
                     );
-            throw new Error(message);
+            const localizedError = new Error(message);
+            Object.defineProperty(localizedError, "cause", { value: error });
+            throw localizedError;
           }
           throw error;
         }
