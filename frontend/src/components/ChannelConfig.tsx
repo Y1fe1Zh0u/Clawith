@@ -1,10 +1,20 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { caughtErrorMessage } from "../services/apiError";
+import {
+  caughtErrorMessage,
+  parseHttpErrorResponse,
+} from "../services/apiError";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
 import { channelApi } from "../services/api";
-import type { ChannelConfigRequest, JsonValue } from "../services/apiContracts";
+import type { ChannelConfigRequest } from "../services/apiContracts";
+import {
+  parseStoredChannelConfig,
+  parseWebhookConfig,
+  readOptionalChannelResource,
+  type StoredChannelConfig,
+  type WebhookConfig,
+} from "../services/channelConfigResponse";
 import LinearCopyButton from "./LinearCopyButton";
 // ─── Shared fetchAuth (same as AgentDetail) ─────────────
 function fetchAuth<T>(url: string, options?: RequestInit): Promise<T>;
@@ -21,12 +31,10 @@ function fetchAuth(url: string, options?: RequestInit): Promise<unknown> {
       return undefined;
     }
     if (!r.ok) {
-      const error = await r
-        .json()
-        .catch(() => ({ detail: `HTTP ${r.status}` }));
-      throw new Error(error.detail || `HTTP ${r.status}`);
+      throw await parseHttpErrorResponse(r);
     }
-    return r.json();
+    const value: unknown = await r.json();
+    return value;
   });
 }
 
@@ -83,30 +91,6 @@ interface ChannelDef {
   hasTestConnection?: boolean;
 }
 
-interface StoredChannelConfig {
-  is_configured?: boolean;
-  is_connected?: boolean;
-  app_id?: string;
-  app_secret?: string;
-  encrypt_key?: string;
-  verification_token?: string;
-  cloud_id?: string;
-  extra_config?: {
-    connection_mode?: string;
-    session_expired?: boolean;
-    ilink_user_id?: string;
-    bot_id?: string;
-    bot_secret?: string;
-    wecom_agent_id?: string;
-    tenant_id?: string;
-    agent_id?: string;
-  } | null;
-}
-
-interface WebhookConfig {
-  webhook_url?: string;
-}
-
 interface AtlassianTestResult {
   ok: boolean;
   message?: string;
@@ -123,13 +107,10 @@ interface WechatQrStatus {
   status?: string;
 }
 
-function stringValue(value: JsonValue | undefined): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function booleanValue(value: JsonValue | undefined): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
+const EMPTY_CHANNEL_CONFIG: StoredChannelConfig = {
+  is_configured: false,
+  is_connected: false,
+};
 
 type ChannelSavePayload = Omit<ChannelConfigRequest, "channel_type"> & {
   channel_type?: string;
@@ -611,134 +592,110 @@ export default function ChannelConfig({
   // ─── Edit mode: queries for each channel ────────────
   const enabled = mode === "edit" && !!agentId && canManage;
   const activeAgentId = agentId ?? "";
+  const readConfig = (slug: string) =>
+    readOptionalChannelResource(
+      () => fetchAuth<unknown>(`/agents/${activeAgentId}/${slug}`),
+      parseStoredChannelConfig,
+    );
+  const readWebhook = (slug: string) =>
+    readOptionalChannelResource(
+      () => fetchAuth<unknown>(`/agents/${activeAgentId}/${slug}/webhook-url`),
+      parseWebhookConfig,
+    );
 
-  const { data: feishuConfig } = useQuery({
+  const { data: feishuConfig, error: feishuConfigError } = useQuery({
     queryKey: ["channel", agentId],
-    queryFn: () => channelApi.get(activeAgentId),
+    queryFn: () =>
+      readOptionalChannelResource(
+        () => channelApi.get(activeAgentId),
+        parseStoredChannelConfig,
+      ),
     enabled: enabled,
   });
-  const { data: feishuWebhook } = useQuery({
+  const { data: feishuWebhook, error: feishuWebhookError } = useQuery({
     queryKey: ["webhook-url", agentId],
-    queryFn: () => channelApi.webhookUrl(activeAgentId),
+    queryFn: () =>
+      readOptionalChannelResource(
+        () => channelApi.webhookUrl(activeAgentId),
+        parseWebhookConfig,
+      ),
     enabled: enabled,
   });
-  const { data: slackConfig } = useQuery({
+  const { data: slackConfig, error: slackConfigError } = useQuery({
     queryKey: ["slack-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/slack-channel`).catch(
-        () => null,
-      ),
+    queryFn: () => readConfig("slack-channel"),
     enabled: enabled,
   });
-  const { data: slackWebhook } = useQuery({
+  const { data: slackWebhook, error: slackWebhookError } = useQuery({
     queryKey: ["slack-webhook-url", agentId],
-    queryFn: () =>
-      fetchAuth<WebhookConfig>(`/agents/${agentId}/slack-channel/webhook-url`),
+    queryFn: () => readWebhook("slack-channel"),
     enabled: enabled,
   });
-  const { data: discordConfig } = useQuery({
+  const { data: discordConfig, error: discordConfigError } = useQuery({
     queryKey: ["discord-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(
-        `/agents/${agentId}/discord-channel`,
-      ).catch(() => null),
+    queryFn: () => readConfig("discord-channel"),
     enabled: enabled,
   });
-  const { data: discordWebhook } = useQuery({
+  const { data: discordWebhook, error: discordWebhookError } = useQuery({
     queryKey: ["discord-webhook-url", agentId],
-    queryFn: () =>
-      fetchAuth<WebhookConfig>(
-        `/agents/${agentId}/discord-channel/webhook-url`,
-      ),
+    queryFn: () => readWebhook("discord-channel"),
     enabled: enabled,
   });
-  const { data: teamsConfig } = useQuery({
+  const { data: teamsConfig, error: teamsConfigError } = useQuery({
     queryKey: ["teams-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/teams-channel`).catch(
-        () => null,
-      ),
+    queryFn: () => readConfig("teams-channel"),
     enabled: enabled,
   });
-  const { data: teamsWebhook } = useQuery({
+  const { data: teamsWebhook, error: teamsWebhookError } = useQuery({
     queryKey: ["teams-webhook-url", agentId],
-    queryFn: () =>
-      fetchAuth<WebhookConfig>(
-        `/agents/${agentId}/teams-channel/webhook-url`,
-      ).catch(() => null),
+    queryFn: () => readWebhook("teams-channel"),
     enabled: enabled,
   });
-  const { data: dingtalkConfig } = useQuery({
+  const { data: dingtalkConfig, error: dingtalkConfigError } = useQuery({
     queryKey: ["dingtalk-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(
-        `/agents/${agentId}/dingtalk-channel`,
-      ).catch(() => null),
+    queryFn: () => readConfig("dingtalk-channel"),
     enabled: enabled,
   });
-  const { data: wechatConfig } = useQuery({
+  const { data: wechatConfig, error: wechatConfigError } = useQuery({
     queryKey: ["wechat-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/wechat-channel`).catch(
-        () => null,
-      ),
+    queryFn: () => readConfig("wechat-channel"),
     enabled: enabled,
   });
-  const { data: wecomConfig } = useQuery({
+  const { data: wecomConfig, error: wecomConfigError } = useQuery({
     queryKey: ["wecom-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(`/agents/${agentId}/wecom-channel`).catch(
-        () => null,
-      ),
+    queryFn: () => readConfig("wecom-channel"),
     enabled: enabled,
   });
-  const { data: wecomWebhook } = useQuery({
+  const { data: wecomWebhook, error: wecomWebhookError } = useQuery({
     queryKey: ["wecom-webhook-url", agentId],
-    queryFn: () =>
-      fetchAuth<WebhookConfig>(`/agents/${agentId}/wecom-channel/webhook-url`),
+    queryFn: () => readWebhook("wecom-channel"),
     enabled: enabled,
   });
-  const { data: atlassianConfig } = useQuery({
+  const { data: atlassianConfig, error: atlassianConfigError } = useQuery({
     queryKey: ["atlassian-channel", agentId],
-    queryFn: () =>
-      fetchAuth<StoredChannelConfig>(
-        `/agents/${agentId}/atlassian-channel`,
-      ).catch(() => null),
+    queryFn: () => readConfig("atlassian-channel"),
     enabled: enabled,
   });
+  const channelReadError = [
+    feishuConfigError,
+    feishuWebhookError,
+    slackConfigError,
+    slackWebhookError,
+    discordConfigError,
+    discordWebhookError,
+    teamsConfigError,
+    teamsWebhookError,
+    dingtalkConfigError,
+    wechatConfigError,
+    wecomConfigError,
+    wecomWebhookError,
+    atlassianConfigError,
+  ].find((error) => error != null);
   // Helper: get config data for a channel
   const getConfig = (id: string): StoredChannelConfig | null | undefined => {
     switch (id) {
       case "feishu":
-        return feishuConfig
-          ? {
-              is_configured: feishuConfig.is_configured,
-              is_connected: feishuConfig.is_connected,
-              app_id: feishuConfig.app_id ?? undefined,
-              extra_config: feishuConfig.extra_config
-                ? {
-                    connection_mode: stringValue(
-                      feishuConfig.extra_config.connection_mode,
-                    ),
-                    session_expired: booleanValue(
-                      feishuConfig.extra_config.session_expired,
-                    ),
-                    ilink_user_id: stringValue(
-                      feishuConfig.extra_config.ilink_user_id,
-                    ),
-                    bot_id: stringValue(feishuConfig.extra_config.bot_id),
-                    bot_secret: stringValue(
-                      feishuConfig.extra_config.bot_secret,
-                    ),
-                    wecom_agent_id: stringValue(
-                      feishuConfig.extra_config.wecom_agent_id,
-                    ),
-                    tenant_id: stringValue(feishuConfig.extra_config.tenant_id),
-                    agent_id: stringValue(feishuConfig.extra_config.agent_id),
-                  }
-                : null,
-            }
-          : feishuConfig;
+        return feishuConfig;
       case "slack":
         return slackConfig;
       case "discord":
@@ -1525,7 +1482,7 @@ export default function ChannelConfig({
 
   // ─── Render edit mode channel card ───────────────────
   const renderEditChannel = (ch: ChannelDef) => {
-    const config = getConfig(ch.id) ?? {};
+    const config = getConfig(ch.id) ?? EMPTY_CHANNEL_CONFIG;
     const webhook = getWebhook(ch.id);
     const isOpen = openChannels[ch.id] || false;
     const isEditing = editingChannels[ch.id] || false;
@@ -2080,8 +2037,8 @@ export default function ChannelConfig({
                         const prefill: Record<string, string> = {};
                         if (ch.id === "feishu") {
                           prefill.app_id = config.app_id || "";
-                          prefill.app_secret = config.app_secret || "";
-                          prefill.encrypt_key = config.encrypt_key || "";
+                          prefill.app_secret = "";
+                          prefill.encrypt_key = "";
                           setConnectionModes((prev) => ({
                             ...prev,
                             feishu:
@@ -2105,13 +2062,13 @@ export default function ChannelConfig({
                             prefill.corp_id = config.app_id || "";
                             prefill.wecom_agent_id =
                               config.extra_config?.wecom_agent_id || "";
-                            prefill.secret = config.app_secret || "";
-                            prefill.token = config.verification_token || "";
-                            prefill.encoding_aes_key = config.encrypt_key || "";
+                            prefill.secret = "";
+                            prefill.token = "";
+                            prefill.encoding_aes_key = "";
                           }
                         } else if (ch.id === "slack") {
-                          prefill.bot_token = config.app_secret || "";
-                          prefill.signing_secret = config.encrypt_key || "";
+                          prefill.bot_token = "";
+                          prefill.signing_secret = "";
                         } else if (ch.id === "discord") {
                           const cm =
                             config.extra_config?.connection_mode === "gateway"
@@ -2122,20 +2079,20 @@ export default function ChannelConfig({
                             discord: cm,
                           }));
                           if (cm === "websocket") {
-                            prefill.bot_token = config.app_secret || "";
+                            prefill.bot_token = "";
                           } else {
                             prefill.application_id = config.app_id || "";
-                            prefill.bot_token = config.app_secret || "";
-                            prefill.public_key = config.encrypt_key || "";
+                            prefill.bot_token = "";
+                            prefill.public_key = "";
                           }
                         } else if (ch.id === "teams") {
                           prefill.app_id = config.app_id || "";
-                          prefill.app_secret = config.app_secret || "";
+                          prefill.app_secret = "";
                           prefill.tenant_id =
                             config.extra_config?.tenant_id || "";
                         } else if (ch.id === "dingtalk") {
                           prefill.app_key = config.app_id || "";
-                          prefill.app_secret = config.app_secret || "";
+                          prefill.app_secret = "";
                           prefill.agent_id =
                             config.extra_config?.agent_id || "";
                           setConnectionModes((prev) => ({
@@ -2498,6 +2455,23 @@ export default function ChannelConfig({
       >
         {t("agent.settings.channel.title")}
       </p>
+      {channelReadError && (
+        <div
+          role="alert"
+          style={{
+            padding: "10px 14px",
+            borderRadius: "8px",
+            marginBottom: "12px",
+            background: "rgba(239,68,68,0.12)",
+            border: "1px solid rgba(239,68,68,0.25)",
+            fontSize: "12px",
+            color: "rgb(220,38,38)",
+          }}
+        >
+          {caughtErrorMessage(channelReadError) ||
+            "Failed to load channel configuration."}
+        </div>
+      )}
       {actionFeedback && (
         <div
           style={{

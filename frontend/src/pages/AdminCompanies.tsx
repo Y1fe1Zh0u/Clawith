@@ -8,6 +8,13 @@ import PlatformDashboard from "./PlatformDashboard";
 import LinearCopyButton from "../components/LinearCopyButton";
 import { useDialog } from "../components/Dialog/DialogContext";
 import type { CompanyStats, PlatformSettings } from "../services/apiContracts";
+import {
+  parseEmailTemplates,
+  parseIdentityProviders,
+  parseNotificationBarSetting,
+  parsePlatformSettings,
+  parseSystemEmailSetting,
+} from "../services/platformAdminConfigResponse";
 // Format large token numbers with K/M/B suffixes
 function formatTokens(n: number | null | undefined): string {
   if (n == null) return "-";
@@ -68,12 +75,6 @@ interface SystemSettingResponse<T> {
 interface EmailTemplate {
   subject: string;
   body: string;
-}
-
-interface EmailTemplatesResponse {
-  templates?: Record<string, EmailTemplate>;
-  variables?: Record<string, string[]>;
-  defaults?: Record<string, EmailTemplate>;
 }
 
 interface OAuthProviderConfig {
@@ -305,102 +306,89 @@ function PlatformTab() {
   useEffect(() => {
     let active = true;
     // Load platform toggles
-    const platformSettingsRequest = adminApi
-      .getPlatformSettings()
+    const platformSettingsRequest = fetchJson<unknown>(
+      "/admin/platform-settings",
+    )
+      .then(parsePlatformSettings)
       .then((data) => {
         if (active) setSettings(data);
       });
     // Load notification bar
-    const notificationRequest = fetchJson<
-      SystemSettingResponse<NotificationBarValue>
-    >("/enterprise/system-settings/notification_bar").then((d) => {
-      if (!active) return;
-      if (d?.value) {
-        setNbEnabled(!!d.value.enabled);
-        setNbText(d.value.text || "");
-      }
-    });
+    const notificationRequest = fetchJson<unknown>(
+      "/enterprise/system-settings/notification_bar",
+    )
+      .then(parseNotificationBarSetting)
+      .then((d) => {
+        if (!active) return;
+        if (d.value) {
+          setNbEnabled(d.value.enabled);
+          setNbText(d.value.text);
+        }
+      });
 
     // Load System Email
-    const emailConfigRequest = fetchJson<
-      SystemSettingResponse<SystemEmailConfig>
-    >("/enterprise/system-settings/system_email_platform").then((d) => {
-      if (!active) return;
-      if (d?.value) {
-        setSystemEmailConfig({
-          SYSTEM_EMAIL_ENABLED:
-            d.value.SYSTEM_EMAIL_ENABLED !== undefined
-              ? !!d.value.SYSTEM_EMAIL_ENABLED
-              : !!(
-                  d.value.SYSTEM_EMAIL_FROM_ADDRESS && d.value.SYSTEM_SMTP_HOST
-                ),
-          SYSTEM_EMAIL_FROM_ADDRESS: d.value.SYSTEM_EMAIL_FROM_ADDRESS || "",
-          SYSTEM_EMAIL_FROM_NAME: d.value.SYSTEM_EMAIL_FROM_NAME || "Clawith",
-          SYSTEM_SMTP_HOST: d.value.SYSTEM_SMTP_HOST || "",
-          SYSTEM_SMTP_PORT: d.value.SYSTEM_SMTP_PORT || 465,
-          SYSTEM_SMTP_USERNAME: d.value.SYSTEM_SMTP_USERNAME || "",
-          SYSTEM_SMTP_PASSWORD: d.value.SYSTEM_SMTP_PASSWORD || "",
-          SYSTEM_SMTP_SSL:
-            d.value.SYSTEM_SMTP_SSL !== undefined
-              ? d.value.SYSTEM_SMTP_SSL
-              : true,
-          SYSTEM_SMTP_TIMEOUT_SECONDS:
-            d.value.SYSTEM_SMTP_TIMEOUT_SECONDS || 15,
-        });
-      }
-    });
+    const emailConfigRequest = fetchJson<unknown>(
+      "/enterprise/system-settings/system_email_platform",
+    )
+      .then(parseSystemEmailSetting)
+      .then((d) => {
+        if (!active) return;
+        if (d.value) setSystemEmailConfig(d.value);
+      });
 
     // Load email templates
-    const templatesRequest = fetchJson<EmailTemplatesResponse>(
-      "/enterprise/email-templates",
-    ).then((d) => {
-      if (!active) return;
-      if (d.templates) setEmailTemplates(d.templates);
-      if (d.variables) setEmailTemplateVars(d.variables);
-      if (d.defaults) setEmailTemplateDefaults(d.defaults);
-    });
+    const templatesRequest = fetchJson<unknown>("/enterprise/email-templates")
+      .then(parseEmailTemplates)
+      .then((d) => {
+        if (!active) return;
+        if (d.templates) setEmailTemplates(d.templates);
+        if (d.variables) setEmailTemplateVars(d.variables);
+        if (d.defaults) setEmailTemplateDefaults(d.defaults);
+      });
 
-    const identityProvidersRequest = fetchJson<IdentityProviderResponse[]>(
+    const identityProvidersRequest = fetchJson<unknown>(
       "/enterprise/identity-providers?global_only=true",
-    ).then((items) => {
-      if (!active) return;
-      const mapped: Partial<Record<SocialProviderType, OAuthProvider>> = {};
-      items.forEach((item) => {
-        if (!isSocialProviderType(item.provider_type)) return;
-        mapped[item.provider_type] = {
-          id: item.id,
-          provider_type: item.provider_type,
-          name: item.name || SOCIAL_PROVIDER_META[item.provider_type].name,
-          is_active: !!item.is_active,
-          config: item.config || {},
-          client_id: item.config?.client_id || item.config?.app_id || "",
-          client_secret:
-            item.config?.client_secret || item.config?.app_secret || "",
-          scope:
-            item.config?.scope ||
-            SOCIAL_PROVIDER_META[item.provider_type].scope,
-        };
-      });
+    )
+      .then(parseIdentityProviders)
+      .then((items) => {
+        if (!active) return;
+        const mapped: Partial<Record<SocialProviderType, OAuthProvider>> = {};
+        items.forEach((item) => {
+          if (!isSocialProviderType(item.provider_type)) return;
+          mapped[item.provider_type] = {
+            id: item.id,
+            provider_type: item.provider_type,
+            name: item.name || SOCIAL_PROVIDER_META[item.provider_type].name,
+            is_active: !!item.is_active,
+            config: item.config || {},
+            client_id: item.config?.client_id || item.config?.app_id || "",
+            client_secret:
+              item.config?.client_secret || item.config?.app_secret || "",
+            scope:
+              item.config?.scope ||
+              SOCIAL_PROVIDER_META[item.provider_type].scope,
+          };
+        });
 
-      setOauthProviders({
-        google: mapped.google || {
-          provider_type: "google",
-          name: SOCIAL_PROVIDER_META.google.name,
-          is_active: false,
-          client_id: "",
-          client_secret: "",
-          scope: SOCIAL_PROVIDER_META.google.scope,
-        },
-        github: mapped.github || {
-          provider_type: "github",
-          name: SOCIAL_PROVIDER_META.github.name,
-          is_active: false,
-          client_id: "",
-          client_secret: "",
-          scope: SOCIAL_PROVIDER_META.github.scope,
-        },
+        setOauthProviders({
+          google: mapped.google || {
+            provider_type: "google",
+            name: SOCIAL_PROVIDER_META.google.name,
+            is_active: false,
+            client_id: "",
+            client_secret: "",
+            scope: SOCIAL_PROVIDER_META.google.scope,
+          },
+          github: mapped.github || {
+            provider_type: "github",
+            name: SOCIAL_PROVIDER_META.github.name,
+            is_active: false,
+            client_id: "",
+            client_secret: "",
+            scope: SOCIAL_PROVIDER_META.github.scope,
+          },
+        });
       });
-    });
 
     void Promise.all([
       platformSettingsRequest,

@@ -18,11 +18,22 @@ const livePanelUtils = readFileSync(
   new URL("../src/components/AgentBayLivePanel.utils.ts", import.meta.url),
   "utf8",
 );
+const enterpriseTools = enterpriseSettings;
+const channelConfig = readFileSync(
+  new URL("../src/components/ChannelConfig.tsx", import.meta.url),
+  "utf8",
+);
 
 test("admin configuration saves require an authoritative successful load", () => {
   assert.match(adminCompanies, /platformConfigReady/);
   assert.match(adminCompanies, /if \(!platformConfigReady\) return false/);
   assert.match(adminCompanies, /platformConfigLoadError/);
+  assert.match(adminCompanies, /fetchJson<unknown>/);
+  assert.match(adminCompanies, /parsePlatformSettings/);
+  assert.match(adminCompanies, /parseNotificationBarSetting/);
+  assert.match(adminCompanies, /parseSystemEmailSetting/);
+  assert.match(adminCompanies, /parseEmailTemplates/);
+  assert.match(adminCompanies, /parseIdentityProviders/);
   assert.doesNotMatch(
     adminCompanies,
     /getPlatformSettings\(\)[\s\S]*?\.catch\(\(\) => \{\}\)/,
@@ -53,4 +64,22 @@ test("live code truncation limit stays private to its owner", () => {
     livePanelUtils,
     /export const MAX_LIVE_CODE_OUTPUT_CHARS/,
   );
+});
+
+test("MCP credential failures cannot publish full import success", () => {
+  assert.match(enterpriseTools, /importMcpToolsTransaction/);
+  assert.doesNotMatch(
+    enterpriseTools,
+    /mcp-server[\s\S]{0,360}\.catch\(\(\) => \{\}\)/,
+  );
+  assert.match(enterpriseTools, /rollbackFailedIds/);
+});
+
+test("channel reads preserve non-404 and malformed response failures", () => {
+  assert.match(channelConfig, /readOptionalChannelResource/);
+  assert.doesNotMatch(
+    channelConfig,
+    /fetchAuth<StoredChannelConfig>[\s\S]{0,120}\.catch\(\(\) => null\)/,
+  );
+  assert.match(channelConfig, /channelReadError/);
 });

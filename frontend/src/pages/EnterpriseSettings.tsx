@@ -39,6 +39,10 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import type { JsonValue, Tenant } from "../services/apiContracts";
+import {
+  importMcpToolsTransaction,
+  McpCredentialSaveError,
+} from "../services/mcpImportTransaction";
 
 type TabKey =
   | "llm"
@@ -108,14 +112,21 @@ interface EnterpriseTool {
   tool_display_name?: string;
 }
 
+interface McpDiscoveredTool {
+  name: string;
+  description?: string;
+  inputSchema?: JsonValue;
+}
+
 interface McpTestResult {
   ok: boolean;
   error?: string;
-  tools?: Array<{
-    name: string;
-    description?: string;
-    inputSchema?: JsonValue;
-  }>;
+  tools?: McpDiscoveredTool[];
+}
+
+interface CreatedMcpTool {
+  id: string;
+  name: string;
 }
 
 interface Approval {
@@ -684,6 +695,47 @@ export default function EnterpriseSettings() {
       );
       setAgentInstalledTools([]);
     }
+  };
+  const importMcpTools = (tools: McpDiscoveredTool[]) => {
+    const serverName = mcpForm.server_name || mcpForm.server_url;
+    return importMcpToolsTransaction(
+      tools,
+      { apiKey: mcpForm.api_key },
+      {
+        createTool: (tool) =>
+          fetchJson<CreatedMcpTool>("/tools", {
+            method: "POST",
+            body: JSON.stringify({
+              name: `mcp_${tool.name}`,
+              display_name: tool.name,
+              description: tool.description || "",
+              type: "mcp",
+              category: "custom",
+              icon: "·",
+              mcp_server_url: mcpForm.server_url,
+              mcp_server_name: serverName,
+              mcp_tool_name: tool.name,
+              parameters_schema: tool.inputSchema || {},
+              is_default: false,
+              tenant_id: selectedTenantId || undefined,
+            }),
+          }),
+        saveCredential: async () => {
+          await fetchJson("/tools/mcp-server", {
+            method: "PUT",
+            body: JSON.stringify({
+              server_name: serverName,
+              server_url: mcpForm.server_url,
+              api_key: mcpForm.api_key,
+              tenant_id: selectedTenantId || undefined,
+            }),
+          });
+        },
+        deleteTool: async (id) => {
+          await fetchJson(`/tools/${id}`, { method: "DELETE" });
+        },
+      },
+    );
   };
   useEffect(() => {
     if (activeTab !== "tools") return;
@@ -2444,52 +2496,41 @@ export default function EnterpriseSettings() {
                                     }}
                                     onClick={async () => {
                                       try {
-                                        const serverName =
-                                          mcpForm.server_name ||
-                                          mcpForm.server_url;
-                                        await fetchJson("/tools", {
-                                          method: "POST",
-                                          body: JSON.stringify({
-                                            name: `mcp_${tool.name}`,
-                                            display_name: tool.name,
-                                            description: tool.description || "",
-                                            type: "mcp",
-                                            category: "custom",
-                                            icon: "·",
-                                            mcp_server_url: mcpForm.server_url,
-                                            mcp_server_name: serverName,
-                                            mcp_tool_name: tool.name,
-                                            parameters_schema:
-                                              tool.inputSchema || {},
-                                            is_default: false,
-                                            tenant_id:
-                                              selectedTenantId || undefined,
-                                          }),
-                                        });
-                                        // Store API key on all tools from this server after creation
-                                        if (mcpForm.api_key) {
-                                          await fetchJson("/tools/mcp-server", {
-                                            method: "PUT",
-                                            body: JSON.stringify({
-                                              server_name: serverName,
-                                              server_url: mcpForm.server_url,
-                                              api_key: mcpForm.api_key,
-                                              tenant_id:
-                                                selectedTenantId || undefined,
-                                            }),
-                                          }).catch(() => {});
+                                        const result = await importMcpTools([
+                                          tool,
+                                        ]);
+                                        if (result.creationErrors.length > 0) {
+                                          throw result.creationErrors[0].error;
                                         }
                                         await loadAllTools();
                                       } catch (error) {
+                                        const rollbackDetails =
+                                          error instanceof
+                                            McpCredentialSaveError &&
+                                          error.rollbackFailedIds.length > 0
+                                            ? ` Rollback failed for tool IDs: ${error.rollbackFailedIds.join(", ")}.`
+                                            : "";
+                                        if (
+                                          error instanceof
+                                            McpCredentialSaveError &&
+                                          error.rollbackFailedIds.length > 0
+                                        ) {
+                                          await loadAllTools();
+                                        }
                                         await dialog.alert(
                                           t("enterprise.tools.importFailed") ||
                                             "导入失败",
                                           {
                                             type: "error",
-                                            details: String(
-                                              caughtErrorMessage(error) ||
+                                            details: `${String(
+                                              (error instanceof
+                                              McpCredentialSaveError
+                                                ? caughtErrorMessage(
+                                                    error.cause,
+                                                  )
+                                                : caughtErrorMessage(error)) ||
                                                 error,
-                                            ),
+                                            )}${rollbackDetails}`,
                                           },
                                         );
                                       }
@@ -2514,51 +2555,47 @@ export default function EnterpriseSettings() {
                                   }}
                                   onClick={async () => {
                                     const tools = mcpTestResult.tools || [];
-                                    let successCount = 0;
-                                    const errors: string[] = [];
-                                    const serverName =
-                                      mcpForm.server_name || mcpForm.server_url;
-                                    for (const tool of tools) {
-                                      try {
-                                        await fetchJson("/tools", {
-                                          method: "POST",
-                                          body: JSON.stringify({
-                                            name: `mcp_${tool.name}`,
-                                            display_name: tool.name,
-                                            description: tool.description || "",
-                                            type: "mcp",
-                                            category: "custom",
-                                            icon: "·",
-                                            mcp_server_url: mcpForm.server_url,
-                                            mcp_server_name: serverName,
-                                            mcp_tool_name: tool.name,
-                                            parameters_schema:
-                                              tool.inputSchema || {},
-                                            is_default: false,
-                                            tenant_id:
-                                              selectedTenantId || undefined,
-                                          }),
-                                        });
-                                        successCount++;
-                                      } catch (error) {
-                                        errors.push(
-                                          `${tool.name}: ${caughtErrorMessage(error)}`,
-                                        );
+                                    let result;
+                                    try {
+                                      result = await importMcpTools(tools);
+                                    } catch (error) {
+                                      const rollbackFailedIds =
+                                        error instanceof McpCredentialSaveError
+                                          ? error.rollbackFailedIds
+                                          : [];
+                                      if (rollbackFailedIds.length > 0) {
+                                        await loadAllTools();
                                       }
+                                      await dialog.alert(
+                                        t("enterprise.tools.importFailed") ||
+                                          "导入失败",
+                                        {
+                                          type: "error",
+                                          title: "MCP 凭据保存失败",
+                                          details: `${
+                                            error instanceof
+                                            McpCredentialSaveError
+                                              ? caughtErrorMessage(
+                                                  error.cause,
+                                                ) || error.message
+                                              : caughtErrorMessage(error) ||
+                                                error
+                                          }${
+                                            rollbackFailedIds.length > 0
+                                              ? `\nRollback failed for tool IDs: ${rollbackFailedIds.join(", ")}`
+                                              : ""
+                                          }`,
+                                        },
+                                      );
+                                      return;
                                     }
-                                    // Store API key on all tools from this server in one request
-                                    if (mcpForm.api_key && successCount > 0) {
-                                      await fetchJson("/tools/mcp-server", {
-                                        method: "PUT",
-                                        body: JSON.stringify({
-                                          server_name: serverName,
-                                          server_url: mcpForm.server_url,
-                                          api_key: mcpForm.api_key,
-                                          tenant_id:
-                                            selectedTenantId || undefined,
-                                        }),
-                                      }).catch(() => {});
-                                    }
+
+                                    const successCount =
+                                      result.createdIds.length;
+                                    const errors = result.creationErrors.map(
+                                      ({ index, error }) =>
+                                        `${tools[index]?.name || `Tool ${index + 1}`}: ${caughtErrorMessage(error) || error}`,
+                                    );
                                     await loadAllTools();
                                     setShowAddMCP(false);
                                     setMcpTestResult(null);
