@@ -16,6 +16,7 @@ import {
 } from "@tabler/icons-react";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { useDropZone } from "../hooks/useDropZone";
+import { normalizeUnknownError } from "../services/apiError";
 import { formatFileSize } from "../utils/formatFileSize";
 import {
   WORKSPACE_TEXT_UPLOAD_EXTENSIONS,
@@ -186,10 +187,10 @@ export default function FileBrowser({
         );
       }
       setFiles(data);
-    } catch (err: any) {
+    } catch (error) {
       setFiles([]);
       showToast(
-        `${t("agent.workspace.loadFailed", "Could not load files")}: ${err?.message || ""}`,
+        `${t("agent.workspace.loadFailed", "Could not load files")}: ${normalizeUnknownError(error).message}`,
         "error",
       );
     }
@@ -211,12 +212,12 @@ export default function FileBrowser({
         reload();
         onRefresh?.();
         showToast(t("agent.upload.success", "Upload successful"));
-      } catch (err: any) {
+      } catch (error) {
         setUploadProgress(null);
         showToast(
           t("agent.upload.failed", "Upload failed") +
             ": " +
-            (err.message || ""),
+            normalizeUnknownError(error).message,
           "error",
         );
       }
@@ -275,8 +276,11 @@ export default function FileBrowser({
       setEditing(false);
       showToast("Saved");
       onRefresh?.();
-    } catch (err: any) {
-      showToast("Save failed: " + (err.message || ""), "error");
+    } catch (error) {
+      showToast(
+        "Save failed: " + normalizeUnknownError(error).message,
+        "error",
+      );
     }
     setSaving(false);
   };
@@ -294,8 +298,11 @@ export default function FileBrowser({
       reload();
       onRefresh?.();
       showToast("Deleted");
-    } catch (err: any) {
-      showToast("Delete failed: " + (err.message || ""), "error");
+    } catch (error) {
+      showToast(
+        "Delete failed: " + normalizeUnknownError(error).message,
+        "error",
+      );
     } finally {
       setDeleting(false);
     }
@@ -341,8 +348,8 @@ export default function FileBrowser({
       }
       reload();
       onRefresh?.();
-    } catch (err: any) {
-      showToast("Failed: " + (err.message || ""), "error");
+    } catch (error) {
+      showToast("Failed: " + normalizeUnknownError(error).message, "error");
     }
   };
 
