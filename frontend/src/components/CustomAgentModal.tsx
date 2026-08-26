@@ -14,7 +14,7 @@ import {
 import { agentApi, authApi, enterpriseApi, tenantApi } from "../services/api";
 import type { AgentCreateRequest } from "../services/apiContracts";
 import { caughtErrorMessage } from "../services/apiError";
-import { useDialog } from "./Dialog/DialogProvider";
+import { useDialog } from "./Dialog/DialogContext";
 import LinearCopyButton from "./LinearCopyButton";
 import { validateAgentName } from "../utils/agentNameValidation";
 import { buildOpenClawInstruction } from "../utils/openClawInstruction";

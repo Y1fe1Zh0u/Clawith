@@ -28,7 +28,7 @@ import {
 import type { Agent, User } from "../types";
 import type { TenantChoice } from "../services/apiContracts";
 import { useGroupUnread } from "../hooks/useGroupUnread";
-import { useToast } from "../components/Toast/ToastProvider";
+import { useToast } from "../components/Toast/ToastContext";
 
 import {
   IconHome,

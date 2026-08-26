@@ -6,7 +6,7 @@ import { useAuthStore } from "../stores";
 import { IconFilter, IconShieldCheck } from "@tabler/icons-react";
 import PlatformDashboard from "./PlatformDashboard";
 import LinearCopyButton from "../components/LinearCopyButton";
-import { useDialog } from "../components/Dialog/DialogProvider";
+import { useDialog } from "../components/Dialog/DialogContext";
 import type { CompanyStats, PlatformSettings } from "../services/apiContracts";
 // Format large token numbers with K/M/B suffixes
 function formatTokens(n: number | null | undefined): string {

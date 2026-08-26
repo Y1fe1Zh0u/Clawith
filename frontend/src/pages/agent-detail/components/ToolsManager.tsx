@@ -14,8 +14,8 @@ import {
   IconTools,
 } from "@tabler/icons-react";
 
-import { useDialog } from "../../../components/Dialog/DialogProvider";
-import { useToast } from "../../../components/Toast/ToastProvider";
+import { useDialog } from "../../../components/Dialog/DialogContext";
+import { useToast } from "../../../components/Toast/ToastContext";
 import { caughtErrorMessage } from "../../../services/apiError";
 import type { JsonValue } from "../../../services/apiContracts";
 import { useAuthStore } from "../../../stores";

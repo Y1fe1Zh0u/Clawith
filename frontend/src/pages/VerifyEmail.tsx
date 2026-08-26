@@ -15,7 +15,7 @@ import {
 import { authApi } from "../services/api";
 import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
-import { useToast } from "../components/Toast/ToastProvider";
+import { useToast } from "../components/Toast/ToastContext";
 
 export default function VerifyEmail() {
   const { i18n } = useTranslation();

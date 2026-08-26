@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { IconPlus, IconRobot, IconUser, IconX } from "@tabler/icons-react";
 import { groupApi } from "../../services/groupApi";
 import { caughtErrorMessage } from "../../services/apiError";
-import { useToast } from "../../components/Toast/ToastProvider";
+import { useToast } from "../../components/Toast/ToastContext";
 import ConfirmModal from "../../components/ConfirmModal";
 import type { Group, GroupMember } from "../../types/group";
 

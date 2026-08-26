@@ -1,13 +1,17 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import {
+  ToastContext,
+  type ToastContextValue,
+  type ToastOptions,
+  type ToastType,
+} from "./ToastContext";
 import {
   IconAlertTriangle,
   IconCheck,
@@ -16,13 +20,6 @@ import {
 } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
-type ToastType = "info" | "success" | "warning" | "error";
-
-interface ToastOptions {
-  duration?: number;
-  details?: string;
-}
-
 interface ToastItem {
   id: number;
   type: ToastType;
@@ -30,16 +27,6 @@ interface ToastItem {
   details?: string;
   duration: number;
 }
-
-interface ToastContextValue {
-  show: (type: ToastType, message: string, options?: ToastOptions) => void;
-  info: (message: string, options?: ToastOptions) => void;
-  success: (message: string, options?: ToastOptions) => void;
-  warning: (message: string, options?: ToastOptions) => void;
-  error: (message: string, options?: ToastOptions) => void;
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null);
 
 const TYPE_META: Record<ToastType, { color: string; icon: ReactNode }> = {
   info: { color: "var(--info)", icon: <IconInfoCircle size={12} stroke={2} /> },
@@ -254,10 +241,4 @@ function ToastCard({
       </button>
     </div>
   );
-}
-
-export function useToast() {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used within ToastProvider");
-  return ctx;
 }

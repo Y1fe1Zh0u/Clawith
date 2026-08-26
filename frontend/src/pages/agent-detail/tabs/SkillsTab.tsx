@@ -3,10 +3,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { IconDownload, IconFolder, IconTools } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
-import { useDialog } from "../../../components/Dialog/DialogProvider";
+import { useDialog } from "../../../components/Dialog/DialogContext";
 import type { FileBrowserApi } from "../../../components/FileBrowser";
 import FileBrowser from "../../../components/FileBrowser";
-import { useToast } from "../../../components/Toast/ToastProvider";
+import { useToast } from "../../../components/Toast/ToastContext";
 import { fileApi, skillApi } from "../../../services/api";
 import type { ClawhubSkill, Skill } from "../../../services/apiContracts";
 import { caughtErrorMessage } from "../../../services/apiError";

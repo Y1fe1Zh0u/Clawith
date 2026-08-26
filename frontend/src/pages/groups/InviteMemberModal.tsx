@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { IconRobot, IconSearch, IconUser, IconX } from "@tabler/icons-react";
 import { groupApi } from "../../services/groupApi";
 import { caughtErrorMessage } from "../../services/apiError";
-import { useToast } from "../../components/Toast/ToastProvider";
+import { useToast } from "../../components/Toast/ToastContext";
 import type {
   GroupMember,
   GroupMemberCandidate,

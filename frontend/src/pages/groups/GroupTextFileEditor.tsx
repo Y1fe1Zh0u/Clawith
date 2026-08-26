@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { caughtErrorMessage } from "../../services/apiError";
 import { useQuery } from "@tanstack/react-query";
-import { useToast } from "../../components/Toast/ToastProvider";
+import { useToast } from "../../components/Toast/ToastContext";
 import type { GroupTextFile } from "../../types/group";
 
 interface GroupTextFileEditorProps {

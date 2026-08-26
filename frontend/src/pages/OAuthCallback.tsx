@@ -14,7 +14,12 @@ export default function OAuthCallback() {
   const navigate = useNavigate();
   const { provider = "" } = useParams();
   const setAuth = useAuthStore((s) => s.setAuth);
-  const [error, setError] = useState("");
+  const code = new URLSearchParams(window.location.search).get("code");
+  const state = new URLSearchParams(window.location.search).get("state") || "";
+  const oauthError = new URLSearchParams(window.location.search).get("error");
+  const [error, setError] = useState(
+    oauthError || (!provider || !code ? t("oauth.missingParams") : ""),
+  );
   const [tenants, setTenants] = useState<OAuthTenantChoice[] | null>(null);
   const [pendingToken, setPendingToken] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,19 +27,7 @@ export default function OAuthCallback() {
   useEffect(() => {
     if (tenants) return; // Already showing selection UI
 
-    const code = new URLSearchParams(window.location.search).get("code");
-    const state =
-      new URLSearchParams(window.location.search).get("state") || "";
-    const oauthError = new URLSearchParams(window.location.search).get("error");
-
-    if (oauthError) {
-      setError(oauthError);
-      return;
-    }
-    if (!provider || !code) {
-      setError(t("oauth.missingParams"));
-      return;
-    }
+    if (oauthError || !provider || !code) return;
 
     fetchJson<unknown>(`/auth/${provider}/callback`, {
       method: "POST",
@@ -63,7 +56,7 @@ export default function OAuthCallback() {
       .catch((error) => {
         setError(caughtErrorMessage(error) || t("oauth.oauthLoginFailed"));
       });
-  }, [navigate, provider, setAuth, t, tenants]);
+  }, [code, navigate, oauthError, provider, setAuth, state, t, tenants]);
 
   const handleTenantSelect = async (tenantId: string) => {
     setLoading(true);

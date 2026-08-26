@@ -8,7 +8,7 @@ import type { AgentCreateRequest, LlmModel } from "../services/apiContracts";
 import { caughtErrorMessage } from "../services/apiError";
 import type { Agent } from "../types";
 import { translateTemplate } from "../i18n/templateTranslations";
-import { useDialog } from "./Dialog/DialogProvider";
+import { useDialog } from "./Dialog/DialogContext";
 
 interface Template {
   id: string;

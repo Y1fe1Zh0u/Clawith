@@ -13,8 +13,8 @@ import type { TFunction } from "i18next";
 import type { QueryClient } from "@tanstack/react-query";
 
 import ConfirmModal from "../../components/ConfirmModal";
-import { useDialog } from "../../components/Dialog/DialogProvider";
-import { useToast } from "../../components/Toast/ToastProvider";
+import { useDialog } from "../../components/Dialog/DialogContext";
+import { useToast } from "../../components/Toast/ToastContext";
 import type { FileBrowserApi } from "../../components/FileBrowser";
 import FileBrowser from "../../components/FileBrowser";
 import MarkdownRenderer from "../../components/MarkdownRenderer";

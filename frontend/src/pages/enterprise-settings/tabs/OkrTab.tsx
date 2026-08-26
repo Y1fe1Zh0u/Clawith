@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { caughtErrorMessage } from "../../../services/apiError";
-import { useDialog } from "../../../components/Dialog/DialogProvider";
+import { useDialog } from "../../../components/Dialog/DialogContext";
 import { fetchJson } from "../utils/fetchJson";
 
 interface OkrSettings {

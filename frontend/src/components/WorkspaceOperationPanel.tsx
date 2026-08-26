@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import MarkdownRenderer from "./MarkdownRenderer";
 import PromptModal from "./PromptModal";
-import { useDialog } from "./Dialog/DialogProvider";
+import { useDialog } from "./Dialog/DialogContext";
 import { fileApi, uploadFileWithProgress } from "../services/api";
 import { caughtErrorMessage, caughtErrorStatus } from "../services/apiError";
 import type { FilePreview, FileRevision } from "../services/apiContracts";

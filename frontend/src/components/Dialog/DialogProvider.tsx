@@ -1,12 +1,16 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import {
+  DialogContext,
+  type AlertOptions,
+  type ConfirmOptions,
+  type DialogType,
+} from "./DialogContext";
 import { useTranslation } from "react-i18next";
 import {
   IconAlertTriangle,
@@ -14,29 +18,6 @@ import {
   IconInfoCircle,
   IconX,
 } from "@tabler/icons-react";
-
-type DialogType = "info" | "success" | "warning" | "error";
-
-interface AlertOptions {
-  title?: string;
-  type?: DialogType;
-  details?: string;
-  confirmLabel?: string;
-}
-
-interface ConfirmOptions {
-  title?: string;
-  danger?: boolean;
-  confirmLabel?: string;
-  cancelLabel?: string;
-}
-
-interface DialogContextValue {
-  alert: (message: string, options?: AlertOptions) => Promise<void>;
-  confirm: (message: string, options?: ConfirmOptions) => Promise<boolean>;
-}
-
-const DialogContext = createContext<DialogContextValue | null>(null);
 
 type ModalState =
   | {
@@ -287,10 +268,4 @@ function DialogModal({
       </div>
     </div>
   );
-}
-
-export function useDialog() {
-  const ctx = useContext(DialogContext);
-  if (!ctx) throw new Error("useDialog must be used within DialogProvider");
-  return ctx;
 }
