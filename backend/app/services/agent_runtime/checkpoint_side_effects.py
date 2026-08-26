@@ -896,7 +896,7 @@ class RuntimeCheckpointSideEffects:
                             raise ValueError("Run citation telemetry requires an Agent")
                         await record_experience_citations(
                             delivery.content,
-                            agent_id=uuid.UUID(run.agent_id),
+                            agent_id=run.agent_id,
                             session_id=receipt.actual_session_id,
                             message_id=receipt.message_id,
                         )

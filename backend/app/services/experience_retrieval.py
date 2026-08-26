@@ -469,7 +469,7 @@ async def read_experience(agent_id: uuid.UUID, arguments: dict) -> str:
 
 async def record_experience_citations(
     text: str,
-    agent_id: uuid.UUID,
+    agent_id: uuid.UUID | str,
     session_id: uuid.UUID | None = None,
     message_id: uuid.UUID | None = None,
 ) -> int:
@@ -491,7 +491,7 @@ async def record_experience_citations(
         return 0
     try:
         async with async_session() as db:
-            agent = await _resolve_agent(db, agent_id)
+            agent = await _resolve_agent(db, uuid.UUID(str(agent_id)))
             if not agent:
                 return 0
             dept_ids = await _agent_department_ids(db, agent)

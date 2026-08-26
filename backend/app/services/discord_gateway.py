@@ -8,6 +8,8 @@ the Feishu WebSocket manager.
 Requires:  pip install discord.py>=2.3.0
 """
 
+from __future__ import annotations
+
 import asyncio
 import uuid
 from typing import TYPE_CHECKING, Dict, Optional
