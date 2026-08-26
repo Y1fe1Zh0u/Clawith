@@ -11,6 +11,7 @@ import UserManagement from "./UserManagement";
 import InvitationCodes from "./InvitationCodes";
 import { useDialog } from "../components/Dialog/DialogProvider";
 import { useToast } from "../components/Toast/ToastProvider";
+import { caughtErrorMessage } from "../services/apiError";
 import { buildCompanyRegions } from "../utils/companyRegions";
 import OrgTab from "./enterprise-settings/tabs/OrgTab";
 import SkillsTab from "./enterprise-settings/tabs/SkillsTab";
@@ -230,9 +231,9 @@ export default function EnterpriseSettings() {
       });
       setQuotaSaved(true);
       setTimeout(() => setQuotaSaved(false), 2000);
-    } catch (e: any) {
+    } catch (error) {
       toast.error(t("common.error.saveFailed", "保存失败"), {
-        details: String(e?.message || e),
+        details: String(caughtErrorMessage(error) || error),
       });
     }
     setQuotaSaving(false);
@@ -1121,13 +1122,16 @@ export default function EnterpriseSettings() {
                       }),
                     );
                     qc.invalidateQueries({ queryKey: ["tenants"] });
-                  } catch (e: any) {
+                  } catch (error) {
                     await dialog.alert(
                       t(
                         "enterprise.deleteCompanyFailed",
                         "Failed to delete company",
                       ),
-                      { type: "error", details: String(e?.message || e) },
+                      {
+                        type: "error",
+                        details: String(caughtErrorMessage(error) || error),
+                      },
                     );
                   }
                 }}
@@ -2134,8 +2138,11 @@ export default function EnterpriseSettings() {
                                 },
                               );
                               setMcpTestResult(r);
-                            } catch (e: any) {
-                              setMcpTestResult({ ok: false, error: e.message });
+                            } catch (error) {
+                              setMcpTestResult({
+                                ok: false,
+                                error: caughtErrorMessage(error) ?? "",
+                              });
                             }
                             setMcpTesting(false);
                           }}
@@ -2265,14 +2272,17 @@ export default function EnterpriseSettings() {
                                             ).catch(() => {});
                                           }
                                           await loadAllTools();
-                                        } catch (e: any) {
+                                        } catch (error) {
                                           await dialog.alert(
                                             t(
                                               "enterprise.tools.importFailed",
                                             ) || "导入失败",
                                             {
                                               type: "error",
-                                              details: String(e?.message || e),
+                                              details: String(
+                                                caughtErrorMessage(error) ||
+                                                  error,
+                                              ),
                                             },
                                           );
                                         }
@@ -2324,9 +2334,9 @@ export default function EnterpriseSettings() {
                                           }),
                                         });
                                         successCount++;
-                                      } catch (e: any) {
+                                      } catch (error) {
                                         errors.push(
-                                          `${tool.name}: ${e.message}`,
+                                          `${tool.name}: ${caughtErrorMessage(error)}`,
                                         );
                                       }
                                     }
@@ -2452,9 +2462,9 @@ export default function EnterpriseSettings() {
                         body: JSON.stringify(payload),
                       });
                       loadAllTools();
-                    } catch (err: any) {
+                    } catch (error) {
                       toast.error(t("common.error.batchUpdateFailed"), {
-                        details: String(err?.message || err),
+                        details: String(caughtErrorMessage(error) || error),
                       });
                     }
                   };
@@ -3410,10 +3420,14 @@ export default function EnterpriseSettings() {
                               });
                               await loadAllTools();
                               setEditingMcpServer(null);
-                            } catch (e: any) {
+                            } catch (error) {
                               toast.error(
                                 t("common.error.serverUpdateFailed"),
-                                { details: String(e?.message || e) },
+                                {
+                                  details: String(
+                                    caughtErrorMessage(error) || error,
+                                  ),
+                                },
                               );
                             }
                             setMcpServerSaving(false);
