@@ -2829,7 +2829,7 @@ export default function AgentDetailPage() {
     }
   };
 
-  const [workspacePath] = useState("workspace");
+  const workspacePath = "workspace";
 
   const { data: activityLogs = [] } = useQuery<ActivityLog[]>({
     queryKey: ["activity", id],
