@@ -1109,6 +1109,17 @@ async def update_category_config(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can configure category")
 
+    plaintext_key: str | None = None
+    if category == "atlassian":
+        raw_key = (
+            data.config.get("api_key")
+            or data.config.get("api_secret")
+            or data.config.get("app_secret")
+        )
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise HTTPException(status_code=422, detail="Atlassian API key is required")
+        plaintext_key = raw_key.strip()
+
     # Encrypt sensitive fields
     encrypted_config = _encrypt_sensitive_fields(data.config)
     app_secret = encrypted_config.get("api_key") or encrypted_config.get("api_secret") or encrypted_config.get("app_secret")
@@ -1138,16 +1149,19 @@ async def update_category_config(
         )
         db.add(config)
 
-    await db.commit()
-
-    # Special logic for Atlassian: trigger sync
-    if category == "atlassian":
+    if plaintext_key is not None:
         from app.api.atlassian import _sync_atlassian_tools_for_agent
-        import asyncio
-        # Need plaintext key for sync
-        plaintext_key = data.config.get("api_key") or data.config.get("api_secret") or data.config.get("app_secret")
-        if isinstance(plaintext_key, str) and plaintext_key:
-            asyncio.create_task(_sync_atlassian_tools_for_agent(agent_id, plaintext_key))
+
+        try:
+            await _sync_atlassian_tools_for_agent(agent_id, plaintext_key)
+        except Exception as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail="Atlassian tool synchronization failed",
+            ) from exc
+
+    await db.commit()
 
     return {"ok": True}
 

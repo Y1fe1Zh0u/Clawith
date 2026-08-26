@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
 import json
-from typing import Protocol, runtime_checkable
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -56,11 +55,6 @@ _CAPABILITY_PROBE_TOOL_DEFINITION = {
         },
     },
 }
-
-
-@runtime_checkable
-class _AsyncClosable(Protocol):
-    async def close(self) -> None: ...
 
 
 def _has_valid_capability_probe(tool_calls: list[dict]) -> bool:
@@ -384,7 +378,7 @@ async def test_llm_model(
             "error": str(e)[:500],
         }
     finally:
-        if isinstance(client, _AsyncClosable):
+        if client is not None:
             await client.close()
 
 

@@ -192,11 +192,11 @@ async def _sync_atlassian_tools_for_agent(agent_id: uuid.UUID, api_key: str) -> 
         tools_discovered = await client.list_tools()
     except Exception as e:
         logger.error(f"[AtlassianChannel] Could not list tools: {e}")
-        return
+        raise RuntimeError("Could not discover Atlassian tools") from e
 
     if not tools_discovered:
         logger.warning("[AtlassianChannel] No tools returned from Atlassian MCP")
-        return
+        raise RuntimeError("Atlassian returned no tools")
 
     logger.info(f"[AtlassianChannel] Found {len(tools_discovered)} tools, assigning to agent {agent_id}")
 
