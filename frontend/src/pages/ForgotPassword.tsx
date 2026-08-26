@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { IconAlertTriangle, IconBulb, IconCheck } from "@tabler/icons-react";
 import { authApi } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 
 export default function ForgotPassword() {
   const { t } = useTranslation();
@@ -30,9 +31,9 @@ export default function ForgotPassword() {
     try {
       const res = await authApi.forgotPassword({ email: email.trim() });
       setMessage(res.message);
-    } catch (err: any) {
+    } catch (error) {
       setError(
-        err.message ||
+        caughtErrorMessage(error) ||
           t(
             "auth.forgotPasswordRequestFailed",
             "Failed to request password reset",
@@ -54,9 +55,9 @@ export default function ForgotPassword() {
       const res = await authApi.emailHint(usernameHint.trim());
       setHintResult(res.hint);
       setShowHintForm(false);
-    } catch (err: any) {
+    } catch (error) {
       setError(
-        err.message ||
+        caughtErrorMessage(error) ||
           t(
             "auth.emailHintFailed",
             "Failed to get email hint. User may not exist.",

@@ -5,10 +5,26 @@ import test from "node:test";
 import {
   ApiError,
   AppError,
+  caughtErrorMessage,
   normalizeUnknownError,
   parseHttpError,
   parseHttpErrorResponse,
 } from "../src/services/apiError.ts";
+
+test("caught error messages preserve auth-page fallback boundaries", () => {
+  assert.equal(
+    caughtErrorMessage(new Error("request failed")),
+    "request failed",
+  );
+  assert.equal(
+    caughtErrorMessage({ message: "backend message" }),
+    "backend message",
+  );
+  assert.equal(caughtErrorMessage("plain thrown value"), undefined);
+  assert.equal(caughtErrorMessage({ detail: "not a message" }), undefined);
+  assert.equal(caughtErrorMessage({ message: 503 }), undefined);
+  assert.equal(caughtErrorMessage(null), undefined);
+});
 
 test("canonical envelope wins and retains all HTTP diagnostic context", async () => {
   const error = await parseHttpErrorResponse(

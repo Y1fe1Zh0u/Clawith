@@ -13,16 +13,9 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { authApi } from "../services/api";
+import { caughtErrorMessage } from "../services/apiError";
 import { useAuthStore } from "../stores";
 import { useToast } from "../components/Toast/ToastProvider";
-
-function unknownErrorMessage(error: unknown): string | undefined {
-  if (error instanceof Error) return error.message;
-  if (typeof error !== "object" || error === null || !("message" in error)) {
-    return undefined;
-  }
-  return typeof error.message === "string" ? error.message : undefined;
-}
 
 export default function VerifyEmail() {
   const { t, i18n } = useTranslation();
@@ -86,7 +79,7 @@ export default function VerifyEmail() {
     } catch (error) {
       setStatus("error");
       setMessage(
-        unknownErrorMessage(error) ||
+        caughtErrorMessage(error) ||
           (isChinese
             ? "验证失败，请检查验证码是否正确"
             : "Verification failed, please check the code"),
@@ -121,7 +114,7 @@ export default function VerifyEmail() {
       );
     } catch (error) {
       toast.error(isChinese ? "重发失败" : "Failed to resend verification", {
-        details: String(unknownErrorMessage(error) || error),
+        details: String(caughtErrorMessage(error) || error),
       });
     } finally {
       setLoading(false);

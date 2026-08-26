@@ -119,6 +119,12 @@ function messageFromValue(value: unknown): string | undefined {
   return stableStringify(value);
 }
 
+export function caughtErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  if (!isRecord(error)) return undefined;
+  return typeof error.message === "string" ? error.message : undefined;
+}
+
 function parseBody(bodyText: string): unknown {
   const trimmed = bodyText.trim();
   if (!trimmed) return undefined;
