@@ -9,6 +9,7 @@ import type { TokenResponse } from "../types";
 import type { ResolvedTenant } from "../services/apiContracts";
 import {
   parseAuthorizationUrl,
+  parseEmailExists,
   parseSessionId,
   parseSsoProviders,
   type SsoProviderResponse as LoginProvider,
@@ -88,13 +89,12 @@ export default function Login() {
     // If arriving via invitation link with email, check whether the email is already registered
     // to decide whether to show login or register form.
     if (invitationCode && invitedEmail) {
-      fetch("/api/enterprise/check-email-exists", {
+      fetchJson<unknown>("/enterprise/check-email-exists", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: invitedEmail }),
       })
-        .then((r) => r.json())
-        .then((res: { exists: boolean }) => {
+        .then(parseEmailExists)
+        .then((res) => {
           // If email already registered → show login form; otherwise show register form
           setIsRegister(!res.exists);
         })

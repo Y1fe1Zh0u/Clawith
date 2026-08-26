@@ -1,27 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-
-interface InvitationCode {
-  id: string;
-  code: string;
-  used_count: number;
-  max_uses: number;
-  is_active: boolean;
-  created_at: string;
-}
-
-interface InvitationCodePage {
-  items?: InvitationCode[];
-  total?: number;
-}
-
-const invitationHeaders = (): Record<string, string> => {
-  const token = localStorage.getItem("token");
-  return {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-};
+import { fetchJson } from "../services/api";
+import {
+  caughtErrorMessage,
+  parseHttpErrorResponse,
+} from "../services/apiError";
+import {
+  parseInvitationCodeCreate,
+  parseInvitationCodeDeactivate,
+  parseInvitationCodePage,
+  type InvitationCodeResponse as InvitationCode,
+} from "../services/directPageResponseParsers";
 
 export default function InvitationCodes() {
   const { t } = useTranslation();
@@ -33,7 +22,11 @@ export default function InvitationCodes() {
   const [batchCount, setBatchCount] = useState(5);
   const [maxUses, setMaxUses] = useState(1);
   const [creating, setCreating] = useState(false);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+  } | null>(null);
+  const [loadError, setLoadError] = useState("");
 
   const loadCodes = useCallback(
     async (p?: number, q?: string) => {
@@ -44,18 +37,28 @@ export default function InvitationCodes() {
         page_size: String(pageSize),
       });
       if (currentSearch) params.set("search", currentSearch);
-      const res = await fetch(`/api/enterprise/invitation-codes?${params}`, {
-        headers: invitationHeaders(),
-      });
-      const data: InvitationCodePage = await res.json();
-      setCodes(data.items || []);
-      setTotal(data.total || 0);
+      try {
+        const data = parseInvitationCodePage(
+          await fetchJson<unknown>(`/enterprise/invitation-codes?${params}`),
+        );
+        setCodes(data.items);
+        setTotal(data.total);
+        setLoadError("");
+      } catch (error) {
+        setLoadError(
+          caughtErrorMessage(error) || "Failed to load invitation codes.",
+        );
+        throw error;
+      }
     },
     [page, search],
   );
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadCodes(page, search), 0);
+    const timer = window.setTimeout(
+      () => void loadCodes(page, search).catch(() => {}),
+      0,
+    );
     return () => window.clearTimeout(timer);
   }, [page, search, loadCodes]);
 
@@ -68,25 +71,47 @@ export default function InvitationCodes() {
 
   const createBatch = async () => {
     setCreating(true);
-    await fetch("/api/enterprise/invitation-codes", {
-      method: "POST",
-      headers: invitationHeaders(),
-      body: JSON.stringify({ count: batchCount, max_uses: maxUses }),
-    });
-    setPage(1);
-    setSearch("");
-    await loadCodes(1, "");
-    setCreating(false);
-    setToast(t("enterprise.invites.createBtn", "Created!"));
-    setTimeout(() => setToast(""), 2000);
+    try {
+      parseInvitationCodeCreate(
+        await fetchJson<unknown>("/enterprise/invitation-codes", {
+          method: "POST",
+          body: JSON.stringify({ count: batchCount, max_uses: maxUses }),
+        }),
+      );
+      await loadCodes(1, "");
+      setPage(1);
+      setSearch("");
+      setToast({
+        message: t("enterprise.invites.createBtn", "Created!"),
+        type: "success",
+      });
+      setTimeout(() => setToast(null), 2000);
+    } catch (error) {
+      setToast({
+        message:
+          caughtErrorMessage(error) || "Failed to create invitation codes.",
+        type: "error",
+      });
+    } finally {
+      setCreating(false);
+    }
   };
 
   const deactivate = async (id: string) => {
-    await fetch(`/api/enterprise/invitation-codes/${id}`, {
-      method: "DELETE",
-      headers: invitationHeaders(),
-    });
-    await loadCodes();
+    try {
+      parseInvitationCodeDeactivate(
+        await fetchJson<unknown>(`/enterprise/invitation-codes/${id}`, {
+          method: "DELETE",
+        }),
+      );
+      await loadCodes();
+    } catch (error) {
+      setToast({
+        message:
+          caughtErrorMessage(error) || "Failed to disable invitation code.",
+        type: "error",
+      });
+    }
   };
 
   const exportCsv = () => {
@@ -95,12 +120,22 @@ export default function InvitationCodes() {
     fetch("/api/enterprise/invitation-codes/export", {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-      .then((r) => r.blob())
+      .then(async (response) => {
+        if (!response.ok) throw await parseHttpErrorResponse(response);
+        return response.blob();
+      })
       .then((blob) => {
         a.href = URL.createObjectURL(blob);
         a.download = "invitation_codes.csv";
         a.click();
         URL.revokeObjectURL(a.href);
+      })
+      .catch((error: unknown) => {
+        setToast({
+          message:
+            caughtErrorMessage(error) || "Failed to export invitation codes.",
+          type: "error",
+        });
       });
   };
 
@@ -117,13 +152,23 @@ export default function InvitationCodes() {
             right: "20px",
             padding: "10px 20px",
             borderRadius: "8px",
-            background: "var(--success)",
+            background:
+              toast.type === "success" ? "var(--success)" : "var(--error)",
             color: "#fff",
             fontSize: "13px",
             zIndex: 9999,
           }}
         >
-          {toast}
+          {toast.message}
+        </div>
+      )}
+
+      {loadError && (
+        <div
+          role="alert"
+          style={{ color: "var(--error)", marginBottom: "12px" }}
+        >
+          {loadError}
         </div>
       )}
 

@@ -52,6 +52,7 @@ import {
   parseEnterpriseStats,
   parseEnterpriseToolList,
   parseMcpTestResult,
+  parseOptionalSystemApiKey,
   parseTenantDeleteResult,
   parseTenantQuotas,
 } from "../services/directPageResponseParsers";
@@ -437,6 +438,8 @@ export default function EnterpriseSettings() {
   >("all");
   const [infoRefresh, setInfoRefresh] = useState(0);
   const [allTools, setAllTools] = useState<EnterpriseTool[]>([]);
+  const [allToolsError, setAllToolsError] = useState("");
+  const [agentInstalledToolsError, setAgentInstalledToolsError] = useState("");
   const [showAddMCP, setShowAddMCP] = useState(false);
   const [mcpForm, setMcpForm] = useState({
     server_url: "",
@@ -651,11 +654,18 @@ export default function EnterpriseSettings() {
     return Object.values(config).some(hasMeaningfulConfigValue);
   };
   const loadAllTools = async () => {
-    const tid = selectedTenantId;
-    const data = parseEnterpriseToolList(
-      await fetchJson<unknown>(`/tools${tid ? `?tenant_id=${tid}` : ""}`),
-    );
-    setAllTools(data);
+    try {
+      const tid = selectedTenantId;
+      const data = parseEnterpriseToolList(
+        await fetchJson<unknown>(`/tools${tid ? `?tenant_id=${tid}` : ""}`),
+      );
+      setAllTools(data);
+      setAllToolsError("");
+    } catch (error) {
+      setAllToolsError(
+        caughtErrorMessage(error) || "Failed to load global tools.",
+      );
+    }
   };
   const loadAgentInstalledTools = async () => {
     try {
@@ -666,12 +676,11 @@ export default function EnterpriseSettings() {
         ),
       );
       setAgentInstalledTools(data);
+      setAgentInstalledToolsError("");
     } catch (error) {
-      console.warn(
-        "[EnterpriseTools] Failed to load agent-installed tools",
-        error,
+      setAgentInstalledToolsError(
+        caughtErrorMessage(error) || "Failed to load agent-installed tools.",
       );
-      setAgentInstalledTools([]);
     }
   };
   const importMcpTools = (tools: McpDiscoveredTool[]) => {
@@ -722,20 +731,33 @@ export default function EnterpriseSettings() {
     fetchJson<unknown>(`/tools${tid ? `?tenant_id=${tid}` : ""}`)
       .then(parseEnterpriseToolList)
       .then((tools) => {
-        if (active) setAllTools(tools);
+        if (active) {
+          setAllTools(tools);
+          setAllToolsError("");
+        }
       })
-      .catch(() => {
-        if (active) setAllTools([]);
+      .catch((error: unknown) => {
+        if (active)
+          setAllToolsError(
+            caughtErrorMessage(error) || "Failed to load global tools.",
+          );
       });
     fetchJson<unknown>(
       `/tools/agent-installed${tid ? `?tenant_id=${tid}` : ""}`,
     )
       .then(parseEnterpriseToolList)
       .then((tools) => {
-        if (active) setAgentInstalledTools(tools);
+        if (active) {
+          setAgentInstalledTools(tools);
+          setAgentInstalledToolsError("");
+        }
       })
-      .catch(() => {
-        if (active) setAgentInstalledTools([]);
+      .catch((error: unknown) => {
+        if (active)
+          setAgentInstalledToolsError(
+            caughtErrorMessage(error) ||
+              "Failed to load agent-installed tools.",
+          );
       });
     return () => {
       active = false;
@@ -1825,6 +1847,36 @@ export default function EnterpriseSettings() {
         {/* ── Tools Tab ── */}
         {activeTab === "tools" && (
           <div>
+            {((toolsView === "global" && allToolsError) ||
+              (toolsView === "agent-installed" &&
+                agentInstalledToolsError)) && (
+              <div
+                role="alert"
+                style={{
+                  padding: "10px 12px",
+                  marginBottom: "12px",
+                  borderRadius: "6px",
+                  background: "rgba(239,68,68,0.08)",
+                  color: "var(--error)",
+                  fontSize: "12px",
+                }}
+              >
+                {toolsView === "global"
+                  ? allToolsError
+                  : agentInstalledToolsError}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ marginLeft: "12px" }}
+                  onClick={() => {
+                    if (toolsView === "global") void loadAllTools();
+                    else void loadAgentInstalledTools();
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {/* Sub-tab pills */}
             <div
               className="tool-source-tabs enterprise-tool-source-tabs"
@@ -2874,18 +2926,12 @@ export default function EnterpriseSettings() {
                                   tool.name === "jina_read"
                                 ) {
                                   try {
-                                    const token = localStorage.getItem("token");
-                                    const res = await fetch(
-                                      "/api/enterprise/system-settings/jina_api_key",
-                                      {
-                                        headers: {
-                                          Authorization: `Bearer ${token}`,
-                                        },
-                                      },
+                                    const apiKey = parseOptionalSystemApiKey(
+                                      await fetchJson<unknown>(
+                                        "/enterprise/system-settings/jina_api_key",
+                                      ),
                                     );
-                                    const d = await res.json();
-                                    if (d.value?.api_key)
-                                      cfg.api_key = d.value.api_key;
+                                    if (apiKey) cfg.api_key = apiKey;
                                   } catch {
                                     /* The optional Jina key does not block editing the base configuration. */
                                   }
@@ -4004,16 +4050,10 @@ export default function EnterpriseSettings() {
                                     tool.name === "jina_read"
                                   ) {
                                     if (editingConfig.api_key) {
-                                      const token =
-                                        localStorage.getItem("token");
-                                      await fetch(
-                                        "/api/enterprise/system-settings/jina_api_key",
+                                      await fetchJson<unknown>(
+                                        "/enterprise/system-settings/jina_api_key",
                                         {
                                           method: "PUT",
-                                          headers: {
-                                            "Content-Type": "application/json",
-                                            Authorization: `Bearer ${token}`,
-                                          },
                                           body: JSON.stringify({
                                             value: {
                                               api_key: editingConfig.api_key,

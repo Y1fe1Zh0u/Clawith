@@ -23,6 +23,10 @@ const channelConfig = readFileSync(
   new URL("../src/components/ChannelConfig.tsx", import.meta.url),
   "utf8",
 );
+const invitationCodes = readFileSync(
+  new URL("../src/pages/InvitationCodes.tsx", import.meta.url),
+  "utf8",
+);
 
 test("admin configuration saves require an authoritative successful load", () => {
   assert.match(adminCompanies, /platformConfigReady/);
@@ -82,4 +86,31 @@ test("channel reads preserve non-404 and malformed response failures", () => {
     /fetchAuth<StoredChannelConfig>[\s\S]{0,120}\.catch\(\(\) => null\)/,
   );
   assert.match(channelConfig, /channelReadError/);
+});
+
+test("invitation mutations publish success only after canonical success and reload", () => {
+  assert.match(invitationCodes, /parseInvitationCodeCreate/);
+  assert.match(invitationCodes, /parseInvitationCodeDeactivate/);
+  assert.doesNotMatch(
+    invitationCodes,
+    /fetch\(["'`]\/api\/enterprise\/invitation-codes["'`][\s\S]{0,100}method:\s*["']POST/,
+  );
+  assert.doesNotMatch(
+    invitationCodes,
+    /fetch\(`\/api\/enterprise\/invitation-codes\/\$\{id\}`/,
+  );
+  assert.match(invitationCodes, /invitation-codes\/export/);
+  assert.match(invitationCodes, /if \(!response\.ok\)/);
+  assert.match(
+    invitationCodes,
+    /catch \(error\)[\s\S]*Failed to create invitation codes/,
+  );
+});
+
+test("enterprise tool list failures retain data and expose retry", () => {
+  assert.match(enterpriseTools, /allToolsError/);
+  assert.match(enterpriseTools, /agentInstalledToolsError/);
+  assert.doesNotMatch(enterpriseTools, /setAllTools\(\[\]\)/);
+  assert.doesNotMatch(enterpriseTools, /setAgentInstalledTools\(\[\]\)/);
+  assert.match(enterpriseTools, />\s*Retry\s*</);
 });

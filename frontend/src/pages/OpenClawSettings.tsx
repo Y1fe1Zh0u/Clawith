@@ -2,32 +2,18 @@ import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { agentApi } from "../services/api";
+import { agentApi, fetchJson } from "../services/api";
 import type { Agent } from "../types";
+import {
+  parseAgentPermissions,
+  parseApiKey,
+} from "../services/directPageResponseParsers";
 import LinearCopyButton from "../components/LinearCopyButton";
-function fetchAuth<T>(url: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem("token");
-  return fetch(`/api${url}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  }).then((r) => r.json());
-}
 
 interface OpenClawSettingsProps {
   agent: Agent & { has_api_key?: boolean };
   agentId: string;
   canManage: boolean;
-}
-
-interface AgentPermissions {
-  is_owner: boolean;
-  scope_type: "company" | "user" | "custom";
-  scope_ids: string[];
-  scope_names?: Array<{ name: string }>;
-  access_level: "use" | "manage";
 }
 
 export default function OpenClawSettings({
@@ -54,9 +40,10 @@ export default function OpenClawSettings({
     if (!canManage) return;
     setRegenerating(true);
     try {
-      const result = await fetchAuth<{ api_key: string }>(
-        `/agents/${agentId}/api-key`,
-        { method: "POST" },
+      const result = parseApiKey(
+        await fetchJson<unknown>(`/agents/${agentId}/api-key`, {
+          method: "POST",
+        }),
       );
       setApiKey(result.api_key);
       setShowConfirm(false);
@@ -92,15 +79,17 @@ export default function OpenClawSettings({
   // ─── Permissions state ──────────────────────────────
   const { data: permData } = useQuery({
     queryKey: ["agent-permissions", agentId],
-    queryFn: () =>
-      fetchAuth<AgentPermissions>(`/agents/${agentId}/permissions`),
+    queryFn: async () =>
+      parseAgentPermissions(
+        await fetchJson<unknown>(`/agents/${agentId}/permissions`),
+      ),
     enabled: !!agentId,
   });
 
   const handleScopeChange = async (newScope: string) => {
     if (!canManage || !isOwner) return;
     try {
-      await fetchAuth(`/agents/${agentId}/permissions`, {
+      await fetchJson<unknown>(`/agents/${agentId}/permissions`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -121,7 +110,7 @@ export default function OpenClawSettings({
   const handleAccessLevelChange = async (newLevel: string) => {
     if (!canManage || !isOwner) return;
     try {
-      await fetchAuth(`/agents/${agentId}/permissions`, {
+      await fetchJson<unknown>(`/agents/${agentId}/permissions`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

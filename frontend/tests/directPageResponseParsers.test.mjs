@@ -11,8 +11,16 @@ import {
   parseEnterpriseStats,
   parseEnterpriseToolList,
   parseInviteUsersResult,
+  parseInvitationCodeCreate,
+  parseInvitationCodeDeactivate,
+  parseInvitationCodePage,
   parseMcpTestResult,
   parseNotificationItems,
+  parsePublicNotificationBar,
+  parseEmailExists,
+  parseApiKey,
+  parseAgentPermissions,
+  parseVersion,
   parseSsoProviders,
   parseSsoSessionStatus,
   parseTenantDeleteResult,
@@ -90,4 +98,27 @@ test("representative direct page responses parse", () => {
     ])[0].id,
     "t",
   );
+  assert.equal(
+    parseInvitationCodePage({
+      items: [
+        {
+          id: "i",
+          code: "CODE",
+          used_count: 0,
+          max_uses: 1,
+          is_active: true,
+          created_at: null,
+        },
+      ],
+      total: 1,
+    }).total,
+    1,
+  );
+  assert.throws(() => parseInvitationCodeCreate({ created: 1, codes: [1] }));
+  assert.throws(() => parseInvitationCodeDeactivate({ status: "ok" }));
+  assert.throws(() => parsePublicNotificationBar({ enabled: "yes" }));
+  assert.throws(() => parseEmailExists({ exists: "yes" }));
+  assert.throws(() => parseApiKey({ api_key: 1 }));
+  assert.throws(() => parseAgentPermissions({ is_owner: true }));
+  assert.throws(() => parseVersion({ version: 1 }));
 });

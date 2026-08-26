@@ -9,7 +9,8 @@ import {
   useRef,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { authApi } from "./services/api";
+import { authApi, fetchJson } from "./services/api";
+import { parsePublicNotificationBar } from "./services/directPageResponseParsers";
 
 const Login = lazy(() => import("./pages/Login"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
@@ -94,13 +95,11 @@ function NotificationBar() {
   const [isMarquee, setIsMarquee] = useState(false);
 
   useEffect(() => {
-    fetch("/api/enterprise/system-settings/notification_bar/public")
-      .then((r) => (r.ok ? r.json() : null))
+    fetchJson<unknown>("/enterprise/system-settings/notification_bar/public")
+      .then(parsePublicNotificationBar)
       .then((d) => {
-        if (d) {
-          setConfig(d);
-          setDismissed(isNotificationBarDismissed(d));
-        }
+        setConfig(d);
+        setDismissed(isNotificationBarDismissed(d));
       })
       .catch(() => {});
   }, []);

@@ -63,7 +63,7 @@ function isJsonValue(value: unknown): value is JsonValue {
   return isRecord(value) && Object.values(value).every(isJsonValue);
 }
 
-function parseUser(value: unknown): User {
+export function parseDirectUser(value: unknown): User {
   if (!isRecord(value)) throw new Error("Invalid SSO session status user");
   const role = value.role;
   if (
@@ -139,7 +139,7 @@ export function parseSsoSessionStatus(
   const errorMsg = optionalString(value, "error_msg");
   return {
     ...(accessToken !== undefined ? { access_token: accessToken } : {}),
-    ...(value.user !== undefined ? { user: parseUser(value.user) } : {}),
+    ...(value.user !== undefined ? { user: parseDirectUser(value.user) } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(errorMsg !== undefined ? { error_msg: errorMsg } : {}),
   };
@@ -651,4 +651,145 @@ export function parseUpdatedAtSetting(value: unknown): {
   )
     throw new Error("Invalid setting updated_at");
   return updatedAt === undefined ? {} : { updated_at: updatedAt };
+}
+
+export function parsePublicNotificationBar(value: unknown): {
+  enabled: boolean;
+  text: string;
+  updated_at: string | null;
+} {
+  if (!isRecord(value)) throw new Error("Invalid notification bar response");
+  const updatedAt = value.updated_at;
+  if (updatedAt !== null && typeof updatedAt !== "string")
+    throw new Error("Invalid notification bar updated_at");
+  return {
+    enabled: booleanField(value, "enabled"),
+    text: stringField(value, "text"),
+    updated_at: updatedAt,
+  };
+}
+
+export function parseEmailExists(value: unknown): { exists: boolean } {
+  if (!isRecord(value)) throw new Error("Invalid email existence response");
+  return { exists: booleanField(value, "exists") };
+}
+
+export function parseVersion(value: unknown): {
+  version: string;
+  commit?: string;
+} {
+  if (!isRecord(value)) throw new Error("Invalid version response");
+  const commit = optionalString(value, "commit");
+  return {
+    version: stringField(value, "version"),
+    ...(commit !== undefined ? { commit } : {}),
+  };
+}
+
+export interface InvitationCodeResponse {
+  id: string;
+  code: string;
+  used_count: number;
+  max_uses: number;
+  is_active: boolean;
+  created_at: string | null;
+}
+
+export function parseInvitationCodePage(value: unknown): {
+  items: InvitationCodeResponse[];
+  total: number;
+} {
+  if (!isRecord(value) || !Array.isArray(value.items))
+    throw new Error("Invalid invitation code page response");
+  return {
+    items: value.items.map((item) => {
+      if (!isRecord(item)) throw new Error("Invalid invitation code response");
+      const createdAt = item.created_at;
+      if (createdAt !== null && typeof createdAt !== "string")
+        throw new Error("Invalid invitation code created_at");
+      return {
+        id: stringField(item, "id"),
+        code: stringField(item, "code"),
+        used_count: numberField(item, "used_count"),
+        max_uses: numberField(item, "max_uses"),
+        is_active: booleanField(item, "is_active"),
+        created_at: createdAt,
+      };
+    }),
+    total: numberField(value, "total"),
+  };
+}
+
+export function parseInvitationCodeCreate(value: unknown): {
+  created: number;
+  codes: string[];
+} {
+  if (!isRecord(value) || !Array.isArray(value.codes))
+    throw new Error("Invalid invitation code create response");
+  if (!value.codes.every((code) => typeof code === "string"))
+    throw new Error("Invalid invitation codes");
+  return { created: numberField(value, "created"), codes: value.codes };
+}
+
+export function parseInvitationCodeDeactivate(value: unknown): {
+  status: "deactivated";
+} {
+  if (!isRecord(value) || value.status !== "deactivated")
+    throw new Error("Invalid invitation code deactivate response");
+  return { status: "deactivated" };
+}
+
+export function parseApiKey(value: unknown): { api_key: string } {
+  if (!isRecord(value)) throw new Error("Invalid API key response");
+  return { api_key: stringField(value, "api_key") };
+}
+
+export function parseOptionalSystemApiKey(value: unknown): string | null {
+  if (!isRecord(value)) throw new Error("Invalid system API key response");
+  const setting = value.value;
+  if (!isRecord(setting)) throw new Error("Invalid system API key value");
+  if (setting.api_key === undefined || setting.api_key === null) return null;
+  if (typeof setting.api_key !== "string")
+    throw new Error("Invalid system API key");
+  return setting.api_key;
+}
+
+export interface AgentPermissionsResponse {
+  is_owner: boolean;
+  scope_type: "company" | "user" | "custom";
+  scope_ids: string[];
+  scope_names?: Array<{ name: string }>;
+  access_level: "use" | "manage";
+}
+
+export function parseAgentPermissions(
+  value: unknown,
+): AgentPermissionsResponse {
+  if (!isRecord(value) || !Array.isArray(value.scope_ids))
+    throw new Error("Invalid agent permissions response");
+  if (!value.scope_ids.every((id) => typeof id === "string"))
+    throw new Error("Invalid agent permission scope ids");
+  const scopeType = value.scope_type;
+  if (scopeType !== "company" && scopeType !== "user" && scopeType !== "custom")
+    throw new Error("Invalid agent permission scope type");
+  const accessLevel = value.access_level;
+  if (accessLevel !== "use" && accessLevel !== "manage")
+    throw new Error("Invalid agent permission access level");
+  let scopeNames: Array<{ name: string }> | undefined;
+  if (value.scope_names !== undefined) {
+    if (!Array.isArray(value.scope_names))
+      throw new Error("Invalid agent permission scope names");
+    scopeNames = value.scope_names.map((item) => {
+      if (!isRecord(item))
+        throw new Error("Invalid agent permission scope name");
+      return { name: stringField(item, "name") };
+    });
+  }
+  return {
+    is_owner: booleanField(value, "is_owner"),
+    scope_type: scopeType,
+    scope_ids: value.scope_ids,
+    access_level: accessLevel,
+    ...(scopeNames !== undefined ? { scope_names: scopeNames } : {}),
+  };
 }

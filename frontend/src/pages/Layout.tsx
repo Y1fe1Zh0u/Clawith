@@ -29,7 +29,9 @@ import type { Agent, User } from "../types";
 import type { TenantChoice } from "../services/apiContracts";
 import {
   parseNotificationItems,
+  parseDirectUser,
   parseUnreadCount,
+  parseVersion,
   type NotificationItemResponse as NotificationItem,
 } from "../services/directPageResponseParsers";
 import { useGroupUnread } from "../hooks/useGroupUnread";
@@ -146,7 +148,6 @@ function AccountSettingsModal({
   const handleSaveProfile = async () => {
     setSaving(true);
     try {
-      const token = localStorage.getItem("token");
       const body: Partial<Pick<User, "username" | "email" | "display_name">> =
         {};
       if (username !== user?.username) body.username = username;
@@ -157,19 +158,12 @@ function AccountSettingsModal({
         setSaving(false);
         return;
       }
-      const res = await fetch("/api/auth/me", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Failed" }));
-        throw new Error(err.detail);
-      }
-      const updated = await res.json();
+      const updated = parseDirectUser(
+        await fetchJson<unknown>("/auth/me", {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        }),
+      );
       setUser(updated);
       showMsg(isChinese ? "个人信息已更新" : "Profile updated");
     } catch (error) {
@@ -181,19 +175,10 @@ function AccountSettingsModal({
   const handleResendVerification = async () => {
     setResendingEmail(true);
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch("/api/auth/resend-verification", {
+      await fetchJson<unknown>("/auth/resend-verification", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({ email: user?.email }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Failed" }));
-        throw new Error(err.detail);
-      }
       showMsg(
         isChinese
           ? "验证邮件已发送，请查收"
@@ -223,22 +208,13 @@ function AccountSettingsModal({
     }
     setSaving(true);
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch("/api/auth/me/password", {
+      await fetchJson<unknown>("/auth/me/password", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({
           old_password: oldPassword,
           new_password: newPassword,
         }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Failed" }));
-        throw new Error(err.detail);
-      }
       showMsg(isChinese ? "密码已修改" : "Password changed");
       setOldPassword("");
       setNewPassword("");
@@ -505,8 +481,8 @@ function AccountSettingsModal({
 function VersionDisplay() {
   const [info, setInfo] = useState<{ version?: string; commit?: string }>({});
   useEffect(() => {
-    fetch("/api/version")
-      .then((r) => r.json())
+    fetchJson<unknown>("/version")
+      .then(parseVersion)
       .then(setInfo)
       .catch(() => {});
   }, []);
@@ -859,19 +835,15 @@ export default function Layout() {
   // Total unread across all group sessions, for the Groups nav badge.
   const groupUnread = useGroupUnread();
   const markAllRead = async () => {
-    const token = localStorage.getItem("token");
-    await fetch("/api/notifications/read-all", {
+    await fetchJson<unknown>("/notifications/read-all", {
       method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     queryClient.invalidateQueries({ queryKey: ["notifications-unread"] });
     queryClient.invalidateQueries({ queryKey: ["notifications"] });
   };
   const markOneRead = async (id: string) => {
-    const token = localStorage.getItem("token");
-    await fetch(`/api/notifications/${id}/read`, {
+    await fetchJson<unknown>(`/notifications/${id}/read`, {
       method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     queryClient.invalidateQueries({ queryKey: ["notifications-unread"] });
     queryClient.invalidateQueries({ queryKey: ["notifications"] });
