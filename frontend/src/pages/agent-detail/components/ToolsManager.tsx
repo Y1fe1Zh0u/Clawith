@@ -16,7 +16,10 @@ import {
 
 import { useDialog } from "../../../components/Dialog/DialogContext";
 import { useToast } from "../../../components/Toast/ToastContext";
-import { caughtErrorMessage } from "../../../services/apiError";
+import {
+  caughtErrorMessage,
+  parseHttpErrorResponse,
+} from "../../../services/apiError";
 import type { JsonValue } from "../../../services/apiContracts";
 import { useAuthStore } from "../../../stores";
 import {
@@ -29,6 +32,7 @@ import {
   shouldPreopenMcpAuthorizationWindow,
   type McpAuthorizationState,
 } from "../mcpAuthorization";
+import { requestAgentToolsWithConfig } from "../toolsManagerData";
 
 type ToolConfig = Record<string, JsonValue>;
 type ToolStatusFilter = "all" | "enabled" | "disabled" | "configured";
@@ -356,17 +360,12 @@ export default function ToolsManager({
 
   const fetchTools = useCallback(async (): Promise<AgentTool[]> => {
     const token = localStorage.getItem("token");
-    const res = await fetch(`/api/tools/agents/${agentId}/with-config`, {
-      headers: { Authorization: `Bearer ${token}` },
+    return requestAgentToolsWithConfig({
+      agentId,
+      token,
+      parsePayload: parseAgentTools,
+      parseError: parseHttpErrorResponse,
     });
-    if (res.ok) return parseAgentTools(await res.json());
-
-    const fallbackResponse = await fetch(`/api/tools/agents/${agentId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    return fallbackResponse.ok
-      ? parseAgentTools(await fallbackResponse.json())
-      : [];
   }, [agentId]);
 
   const loadTools = useCallback(async () => {
