@@ -6,6 +6,7 @@ import { useDialog } from "../../../components/Dialog/DialogProvider";
 import { useToast } from "../../../components/Toast/ToastProvider";
 import { useAuthStore } from "../../../stores";
 import { notifyModelCacheInvalidated } from "../../../services/modelCacheEvents";
+import { caughtErrorMessage } from "../../../services/apiError";
 import { fetchJson } from "../utils/fetchJson";
 
 interface LLMModel {
@@ -463,11 +464,11 @@ export default function LlmTab({ selectedTenantId }: LlmTabProps) {
         );
         if (btn) btn.textContent = origText;
       }
-    } catch (e: any) {
+    } catch (error) {
       await dialog.alert(t("enterprise.llm.testErrorShort", "连通性测试出错"), {
         type: "error",
         title: t("enterprise.llm.testTitle", "连通性测试"),
-        details: String(e?.message || e),
+        details: String(caughtErrorMessage(error) || error),
       });
       if (btn) btn.textContent = origText;
     }

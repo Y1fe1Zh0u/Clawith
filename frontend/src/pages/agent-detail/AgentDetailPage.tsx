@@ -116,6 +116,7 @@ import {
   shouldKickoffOnboarding,
 } from "./onboardingKickoff";
 import { fetchAuth } from "./utils/fetchAuth";
+import { caughtErrorMessage } from "../../services/apiError";
 import {
   formatRuntimeErrorDiagnostics,
   normalizeRuntimeError,
@@ -4587,10 +4588,10 @@ export default function AgentDetailPage() {
           details: String(err.detail || `HTTP ${res.status}`),
         });
       }
-    } catch (err: any) {
-      console.error("Failed to create session:", err);
+    } catch (error) {
+      console.error("Failed to create session:", error);
       toast.error(t("common.error.sessionCreateFailed", "创建会话失败"), {
-        details: String(err.message || err),
+        details: String(caughtErrorMessage(error) || error),
       });
     }
   };
@@ -4630,9 +4631,9 @@ export default function AgentDetailPage() {
       }
       await fetchMySessions(false, id);
       if (canViewAllAgentChatSessions) await fetchAllSessions();
-    } catch (e: any) {
+    } catch (error) {
       toast.error(t("common.error.deleteFailed", "删除失败"), {
-        details: String(e?.message || e),
+        details: String(caughtErrorMessage(error) || error),
       });
     }
   };
@@ -4681,9 +4682,9 @@ export default function AgentDetailPage() {
       });
       queryClient.invalidateQueries({ queryKey: ["agent", id] });
       setShowExpiryModal(false);
-    } catch (e: any) {
+    } catch (error) {
       toast.error(t("common.error.saveFailed", "保存失败"), {
-        details: String(e?.message || e),
+        details: String(caughtErrorMessage(error) || error),
       });
     }
     setExpirySaving(false);
@@ -4972,8 +4973,8 @@ export default function AgentDetailPage() {
       }
       setSettingsSaved(true);
       setTimeout(() => setSettingsSaved(false), 2000);
-    } catch (e: any) {
-      setSettingsError(e?.message || "Failed to save");
+    } catch (error) {
+      setSettingsError(caughtErrorMessage(error) || "Failed to save");
     } finally {
       setSettingsSaving(false);
     }
@@ -6890,13 +6891,13 @@ export default function AgentDetailPage() {
             },
           ].slice(0, 10),
         );
-      } catch (err: any) {
+      } catch (error) {
         if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
         setChatUploadDrafts((prev) => prev.filter((d) => d.id !== draft.id));
         chatUploadAbortRef.current.delete(draft.id);
-        if (err?.message !== "Upload cancelled")
+        if (caughtErrorMessage(error) !== "Upload cancelled")
           toast.error(t("agent.upload.failed"), {
-            details: String(err?.message || err),
+            details: String(caughtErrorMessage(error) || error),
           });
       }
     };
@@ -6974,13 +6975,13 @@ export default function AgentDetailPage() {
             },
           ].slice(0, 10),
         );
-      } catch (err: any) {
+      } catch (error) {
         if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
         setChatUploadDrafts((prev) => prev.filter((d) => d.id !== draft.id));
         chatUploadAbortRef.current.delete(draft.id);
-        if (err?.message !== "Upload cancelled")
+        if (caughtErrorMessage(error) !== "Upload cancelled")
           toast.error(t("agent.upload.failed"), {
-            details: String(err?.message || err),
+            details: String(caughtErrorMessage(error) || error),
           });
       }
     };
@@ -7043,10 +7044,10 @@ export default function AgentDetailPage() {
               imageUrl: data.image_data_url || undefined,
             },
           ]);
-        } catch (err: any) {
-          if (err?.message !== "Upload cancelled") {
+        } catch (error) {
+          if (caughtErrorMessage(error) !== "Upload cancelled") {
             toast.error(t("agent.upload.failed"), {
-              details: String(err?.message || ""),
+              details: String(caughtErrorMessage(error) || ""),
             });
           }
         } finally {
@@ -13066,10 +13067,13 @@ export default function AgentDetailPage() {
                 await agentApi.delete(id);
                 queryClient.invalidateQueries({ queryKey: ["agents"] });
                 navigate("/");
-              } catch (err: any) {
+              } catch (error) {
                 await dialog.alert(
                   t("common.error.agentDeleteFailed", "删除数字员工失败"),
-                  { type: "error", details: String(err?.message || err) },
+                  {
+                    type: "error",
+                    details: String(caughtErrorMessage(error) || error),
+                  },
                 );
               }
             }}
