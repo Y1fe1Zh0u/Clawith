@@ -32,7 +32,12 @@ import {
   shouldPreopenMcpAuthorizationWindow,
   type McpAuthorizationState,
 } from "../mcpAuthorization";
-import { requestAgentToolsWithConfig } from "../toolsManagerData";
+import {
+  parseCompleteList,
+  requestAgentToolsWithConfig,
+  requestToolsMutation,
+  updateToolEnabled,
+} from "../toolsManagerData";
 
 type ToolConfig = Record<string, JsonValue>;
 type ToolStatusFilter = "all" | "enabled" | "disabled" | "configured";
@@ -207,39 +212,47 @@ const parseAgentTool = (value: unknown): AgentTool | null => {
     !isRecord(value) ||
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
-    typeof value.display_name !== "string"
+    typeof value.display_name !== "string" ||
+    typeof value.description !== "string" ||
+    typeof value.type !== "string" ||
+    typeof value.category !== "string" ||
+    typeof value.enabled !== "boolean" ||
+    typeof value.source !== "string" ||
+    (value.agent_tool_id !== null && typeof value.agent_tool_id !== "string") ||
+    (value.mcp_server_name !== null &&
+      typeof value.mcp_server_name !== "string") ||
+    (value.mcp_authorization_provider !== null &&
+      typeof value.mcp_authorization_provider !== "string") ||
+    !isRecord(value.config_schema) ||
+    !isRecord(value.global_config) ||
+    !isRecord(value.agent_config)
   ) {
     return null;
   }
   return {
     id: value.id,
-    agent_tool_id:
-      typeof value.agent_tool_id === "string" ? value.agent_tool_id : null,
+    agent_tool_id: value.agent_tool_id,
     name: value.name,
     display_name: value.display_name,
-    description: typeof value.description === "string" ? value.description : "",
-    type: typeof value.type === "string" ? value.type : "builtin",
-    category: typeof value.category === "string" ? value.category : "general",
-    enabled: value.enabled === true,
-    mcp_server_name:
-      typeof value.mcp_server_name === "string" ? value.mcp_server_name : null,
-    mcp_authorization_provider:
-      typeof value.mcp_authorization_provider === "string"
-        ? value.mcp_authorization_provider
-        : null,
+    description: value.description,
+    type: value.type,
+    category: value.category,
+    enabled: value.enabled,
+    mcp_server_name: value.mcp_server_name,
+    mcp_authorization_provider: value.mcp_authorization_provider,
     config_schema: parseConfigSchema(value.config_schema),
     global_config: parseToolConfig(value.global_config),
     agent_config: parseToolConfig(value.agent_config),
-    source: typeof value.source === "string" ? value.source : "builtin",
+    source: value.source,
   };
 };
 
 const parseAgentTools = (value: unknown): AgentTool[] =>
-  Array.isArray(value)
-    ? value
-        .map(parseAgentTool)
-        .filter((tool): tool is AgentTool => tool !== null)
-    : [];
+  parseCompleteList({
+    payload: value,
+    parseItem: parseAgentTool,
+    contractName: "agent tools",
+  });
 
 const parseCategoryConfig = (value: unknown): CategoryConfigResponse =>
   isRecord(value)
@@ -293,6 +306,7 @@ export default function ToolsManager({
   const toast = useToast();
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [configTool, setConfigTool] = useState<AgentTool | null>(null);
   const [configData, setConfigData] = useState<ToolConfig>({});
   const [configJson, setConfigJson] = useState("");
@@ -368,15 +382,22 @@ export default function ToolsManager({
     });
   }, [agentId]);
 
-  const loadTools = useCallback(async () => {
+  const loadTools = useCallback(async (): Promise<boolean> => {
     setLoading(true);
     try {
       setTools(await fetchTools());
+      setLoadError("");
+      return true;
     } catch (error) {
-      console.error(error);
+      setLoadError(
+        caughtErrorMessage(error) ||
+          t("agent.tools.loadFailed", "Could not load tools."),
+      );
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [fetchTools]);
+  }, [fetchTools, t]);
 
   useEffect(() => {
     let active = true;
@@ -384,34 +405,39 @@ export default function ToolsManager({
       .then((loadedTools) => {
         if (!active) return;
         setTools(loadedTools);
+        setLoadError("");
         setLoading(false);
       })
       .catch((error: unknown) => {
         if (!active) return;
-        console.error(error);
+        setLoadError(
+          caughtErrorMessage(error) ||
+            t("agent.tools.loadFailed", "Could not load tools."),
+        );
         setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [fetchTools]);
+  }, [fetchTools, t]);
 
   const toggleTool = async (toolId: string, enabled: boolean) => {
-    setTools((prev) =>
-      prev.map((t) => (t.id === toolId ? { ...t, enabled } : t)),
-    );
+    const toolIds = new Set([toolId]);
+    setTools((previous) => updateToolEnabled(previous, toolIds, enabled));
     try {
       const token = localStorage.getItem("token");
-      await fetch(`/api/tools/agents/${agentId}`, {
+      await requestToolsMutation({
+        url: `/api/tools/agents/${agentId}`,
+        token,
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify([{ tool_id: toolId, enabled }]),
+        body: [{ tool_id: toolId, enabled }],
+        parseError: parseHttpErrorResponse,
       });
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      setTools((previous) => updateToolEnabled(previous, toolIds, !enabled));
+      toast.error(t("common.error.saveFailed", "Save failed"), {
+        details: caughtErrorMessage(error),
+      });
     }
   };
 
@@ -536,17 +562,13 @@ export default function ToolsManager({
             continue;
           payload[k] = v;
         }
-        await fetch(
-          `/api/tools/agents/${agentId}/category-config/${configCategory}`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ config: payload }),
-          },
-        );
+        await requestToolsMutation({
+          url: `/api/tools/agents/${encodeURIComponent(agentId)}/category-config/${encodeURIComponent(configCategory)}`,
+          token,
+          method: "POST",
+          body: { config: payload },
+          parseError: parseHttpErrorResponse,
+        });
         setConfigCategory(null);
       } else if (configTool) {
         const currentConfigTool = configTool;
@@ -565,17 +587,13 @@ export default function ToolsManager({
             continue;
           payload[k] = v;
         }
-        await fetch(
-          `/api/tools/agents/${agentId}/tool-config/${currentConfigTool.id}`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ config: payload }),
-          },
-        );
+        await requestToolsMutation({
+          url: `/api/tools/agents/${encodeURIComponent(agentId)}/tool-config/${encodeURIComponent(currentConfigTool.id)}`,
+          token,
+          method: "PUT",
+          body: { config: payload },
+          parseError: parseHttpErrorResponse,
+        });
         setConfigTool(null);
       }
       await loadTools();
@@ -593,6 +611,32 @@ export default function ToolsManager({
         {t("common.loading")}
       </div>
     );
+
+  const loadErrorNotice = loadError ? (
+    <div
+      role="alert"
+      className="card"
+      style={{
+        padding: "16px",
+        color: "var(--error)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+      }}
+    >
+      <span>{loadError}</span>
+      <button
+        type="button"
+        className="btn btn-secondary"
+        onClick={() => void loadTools()}
+      >
+        {t("common.retry", "Retry")}
+      </button>
+    </div>
+  ) : null;
+
+  if (loadError && tools.length === 0) return loadErrorNotice;
 
   // Company tools = platform presets (builtin) + company admin-added tools (admin)
   // Hide system-internal tools (e.g. finish) — they are protocol-level and not user-facing.
@@ -724,26 +768,25 @@ export default function ToolsManager({
     enabled: boolean,
   ) => {
     const catToolIds = new Set(catTools.map((t) => t.id));
-    setTools((prev) =>
-      prev.map((t) => (catToolIds.has(t.id) ? { ...t, enabled } : t)),
-    );
+    setTools((previous) => updateToolEnabled(previous, catToolIds, enabled));
     try {
       const token = localStorage.getItem("token");
       const payload = Array.from(catToolIds).map((id) => ({
         tool_id: id,
         enabled,
       }));
-      await fetch(`/api/tools/agents/${agentId}`, {
+      await requestToolsMutation({
+        url: `/api/tools/agents/${agentId}`,
+        token,
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
+        body: payload,
+        parseError: parseHttpErrorResponse,
       });
-    } catch (err) {
-      console.error("Bulk update failed", err);
-      await loadTools();
+    } catch (error) {
+      setTools((previous) => updateToolEnabled(previous, catToolIds, !enabled));
+      toast.error(t("common.error.saveFailed", "Save failed"), {
+        details: caughtErrorMessage(error),
+      });
     }
   };
 
@@ -1340,6 +1383,7 @@ export default function ToolsManager({
 
   return (
     <>
+      {loadErrorNotice}
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         <div
           className="tool-source-tabs"

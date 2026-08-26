@@ -1,7 +1,38 @@
 type FetchTools = (
   url: string,
-  init: { headers: { Authorization: string } },
+  init: RequestInit & { headers: { Authorization: string } },
 ) => Promise<Response>;
+
+interface ParseListOptions<T> {
+  payload: unknown;
+  parseItem: (item: unknown) => T | null;
+  contractName: string;
+}
+
+export function parseCompleteList<T>({
+  payload,
+  parseItem,
+  contractName,
+}: ParseListOptions<T>): T[] {
+  if (!Array.isArray(payload)) {
+    throw new Error(`Invalid ${contractName} response`);
+  }
+  const parsed = payload.map(parseItem);
+  if (parsed.some((item) => item === null)) {
+    throw new Error(`Invalid ${contractName} response`);
+  }
+  return parsed.filter((item): item is T => item !== null);
+}
+
+export function updateToolEnabled<T extends { id: string; enabled: boolean }>(
+  tools: T[],
+  toolIds: ReadonlySet<string>,
+  enabled: boolean,
+): T[] {
+  return tools.map((tool) =>
+    toolIds.has(tool.id) ? { ...tool, enabled } : tool,
+  );
+}
 
 interface RequestAgentToolsOptions<T> {
   agentId: string;
@@ -26,4 +57,32 @@ export async function requestAgentToolsWithConfig<T>({
     throw await parseError(response);
   }
   return parsePayload(await response.json());
+}
+
+interface RequestToolsMutationOptions {
+  url: string;
+  token: string | null;
+  method: "POST" | "PUT" | "DELETE";
+  body?: unknown;
+  parseError: (response: Response) => Promise<Error>;
+  fetchImpl?: FetchTools;
+}
+
+export async function requestToolsMutation({
+  url,
+  token,
+  method,
+  body,
+  parseError,
+  fetchImpl = fetch,
+}: RequestToolsMutationOptions): Promise<void> {
+  const response = await fetchImpl(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token || ""}`,
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  if (!response.ok) throw await parseError(response);
 }
