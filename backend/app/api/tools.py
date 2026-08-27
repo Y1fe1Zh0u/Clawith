@@ -13,6 +13,11 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.models.tool import AgentTool, Tool
 from app.models.user import User
+from app.services.atlassian_tool_service import (
+    is_atlassian_category,
+    is_atlassian_tool_identity,
+    without_atlassian_secret_fields,
+)
 from app.services.resource_discovery import (
     _get_smithery_api_key,
     get_smithery_connection_status,
@@ -247,6 +252,13 @@ async def list_tools(
     response = []
     for t in tools:
         company_config = await get_tool_company_config(db, t, target_tenant_id)
+        if is_atlassian_tool_identity(
+            category=t.category,
+            name=t.name,
+            server_name=t.mcp_server_name,
+            server_url=t.mcp_server_url,
+        ):
+            company_config = without_atlassian_secret_fields(company_config)
         response.append({
             "id": str(t.id),
             "name": t.name,
@@ -285,6 +297,16 @@ async def create_tool(
     # Resolve target tenant: explicit payload value takes priority so that
     # platform admins importing tools for another company work correctly.
     target_tenant_id = _resolve_target_tenant_id(current_user, data.tenant_id)
+    if is_atlassian_tool_identity(
+        category=data.category,
+        name=data.name,
+        server_name=data.mcp_server_name,
+        server_url=data.mcp_server_url,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Atlassian tools are owned by the agent category configuration",
+        )
 
     # Unique name check is scoped per tenant to avoid cross-tenant collisions.
     existing = await db.execute(
@@ -360,8 +382,29 @@ async def update_tool(
         raise HTTPException(status_code=404, detail="Tool not found")
     _require_tool_record_access(current_user, tool)
 
+    if is_atlassian_tool_identity(
+        category=tool.category,
+        name=tool.name,
+        server_name=tool.mcp_server_name,
+        server_url=tool.mcp_server_url,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Atlassian tools are owned by the agent category configuration",
+        )
+
     update_data = data.model_dump(exclude_unset=True)
     target_tenant_id = _resolve_target_tenant_id(current_user, update_data.pop("tenant_id", None))
+    if is_atlassian_tool_identity(
+        category=tool.category,
+        name=tool.name,
+        server_name=update_data.get("mcp_server_name", tool.mcp_server_name),
+        server_url=update_data.get("mcp_server_url", tool.mcp_server_url),
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Atlassian tools are owned by the agent category configuration",
+        )
 
     if "config" in update_data:
         config_value = meaningful_config(update_data.pop("config") or {})
@@ -394,6 +437,16 @@ async def delete_tool(
     if not tool:
         raise HTTPException(status_code=404, detail="Tool not found")
     _require_tool_record_access(current_user, tool)
+    if is_atlassian_tool_identity(
+        category=tool.category,
+        name=tool.name,
+        server_name=tool.mcp_server_name,
+        server_url=tool.mcp_server_url,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Atlassian tools are owned by the agent category configuration",
+        )
     if tool.type == "builtin":
         raise HTTPException(status_code=400, detail="Cannot delete builtin tools")
 
@@ -682,6 +735,25 @@ async def update_mcp_server(
             status_code=404,
             detail=f"No tools found for server '{data.server_name}'",
         )
+    if is_atlassian_tool_identity(
+        server_name=data.server_name,
+        server_url=data.server_url,
+    ) or any(
+        is_atlassian_tool_identity(
+            category=tool.category,
+            name=tool.name,
+            server_name=data.server_name or tool.mcp_server_name,
+            server_url=data.server_url or tool.mcp_server_url,
+        )
+        for tool in tools
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Atlassian tools must be configured through the "
+                "agent category configuration"
+            ),
+        )
 
     for tool in tools:
         tool.mcp_server_url = data.server_url
@@ -773,7 +845,16 @@ async def delete_agent_tool(
     if not remaining_r.scalar_one_or_none():
         tool_r = await db.execute(select(Tool).where(Tool.id == tool_id))
         tool = tool_r.scalar_one_or_none()
-        if tool and tool.type == "mcp":
+        if (
+            tool
+            and tool.type == "mcp"
+            and not is_atlassian_tool_identity(
+                category=tool.category,
+                name=tool.name,
+                server_name=tool.mcp_server_name,
+                server_url=tool.mcp_server_url,
+            )
+        ):
             await db.delete(tool)
     await db.commit()
     return {"ok": True}
@@ -813,6 +894,14 @@ async def get_agent_tool_config(
     schema = tool.config_schema
     raw_global = await get_tool_company_config(db, tool, agent.tenant_id)
     raw_agent = _decrypt_sensitive_fields(at.config if at else {}, schema)
+    if is_atlassian_tool_identity(
+        category=tool.category,
+        name=tool.name,
+        server_name=tool.mcp_server_name,
+        server_url=tool.mcp_server_url,
+    ):
+        raw_global = without_atlassian_secret_fields(raw_global)
+        raw_agent = without_atlassian_secret_fields(raw_agent)
 
     # Mask sensitive fields in global config for display
     masked_global = mask_sensitive_fields(raw_global, schema)
@@ -854,7 +943,24 @@ async def update_agent_tool_config(
         tool_for_schema, agent.tenant_id, await _load_agent_tool_assignments(db, agent_id)
     ):
         raise HTTPException(status_code=404, detail="Tool not found")
-    encrypted_config = _encrypt_sensitive_fields(data.config, tool_for_schema.config_schema if tool_for_schema else None)
+    if is_atlassian_tool_identity(
+        category=tool_for_schema.category,
+        name=tool_for_schema.name,
+        server_name=tool_for_schema.mcp_server_name,
+        server_url=tool_for_schema.mcp_server_url,
+    ):
+        if without_atlassian_secret_fields(data.config) != data.config:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Atlassian credentials must be configured through the "
+                    "agent category configuration"
+                ),
+            )
+    encrypted_config = _encrypt_sensitive_fields(
+        data.config,
+        tool_for_schema.config_schema,
+    )
 
     at_r = await db.execute(
         select(AgentTool).where(AgentTool.agent_id == agent_id, AgentTool.tool_id == tool_id)
@@ -946,6 +1052,14 @@ async def get_agent_tools_with_config(
                 raw_global["api_key"] = system_keys_cache[ss_key]
 
         raw_agent = _decrypt_sensitive_fields((at.config if at else {}) or {}, t.config_schema)
+        if is_atlassian_tool_identity(
+            category=t.category,
+            name=t.name,
+            server_name=t.mcp_server_name,
+            server_url=t.mcp_server_url,
+        ):
+            raw_global = without_atlassian_secret_fields(raw_global)
+            raw_agent = without_atlassian_secret_fields(raw_agent)
 
         # Mask sensitive fields in global_config so users can see that a key
         # is configured at the company level without exposing the full value.
@@ -1028,6 +1142,12 @@ async def get_category_config(
     from app.models.channel_config import ChannelConfig
 
     agent = await _require_agent_tool_manager(db, current_user, agent_id)
+    if is_atlassian_category(category):
+        from app.services.atlassian_tool_service import (
+            get_atlassian_configuration_view,
+        )
+
+        return await get_atlassian_configuration_view(agent_id, db)
 
     # ── 1. Load company-level (global) config from Tool.config ──────────────
     # Find a tool in this category that actually has config data.
@@ -1109,32 +1229,51 @@ async def update_category_config(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can configure category")
 
-    plaintext_key: str | None = None
-    if category == "atlassian":
+    if is_atlassian_category(category):
+        from app.services.atlassian_tool_service import (
+            AtlassianConfigurationError,
+            AtlassianSecretError,
+            AtlassianSyncError,
+            configure_atlassian_for_agent,
+        )
+
         raw_key = (
             data.config.get("api_key")
+            or data.config.get("atlassian_api_key")
             or data.config.get("api_secret")
             or data.config.get("app_secret")
         )
         if not isinstance(raw_key, str) or not raw_key.strip():
             raise HTTPException(status_code=422, detail="Atlassian API key is required")
-        plaintext_key = raw_key.strip()
+        cloud_id = str(data.config.get("cloud_id") or "").strip()
+        try:
+            await configure_atlassian_for_agent(
+                agent_id,
+                raw_key.strip(),
+                cloud_id,
+                db,
+            )
+        except AtlassianSecretError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Atlassian API key encryption failed",
+            ) from exc
+        except AtlassianSyncError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Atlassian tool synchronization failed",
+            ) from exc
+        except AtlassianConfigurationError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Atlassian configuration could not be saved",
+            ) from exc
+        return {"ok": True}
 
     # Encrypt sensitive fields
     encrypted_config = _encrypt_sensitive_fields(data.config)
     app_secret = encrypted_config.get("api_key") or encrypted_config.get("api_secret") or encrypted_config.get("app_secret")
     extra = {k: v for k, v in encrypted_config.items() if k not in ("api_key", "api_secret", "app_secret")}
-    if plaintext_key is not None:
-        from app.config import get_settings
-        from app.core.security import encrypt_data
-
-        try:
-            app_secret = encrypt_data(plaintext_key, get_settings().SECRET_KEY)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="Atlassian API key encryption failed",
-            ) from exc
 
     result = await db.execute(
         select(ChannelConfig).where(
@@ -1160,18 +1299,6 @@ async def update_category_config(
         )
         db.add(config)
 
-    if plaintext_key is not None:
-        from app.api.atlassian import _sync_atlassian_tools_for_agent
-
-        try:
-            await _sync_atlassian_tools_for_agent(agent_id, plaintext_key, db)
-        except Exception as exc:
-            await db.rollback()
-            raise HTTPException(
-                status_code=502,
-                detail="Atlassian tool synchronization failed",
-            ) from exc
-
     await db.commit()
 
     return {"ok": True}
@@ -1192,6 +1319,21 @@ async def delete_category_config(
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can remove config")
 
+    if is_atlassian_category(category):
+        from app.services.atlassian_tool_service import (
+            AtlassianConfigurationError,
+            delete_atlassian_for_agent,
+        )
+
+        try:
+            await delete_atlassian_for_agent(agent_id, db)
+        except AtlassianConfigurationError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Tool category cleanup failed",
+            ) from exc
+        return
+
     try:
         await db.execute(
             delete(ChannelConfig).where(
@@ -1199,10 +1341,6 @@ async def delete_category_config(
                 ChannelConfig.channel_type == category,
             )
         )
-        if category == "atlassian":
-            from app.api.atlassian import _remove_atlassian_tool_assignments
-
-            await _remove_atlassian_tool_assignments(agent_id, db)
     except Exception as exc:
         await db.rollback()
         raise HTTPException(
@@ -1221,9 +1359,49 @@ async def test_category_config(
 ):
     """Test connectivity for a tool category."""
     await _require_agent_tool_manager(db, current_user, agent_id)
-    if category == "atlassian":
-        from app.api.atlassian import test_atlassian_channel
-        return await test_atlassian_channel(agent_id, current_user, db)
+    if is_atlassian_category(category):
+        from app.services.atlassian_tool_service import (
+            AtlassianConfigurationError,
+            AtlassianNotConfiguredError,
+            AtlassianSecretError,
+            AtlassianSyncError,
+            test_atlassian_for_agent,
+        )
+
+        try:
+            tools = await test_atlassian_for_agent(agent_id, db)
+        except AtlassianSecretError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Stored Atlassian API key is invalid",
+            ) from exc
+        except AtlassianNotConfiguredError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Atlassian not configured",
+            ) from exc
+        except AtlassianConfigurationError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="Atlassian configuration could not be read",
+            ) from exc
+        except AtlassianSyncError as exc:
+            return {"ok": False, "error": str(exc)[:300]}
+        return {
+            "ok": True,
+            "tool_count": len(tools),
+            "tools": [
+                {
+                    "name": tool["name"],
+                    "description": tool["description"][:100],
+                }
+                for tool in tools[:10]
+            ],
+            "message": (
+                "✅ Connected to Atlassian Rovo MCP — "
+                f"{len(tools)} tools available"
+            ),
+        }
     elif category == "agentbay":
         from app.services.agentbay_client import test_agentbay_channel
         return await test_agentbay_channel(agent_id, current_user, db)

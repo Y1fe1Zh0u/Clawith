@@ -7706,9 +7706,18 @@ async def _resolve_frozen_mcp_execution_target(
         merged_config,
         tool.config_schema,
     )
-    if server_name == "Atlassian Rovo":
-        merged_config.pop("api_key", None)
-        merged_config.pop("atlassian_api_key", None)
+    from app.services.atlassian_tool_service import (
+        is_atlassian_tool_identity,
+        without_atlassian_secret_fields,
+    )
+
+    if is_atlassian_tool_identity(
+        category=getattr(tool, "category", None),
+        name=tool.name,
+        server_name=server_name,
+        server_url=server_url,
+    ):
+        merged_config = without_atlassian_secret_fields(merged_config)
     return {
         "full_name": binding.handler_key,
         "raw_name": raw_name,
@@ -7813,9 +7822,18 @@ async def _resolve_mcp_execution_target(
             merged_config,
             tool.config_schema,
         )
-        if str(tool.mcp_server_name or "") == "Atlassian Rovo":
-            merged_config.pop("api_key", None)
-            merged_config.pop("atlassian_api_key", None)
+        from app.services.atlassian_tool_service import (
+            is_atlassian_tool_identity,
+            without_atlassian_secret_fields,
+        )
+
+        if is_atlassian_tool_identity(
+            category=getattr(tool, "category", None),
+            name=tool.name,
+            server_name=tool.mcp_server_name,
+            server_url=server_url,
+        ):
+            merged_config = without_atlassian_secret_fields(merged_config)
         return {
             "full_name": str(tool.name),
             "raw_name": raw_name or str(tool.name),
@@ -7882,8 +7900,27 @@ async def _execute_resolved_mcp_target_outcome(
             async_completion=async_completion,
         )
 
-    if server_name == "Atlassian Rovo":
-        from app.api.atlassian import (
+    from app.services.atlassian_tool_service import (
+        is_atlassian_runtime_target,
+        is_atlassian_tool_identity,
+    )
+
+    atlassian_identity = is_atlassian_tool_identity(
+        name=full_name,
+        server_name=server_name,
+        server_url=server_url,
+    )
+    if atlassian_identity and not is_atlassian_runtime_target(
+        name=full_name,
+        server_name=server_name,
+        server_url=server_url,
+    ):
+        return _typed_failure(
+            "Atlassian MCP route is not the canonical safe endpoint.",
+            "mcp_configuration_invalid",
+        )
+    if atlassian_identity:
+        from app.services.atlassian_tool_service import (
             AtlassianSecretError,
             get_atlassian_api_key_for_agent,
         )

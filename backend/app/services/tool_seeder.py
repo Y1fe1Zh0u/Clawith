@@ -493,8 +493,6 @@ async def clean_orphaned_mcp_tools():
 
 # ── Atlassian Rovo MCP Server Integration ──────────────────────────────────
 
-ATLASSIAN_ROVO_MCP_URL = "https://mcp.atlassian.com/v1/mcp"
-
 ATLASSIAN_ROVO_CONFIG_TOOL = {
     "name": "atlassian_rovo",
     "display_name": "Atlassian Rovo (Jira / Confluence / Compass)",
@@ -529,20 +527,20 @@ ATLASSIAN_ROVO_CONFIG_TOOL = {
 async def seed_atlassian_rovo_config():
     """Ensure the Atlassian Rovo platform config tool exists in the database.
 
-    If the env var ATLASSIAN_API_KEY is set, it will be written into the tool config
-    so the platform is immediately ready without manual UI setup.
+    ATLASSIAN_API_KEY is consumed transiently by startup discovery and is never
+    copied into Tool.config.
     """
-    import os
-    env_key = os.environ.get("ATLASSIAN_API_KEY", "").strip()
+    from app.services.atlassian_tool_service import (
+        ATLASSIAN_MCP_URL,
+        ATLASSIAN_SERVER_NAME,
+        without_atlassian_secret_fields,
+    )
 
     async with query_dao.session() as db:
         t = ATLASSIAN_ROVO_CONFIG_TOOL
         result = await query_dao.execute(db, select(Tool).where(Tool.name == t["name"]))
         existing = result.scalar_one_or_none()
         if not existing:
-            initial_config = dict(t["config"])
-            if env_key:
-                initial_config["api_key"] = env_key
             tool = Tool(
                 name=t["name"],
                 display_name=t["display_name"],
@@ -552,10 +550,10 @@ async def seed_atlassian_rovo_config():
                 icon=t["icon"],
                 is_default=t["is_default"],
                 parameters_schema=t["parameters_schema"],
-                config=initial_config,
+                config=without_atlassian_secret_fields(t["config"]),
                 config_schema=t["config_schema"],
-                mcp_server_url=ATLASSIAN_ROVO_MCP_URL,
-                mcp_server_name="Atlassian Rovo",
+                mcp_server_url=ATLASSIAN_MCP_URL,
+                mcp_server_name=ATLASSIAN_SERVER_NAME,
                 source="admin",
             )
             query_dao.add(db, tool)
@@ -566,12 +564,15 @@ async def seed_atlassian_rovo_config():
             if existing.config_schema != t["config_schema"]:
                 existing.config_schema = t["config_schema"]
                 updated = True
-            if existing.mcp_server_url != ATLASSIAN_ROVO_MCP_URL:
-                existing.mcp_server_url = ATLASSIAN_ROVO_MCP_URL
+            if existing.mcp_server_url != ATLASSIAN_MCP_URL:
+                existing.mcp_server_url = ATLASSIAN_MCP_URL
                 updated = True
-            # Write env key into DB if not already stored
-            if env_key and (not existing.config or not existing.config.get("api_key")):
-                existing.config = {**(existing.config or {}), "api_key": env_key}
+            if existing.mcp_server_name != ATLASSIAN_SERVER_NAME:
+                existing.mcp_server_name = ATLASSIAN_SERVER_NAME
+                updated = True
+            sanitized_config = without_atlassian_secret_fields(existing.config)
+            if sanitized_config != (existing.config or {}):
+                existing.config = sanitized_config
                 updated = True
             if updated:
                 await query_dao.commit(db)
@@ -579,10 +580,7 @@ async def seed_atlassian_rovo_config():
 
 
 async def get_atlassian_api_key() -> str:
-    """Read the Atlassian API key from the platform config tool."""
-    async with query_dao.session() as db:
-        result = await query_dao.execute(db, select(Tool).where(Tool.name == "atlassian_rovo"))
-        tool = result.scalar_one_or_none()
-        if tool and tool.config:
-            return tool.config.get("api_key", "")
-    return ""
+    """Read the transient platform startup key from the environment."""
+    import os
+
+    return os.environ.get("ATLASSIAN_API_KEY", "").strip()

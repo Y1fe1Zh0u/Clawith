@@ -11,6 +11,11 @@ from sqlalchemy import delete, select
 from app.database import async_session
 from app.models.tool import AgentTool, Tool
 from app.services.agent_runtime.tool_execution import ToolExecutionOutcome
+from app.services.atlassian_tool_service import (
+    ATLASSIAN_MCP_URL,
+    is_atlassian_mcp_url,
+    is_atlassian_tool_identity,
+)
 from app.services.tool_config import (
     decrypt_sensitive_fields,
     get_tenant_tool_config,
@@ -22,6 +27,28 @@ from app.services.tool_config import (
 SMITHERY_API_BASE = "https://registry.smithery.ai"
 SMITHERY_CONNECT_API_BASE = "https://api.smithery.ai"
 MODELSCOPE_API_BASE = "https://modelscope.cn"
+
+
+def _is_atlassian_tool_record(tool: Tool) -> bool:
+    return is_atlassian_tool_identity(
+        category=tool.category,
+        name=tool.name,
+        server_name=tool.mcp_server_name,
+        server_url=tool.mcp_server_url,
+    )
+
+
+def _generic_atlassian_import_rejection() -> ToolExecutionOutcome:
+    return ToolExecutionOutcome(
+        status="failed",
+        result_summary=(
+            "Atlassian Rovo must be configured from the Agent Tools "
+            "category settings."
+        ),
+        result_ref=None,
+        error_code="mcp_configuration_invalid",
+        retryable=False,
+    )
 
 
 async def _get_smithery_api_key(agent_id: uuid.UUID | None = None) -> str:
@@ -638,6 +665,11 @@ async def import_mcp_from_smithery_outcome(
             )
             existing_server_tools = existing_server_r.scalars().all()
             if existing_server_tools:
+                if any(
+                    _is_atlassian_tool_record(tool)
+                    for tool in existing_server_tools
+                ):
+                    return _generic_atlassian_import_rejection()
                 # Check if this agent has assignments for these tools
                 tool_ids = [t.id for t in existing_server_tools]
                 agent_assignments_r = await db.execute(
@@ -767,6 +799,21 @@ async def import_mcp_from_smithery_outcome(
 
     # Step 3: Determine the MCP server URL for runtime execution
     base_mcp_url = deployment_url or f"https://{qualified_name}.run.tools"
+    if is_atlassian_tool_identity(
+        name=qualified_name,
+        server_name=display_name,
+        server_url=base_mcp_url,
+    ):
+        return ToolExecutionOutcome(
+            status="failed",
+            result_summary=(
+                "Atlassian Rovo must be configured from the Agent Tools "
+                "category settings."
+            ),
+            result_ref=None,
+            error_code="mcp_configuration_invalid",
+            retryable=False,
+        )
 
     # Step 3.5: Auto-create Smithery Connect namespace + connection
     smithery_config = {}  # will be merged into every AgentTool.config
@@ -885,6 +932,8 @@ async def import_mcp_from_smithery_outcome(
                 select(Tool).where(Tool.mcp_server_name == display_name, Tool.type == "mcp")
             )
             for et in existing_server_tools_r.scalars().all():
+                if _is_atlassian_tool_record(et):
+                    return _generic_atlassian_import_rejection()
                 et.mcp_server_url = base_mcp_url
                 await _ensure_agent_tool(et.id)
 
@@ -894,6 +943,8 @@ async def import_mcp_from_smithery_outcome(
             old_generic_r = await db.execute(select(Tool).where(Tool.name == generic_name))
             old_generic = old_generic_r.scalar_one_or_none()
             if old_generic:
+                if _is_atlassian_tool_record(old_generic):
+                    return _generic_atlassian_import_rejection()
                 await db.execute(
                     delete(AgentTool).where(AgentTool.tool_id == old_generic.id)
                 )
@@ -908,6 +959,8 @@ async def import_mcp_from_smithery_outcome(
                 existing_r = await db.execute(select(Tool).where(Tool.name == tool_name))
                 existing_tool = existing_r.scalar_one_or_none()
                 if existing_tool:
+                    if _is_atlassian_tool_record(existing_tool):
+                        return _generic_atlassian_import_rejection()
                     existing_tool.mcp_server_url = base_mcp_url
                     await _ensure_agent_tool(existing_tool.id)
                     if reauthorize:
@@ -945,6 +998,8 @@ async def import_mcp_from_smithery_outcome(
             existing_r = await db.execute(select(Tool).where(Tool.name == tool_name))
             existing_tool = existing_r.scalar_one_or_none()
             if existing_tool:
+                if _is_atlassian_tool_record(existing_tool):
+                    return _generic_atlassian_import_rejection()
                 existing_tool.mcp_server_url = base_mcp_url
                 await _ensure_agent_tool(existing_tool.id)
                 if config:
@@ -1015,6 +1070,33 @@ async def import_mcp_direct_outcome(
     """
     from app.services.mcp_client import MCPClient
 
+    display_name = server_name or mcp_url.split("//")[-1].split("/")[0].split(":")[0]
+    if is_atlassian_tool_identity(
+        server_name=display_name,
+        server_url=mcp_url,
+    ):
+        if not is_atlassian_mcp_url(mcp_url):
+            return ToolExecutionOutcome(
+                status="failed",
+                result_summary=(
+                    "The Atlassian Rovo identity requires the canonical "
+                    "Atlassian MCP endpoint."
+                ),
+                result_ref=None,
+                error_code="mcp_configuration_invalid",
+                retryable=False,
+            )
+        return ToolExecutionOutcome(
+            status="failed",
+            result_summary=(
+                "Atlassian Rovo must be configured from the Agent Tools "
+                "category settings."
+            ),
+            result_ref=None,
+            error_code="mcp_configuration_invalid",
+            retryable=False,
+        )
+
     # Build URL with apiKey if provided
     full_url = mcp_url
     if api_key and "?" in mcp_url:
@@ -1022,7 +1104,6 @@ async def import_mcp_direct_outcome(
     elif api_key:
         full_url = f"{mcp_url}?apiKey={api_key}"
 
-    display_name = server_name or mcp_url.split("//")[-1].split("/")[0].split(":")[0]
     safe_name = display_name.replace(".", "_").replace("/", "_").replace(":", "_").replace("-", "_")
 
     # Try to list tools from the endpoint
@@ -1067,6 +1148,8 @@ async def import_mcp_direct_outcome(
                 existing_r = await db.execute(select(Tool).where(Tool.name == tool_name))
                 existing_tool = existing_r.scalar_one_or_none()
                 if existing_tool:
+                    if _is_atlassian_tool_record(existing_tool):
+                        return _generic_atlassian_import_rejection()
                     existing_tool.mcp_server_url = mcp_url
                     await _ensure_agent_tool(existing_tool.id)
                     imported_tools.append(f"⏭️ {tool_display} (already imported)")
@@ -1096,6 +1179,8 @@ async def import_mcp_direct_outcome(
             existing_r = await db.execute(select(Tool).where(Tool.name == tool_name))
             existing_tool = existing_r.scalar_one_or_none()
             if existing_tool:
+                if _is_atlassian_tool_record(existing_tool):
+                    return _generic_atlassian_import_rejection()
                 existing_tool.mcp_server_url = mcp_url
                 await _ensure_agent_tool(existing_tool.id)
                 await db.commit()
@@ -1154,100 +1239,23 @@ async def import_mcp_direct(
 
 # ── Atlassian Rovo MCP Auto-Seeding ─────────────────────────────────────────
 
-ATLASSIAN_ROVO_MCP_URL = "https://mcp.atlassian.com/v1/mcp"
-ATLASSIAN_ROVO_SERVER_NAME = "Atlassian Rovo"
-ATLASSIAN_ROVO_TOOL_PREFIX = "atlassian_rovo_"
-
-
 async def seed_atlassian_rovo_tools(api_key: str) -> None:
-    """Connect to Atlassian Rovo MCP and seed all available tools as platform-level MCP tools.
+    """Discover and seed non-secret platform-level Atlassian Tool records."""
+    from app.services.atlassian_tool_service import (
+        AtlassianSyncError,
+        discover_atlassian_tools,
+        upsert_atlassian_shared_tools,
+    )
 
-    Called on startup when an API key is configured. Existing tools are updated in-place;
-    new tools discovered from the server are created. The api_key is stored in each tool's
-    config so _execute_mcp_tool can authenticate requests.
-    """
-    from app.services.mcp_client import MCPClient
-
-    logger.info(f"[AtlassianRovo] Connecting to {ATLASSIAN_ROVO_MCP_URL} ...")
+    logger.info(f"[AtlassianRovo] Connecting to {ATLASSIAN_MCP_URL} ...")
     try:
-        client = MCPClient(ATLASSIAN_ROVO_MCP_URL, api_key=api_key)
-        tools_discovered = await client.list_tools()
-    except Exception as e:
-        logger.error(f"[AtlassianRovo] Could not list tools: {e}")
+        definitions = await discover_atlassian_tools(api_key)
+    except AtlassianSyncError as exc:
+        logger.error(f"[AtlassianRovo] Could not list tools: {exc}")
         return
-
-    if not tools_discovered:
-        logger.warning("[AtlassianRovo] No tools returned from server")
-        return
-
-    logger.info(f"[AtlassianRovo] Discovered {len(tools_discovered)} tools")
 
     async with async_session() as db:
-        upserted = 0
-        for mcp_tool in tools_discovered:
-            raw_name = mcp_tool.get("name", "")
-            if not raw_name:
-                continue
-
-            tool_name = f"{ATLASSIAN_ROVO_TOOL_PREFIX}{raw_name}"
-            tool_display = f"Atlassian: {raw_name}"
-            tool_desc = mcp_tool.get("description", "")[:500]
-            tool_schema = mcp_tool.get("inputSchema", {"type": "object", "properties": {}})
-
-            # Determine icon based on tool name hints
-            if "jira" in raw_name.lower() or "issue" in raw_name.lower():
-                icon = "🔵"
-            elif "confluence" in raw_name.lower() or "page" in raw_name.lower():
-                icon = "📘"
-            elif "compass" in raw_name.lower() or "component" in raw_name.lower():
-                icon = "🧭"
-            else:
-                icon = "🔷"
-
-            existing_r = await db.execute(select(Tool).where(Tool.name == tool_name))
-            existing_tool = existing_r.scalar_one_or_none()
-
-            if existing_tool:
-                # Update description and schema in case they changed
-                existing_tool.description = tool_desc
-                existing_tool.parameters_schema = tool_schema
-                existing_tool.config = {"api_key": api_key}
-            else:
-                tool = Tool(
-                    name=tool_name,
-                    display_name=tool_display,
-                    description=tool_desc,
-                    type="mcp",
-                    category="atlassian",
-                    icon=icon,
-                    parameters_schema=tool_schema,
-                    mcp_server_url=ATLASSIAN_ROVO_MCP_URL,
-                    mcp_server_name=ATLASSIAN_ROVO_SERVER_NAME,
-                    mcp_tool_name=raw_name,
-                    enabled=True,
-                    is_default=False,
-                    config={"api_key": api_key},
-                    source="admin",
-                )
-                db.add(tool)
-                upserted += 1
-
+        _tools, upserted = await upsert_atlassian_shared_tools(db, definitions)
         await db.commit()
 
     logger.info(f"[AtlassianRovo] Seeded {upserted} new Atlassian Rovo tools")
-
-
-async def refresh_atlassian_rovo_api_key(api_key: str) -> None:
-    """Update the stored api_key in all Atlassian Rovo tool records.
-
-    Called when the user updates the API key via the config UI.
-    """
-    async with async_session() as db:
-        from sqlalchemy import update as _update
-        await db.execute(
-            _update(Tool)
-            .where(Tool.mcp_server_name == ATLASSIAN_ROVO_SERVER_NAME, Tool.type == "mcp")
-            .values(config={"api_key": api_key})
-        )
-        await db.commit()
-    logger.info("[AtlassianRovo] API key refreshed for all Rovo tools")
