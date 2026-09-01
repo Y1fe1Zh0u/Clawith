@@ -27,6 +27,16 @@ MODEL_LLM_REINTRODUCTIONS = [
     for identity in MODEL_LLM_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+PERSISTENT_TASK_IMPORT_IDENTITIES = (
+    Path("app/models/task"),
+    Path("app/api/tasks"),
+    Path("app/services/task_executor"),
+)
+PERSISTENT_TASK_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in PERSISTENT_TASK_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
 
 
 class DeletedAuthorityViolation(RuntimeError):
@@ -71,6 +81,20 @@ def _assert_deleted_model_llm_authorities(backend_root: Path) -> None:
         if package.is_dir():
             raise DeletedAuthorityViolation(
                 f"deleted Model/LLM authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_persistent_task_authorities(backend_root: Path) -> None:
+    for identity in PERSISTENT_TASK_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted Persistent Task authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted Persistent Task authority package was reintroduced: {identity}"
             )
 
 
@@ -164,3 +188,35 @@ def test_reintroduced_model_llm_import_identity_fails_the_guard(
         match=f"deleted Model/LLM authority {representation} was reintroduced",
     ):
         _assert_deleted_model_llm_authorities(tmp_path)
+
+
+def test_legacy_persistent_task_import_identities_are_absent_from_target_tree() -> None:
+    _assert_deleted_persistent_task_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    PERSISTENT_TASK_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in PERSISTENT_TASK_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_persistent_task_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted Persistent Task authority {representation} was reintroduced",
+    ):
+        _assert_deleted_persistent_task_authorities(tmp_path)
