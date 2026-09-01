@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, and Persistent Task authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, and old Tool authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -69,6 +69,24 @@ The Persistent Task authority is also removed as a separate category:
 - the dedicated Task CRUD/intake and execution tests
 
 This removal does not remove or implement the target Task Tool. In the accepted target, delegated work is represented by the parent Tool Call, Child Run Input, and Child Run outcome rather than a separate Task or TaskLog lifecycle object.
+
+The old Tool authority is also removed as a separate category:
+
+- `backend/app/models/tool.py`
+- `backend/app/api/tools.py`
+- `backend/app/services/agent_tools.py`
+- `backend/app/services/builtin_tool_definitions.py`
+- `backend/app/services/tool_config.py`
+- the already-absent `backend/app/services/tool_exchange.py` import identity
+- `backend/app/services/tool_seeder.py`
+- every `backend/tests/test_agent_tools_*.py` file present at cutover: `agentbay_a0`, `deadlines`, `deploy_contracts`, `email_contracts`, `feishu_f0_contracts`, `legacy_contract_compatibility`, `okr_contracts`, `remaining_typed_outcomes`, `storage_workspace`, `tool_config_logging`, `typed_agentbay_reads`, `typed_bitable`, `typed_content_outcomes`, `typed_deploy_reads`, `typed_deploy_simple_writes`, `typed_dynamic_mcp`, `typed_e2b_outcome`, `typed_email_read`, `typed_email_write`, `typed_feishu_approval`, `typed_feishu_calendar`, `typed_feishu_doc_drive`, `typed_feishu_remaining`, `typed_feishu_wiki`, `typed_image_outcomes_v2`, `typed_okr_jobs`, `typed_okr_transactions`, `typed_search_outcomes`, and `typed_vercel_deploy`
+- the dedicated old Tool contract files `test_builtin_tool_contracts.py`, `test_custom_image_tool.py`, `test_deploy_tools.py`, `test_human_send_tools.py`, `test_query_directory_tool.py`, `test_roster_human_resolver.py`, `test_tool_tenant_scope.py`, and `test_tools_category_config.py`
+- the mixed legacy files `test_feishu_channel_runtime.py`, `test_mcp_oauth_authorization.py`, `test_sandbox_execution_policy.py`, `test_trigger_config_updates.py`, and `test_workspace_reconciliation.py`
+- `test_smithery_recovery_does_not_store_auth_required_connection` from `test_mcp_recovery.py`
+
+These deleted tests instantiated `Tool`/`AgentTool`, called the old Tool management API, asserted the monolithic builtin definition and seeding catalogs, or executed and patched the `agent_tools` exposure/dispatch/configuration facade. The user explicitly approved deleting all legacy `agent_tools`-era tests, including mixed files and assertions that directly exercised retained MCP, Feishu, Sandbox, AgentBay, Trigger, or Workspace helpers through the old authority. No old test is extracted, moved, or adapted during this deletion. Each retained owner must receive new target-contract tests when it is implemented. The independent MCP transport error test remains in `test_mcp_recovery.py` because it imports and exercises only `MCPClient`.
+
+This removal does not implement the target `modules/tool` owner or Capability Market. `mcp_client.py`, MCP OAuth helpers, `resource_discovery.py`, Skill model/API/seeder/creator sources, provider- and Channel-specific adapters, Atlassian-specific services, collaboration/A2A sources, migrations, and dependency declarations remain staged candidates. Their surviving imports of the deleted identities are intentional dangling evidence for later minimum owner or deletion-category commits, not compatibility authority. `tool_exchange.py` had already left the target tree with the old Agent Runtime cutover and is not recreated.
 
 `backend/tests/architecture/test_deleted_authorities.py` makes every removed
 Python import identity absent as both a module file and a same-named package

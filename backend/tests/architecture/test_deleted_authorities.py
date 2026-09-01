@@ -37,6 +37,20 @@ PERSISTENT_TASK_REINTRODUCTIONS = [
     for identity in PERSISTENT_TASK_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+LEGACY_TOOL_IMPORT_IDENTITIES = (
+    Path("app/api/tools"),
+    Path("app/models/tool"),
+    Path("app/services/agent_tools"),
+    Path("app/services/builtin_tool_definitions"),
+    Path("app/services/tool_config"),
+    Path("app/services/tool_exchange"),
+    Path("app/services/tool_seeder"),
+)
+LEGACY_TOOL_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_TOOL_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
 
 
 class DeletedAuthorityViolation(RuntimeError):
@@ -95,6 +109,20 @@ def _assert_deleted_persistent_task_authorities(backend_root: Path) -> None:
         if package.is_dir():
             raise DeletedAuthorityViolation(
                 f"deleted Persistent Task authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_tool_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_TOOL_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Tool authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Tool authority package was reintroduced: {identity}"
             )
 
 
@@ -220,3 +248,35 @@ def test_reintroduced_persistent_task_import_identity_fails_the_guard(
         match=f"deleted Persistent Task authority {representation} was reintroduced",
     ):
         _assert_deleted_persistent_task_authorities(tmp_path)
+
+
+def test_legacy_tool_import_identities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_tool_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_TOOL_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_TOOL_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_tool_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Tool authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_tool_authorities(tmp_path)
