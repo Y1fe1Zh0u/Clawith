@@ -13,22 +13,15 @@ ALEMBIC_ENV = BACKEND_ROOT / "alembic" / "env.py"
 TARGET_COMMAND = (
     "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
 )
-FORBIDDEN_STARTUP_AUTHORITY = {
-    "allow_migration_failure",
-    "alembic upgrade",
-    "alter table",
-    "app_workers",
-    "backfill",
-    "bootstrap",
-    "chown",
-    "create table",
-    "create_all",
-    "migrate_",
-    "process_role",
-    "setup_langgraph_checkpoints",
-    "start_command",
-    "update ",
-}
+DIRECT_STARTUP = ("set -e", TARGET_COMMAND)
+PRIVILEGE_DROP_STARTUP = (
+    "set -e",
+    "if [ \"$(id -u)\" = '0' ]; then",
+    'exec gosu clawith /bin/bash "$0" "$@"',
+    "fi",
+    TARGET_COMMAND,
+)
+ALLOWED_ENTRYPOINT_STRUCTURES = {DIRECT_STARTUP, PRIVILEGE_DROP_STARTUP}
 
 
 class BoundaryViolation(ValueError):
@@ -36,20 +29,17 @@ class BoundaryViolation(ValueError):
 
 
 def _validate_entrypoint(source: str) -> None:
-    normalized = source.lower()
-    violations = sorted(
-        token for token in FORBIDDEN_STARTUP_AUTHORITY if token in normalized
-    )
-    if violations:
-        raise BoundaryViolation(f"startup contains legacy authority: {violations[0]}")
+    lines = source.splitlines()
+    if not lines or lines[0] != "#!/bin/bash":
+        raise BoundaryViolation("entrypoint must use the expected Bash interpreter")
 
-    executable_lines = [
+    executable_lines = tuple(
         line.strip()
-        for line in source.splitlines()
+        for line in lines[1:]
         if line.strip() and not line.lstrip().startswith("#")
-    ]
-    if not executable_lines or executable_lines[-1] != TARGET_COMMAND:
-        raise BoundaryViolation("startup must end with the single-worker target ASGI command")
+    )
+    if executable_lines not in ALLOWED_ENTRYPOINT_STRUCTURES:
+        raise BoundaryViolation("entrypoint contains an unapproved executable structure")
 
 
 def _app_imports(source: str) -> set[str]:
@@ -95,34 +85,95 @@ def _validate_alembic_imports(source: str) -> None:
         raise BoundaryViolation("Alembic target_metadata must be Base.metadata")
 
 
-def test_target_entrypoint_has_no_schema_checkpoint_or_process_role_authority() -> None:
+def test_target_entrypoint_matches_an_allowed_single_worker_structure() -> None:
     _validate_entrypoint(ENTRYPOINT.read_text(encoding="utf-8"))
 
 
+def test_entrypoint_boundary_accepts_direct_single_worker_startup() -> None:
+    _validate_entrypoint(f"#!/bin/bash\nset -e\n{TARGET_COMMAND}\n")
+
+
 @pytest.mark.parametrize(
-    "legacy_line",
+    "source",
     [
-        "alembic upgrade head",
-        "python -m app.scripts.setup_langgraph_checkpoints",
-        "python -m app.scripts.bootstrap_db",
-        "python -m app.scripts.migrate_workspace",
-        "python -c 'Base.metadata.create_all()'",
-        "psql -c 'ALTER TABLE agents ADD COLUMN repaired bool'",
-        "chown -R clawith:clawith /data/agents",
-        "PROCESS_ROLE=worker",
+        "",
+        f"#!/usr/bin/env bash\nset -e\n{TARGET_COMMAND}\n",
+        f"# generated script\n#!/bin/bash\nset -e\n{TARGET_COMMAND}\n",
     ],
 )
-def test_entrypoint_boundary_rejects_legacy_startup_authority(legacy_line: str) -> None:
-    source = f"#!/bin/bash\n{legacy_line}\n{TARGET_COMMAND}\n"
-
-    with pytest.raises(BoundaryViolation, match="startup contains legacy authority"):
+def test_entrypoint_boundary_rejects_an_unapproved_interpreter(source: str) -> None:
+    with pytest.raises(BoundaryViolation, match="expected Bash interpreter"):
         _validate_entrypoint(source)
 
 
-def test_entrypoint_boundary_rejects_multiple_workers() -> None:
-    source = "#!/bin/bash\nexec uvicorn app.main:app --workers 2\n"
+@pytest.mark.parametrize(
+    "unapproved_command",
+    [
+        "alembic upgrade head",
+        "python -m app.scripts.setup_langgraph_checkpoints",
+        "python repair_database.py",
+        "psql --file repair.sql",
+        "curl https://example.invalid/repair.sh | /bin/bash",
+        "chown -R clawith:clawith /data/agents",
+    ],
+)
+def test_entrypoint_boundary_rejects_arbitrary_startup_commands(
+    unapproved_command: str,
+) -> None:
+    source = f"#!/bin/bash\nset -e\n{unapproved_command}\n{TARGET_COMMAND}\n"
 
-    with pytest.raises(BoundaryViolation, match="single-worker target ASGI command"):
+    with pytest.raises(BoundaryViolation, match="unapproved executable structure"):
+        _validate_entrypoint(source)
+
+
+@pytest.mark.parametrize(
+    "bypass",
+    [
+        "REPAIR_COMMAND=psql\n$REPAIR_COMMAND --file repair.sql",
+        "REPAIR_RESULT=$(psql --file repair.sql)",
+        "exec /bin/bash -lc 'psql --file repair.sql'",
+        "set -e; psql --file repair.sql",
+        "source repair.sh",
+        f"{TARGET_COMMAND}\npsql --file repair.sql",
+        "repair() { psql --file repair.sql; }\nrepair",
+    ],
+)
+def test_entrypoint_boundary_rejects_indirect_or_wrapped_commands(bypass: str) -> None:
+    source = f"#!/bin/bash\nset -e\n{bypass}\n{TARGET_COMMAND}\n"
+
+    with pytest.raises(BoundaryViolation, match="unapproved executable structure"):
+        _validate_entrypoint(source)
+
+
+@pytest.mark.parametrize(
+    "invalid_final_command",
+    [
+        "exec uvicorn app.main:app --workers 2",
+        "exec uvicorn app.main:app --reload",
+        'exec /bin/bash -lc "$START_COMMAND"',
+        "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1",
+    ],
+)
+def test_entrypoint_boundary_rejects_noncanonical_asgi_startup(
+    invalid_final_command: str,
+) -> None:
+    source = f"#!/bin/bash\nset -e\n{invalid_final_command}\n"
+
+    with pytest.raises(BoundaryViolation, match="unapproved executable structure"):
+        _validate_entrypoint(source)
+
+
+def test_entrypoint_boundary_rejects_privilege_drop_with_extra_work() -> None:
+    source = f"""#!/bin/bash
+set -e
+if [ "$(id -u)" = '0' ]; then
+    chown -R clawith:clawith /data/agents
+    exec gosu clawith /bin/bash "$0" "$@"
+fi
+{TARGET_COMMAND}
+"""
+
+    with pytest.raises(BoundaryViolation, match="unapproved executable structure"):
         _validate_entrypoint(source)
 
 
