@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 OWNER_FIELDS = {
@@ -100,6 +103,16 @@ EXPECTED_OWNER_MAP = {
 
 class ContractError(ValueError):
     """A deterministic contract-ledger validation failure."""
+
+
+def _load_product_checker() -> ModuleType:
+    script_path = Path(__file__).with_name("check_product_contracts.py")
+    spec = importlib.util.spec_from_file_location("_clawith_product_contracts", script_path)
+    if spec is None or spec.loader is None:
+        raise ContractError(f"cannot load product contract checker: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -253,6 +266,45 @@ def _validate_evidence(evidence: Any, owner_id: str, manifest_path: Path) -> Non
             raise ContractError(f"evidence hash mismatch for {owner_id}: {raw_path}")
 
 
+def _product_evidence_multiset(evidence: Any, manifest_path: Path, label: str) -> Counter[tuple[Path, str]]:
+    rows = _require_list(evidence, label)
+    result: Counter[tuple[Path, str]] = Counter()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ContractError(f"{label} must contain evidence objects")
+        raw_path = row.get("path")
+        sha256 = row.get("sha256")
+        if not isinstance(raw_path, str) or not isinstance(sha256, str):
+            raise ContractError(f"{label} must contain path and sha256 strings")
+        result[(_resolve_artifact(raw_path, manifest_path), sha256)] += 1
+    return result
+
+
+def _validate_s3_product_link(row: dict[str, Any], manifest_path: Path) -> None:
+    product_checker = _load_product_checker()
+    owner_id = row["owner_id"]
+    module_by_owner = {owner: module for module, owner in product_checker.PRODUCT_OWNER_MAP.items()}
+    module_id = module_by_owner.get(owner_id)
+    if module_id is None:
+        raise ContractError(f"S3 owner has no product contract module: {owner_id}")
+    product_manifest_path = manifest_path.with_name("product-contracts.json")
+    try:
+        product_row = product_checker.check_product_contract(product_manifest_path, module_id)
+    except product_checker.ProductContractError as exc:
+        raise ContractError(f"S3 product contract is not valid for {owner_id}: {exc}") from exc
+
+    owner_artifact = _resolve_artifact(row["contract_artifact"], manifest_path)
+    product_artifact = _resolve_artifact(product_row["contract_artifact"], product_manifest_path)
+    if owner_artifact != product_artifact or row["contract_hash"] != product_row["contract_hash"]:
+        raise ContractError(f"S3 owner contract artifact does not match product contract: {owner_id}")
+    owner_evidence = _product_evidence_multiset(row["evidence"], manifest_path, f"owner evidence for {owner_id}")
+    product_evidence = _product_evidence_multiset(
+        product_row["evidence"], product_manifest_path, f"product evidence for {module_id}"
+    )
+    if owner_evidence != product_evidence:
+        raise ContractError(f"S3 owner contract evidence does not match product contract: {owner_id}")
+
+
 def validate_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[str, dict[str, Any]]:
     if manifest.get("version") != 1:
         raise ContractError("owner contract manifest version must be 1")
@@ -300,6 +352,8 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[str
             if expected_hash != _sha256(artifact_path):
                 raise ContractError(f"contract artifact hash mismatch for {owner_id}")
             _validate_evidence(row.get("evidence"), owner_id, manifest_path)
+            if expected_wave == "S3":
+                _validate_s3_product_link(row, manifest_path)
         seen[owner_id] = row
 
     missing = sorted(expected_ids - set(seen))
@@ -362,14 +416,17 @@ def approve_owner(
         seen_paths.add(evidence_path)
         evidence_rows.append({"path": _stored_path(evidence_path), "sha256": _sha256(evidence_path)})
 
-    row.update(
-        {
-            "state": APPROVED_STATE,
-            "contract_artifact": _stored_path(artifact_path),
-            "contract_hash": _sha256(artifact_path),
-            "evidence": evidence_rows,
-        }
-    )
+    candidate_row = {
+        **row,
+        "state": APPROVED_STATE,
+        "contract_artifact": _stored_path(artifact_path),
+        "contract_hash": _sha256(artifact_path),
+        "evidence": evidence_rows,
+    }
+    if row["schema_wave"] == "S3":
+        _validate_s3_product_link(candidate_row, manifest_path)
+
+    row.update(candidate_row)
     _write_json(manifest_path, manifest)
 
 

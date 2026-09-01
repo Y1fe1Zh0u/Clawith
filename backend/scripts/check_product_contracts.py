@@ -147,7 +147,7 @@ def validate_roster(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return modules
 
 
-def check_product_contract(manifest_path: Path, module_id: str) -> None:
+def check_product_contract(manifest_path: Path, module_id: str) -> dict[str, Any]:
     modules = validate_roster(_load_json(manifest_path))
     row = modules.get(module_id)
     if row is None:
@@ -186,6 +186,7 @@ def check_product_contract(manifest_path: Path, module_id: str) -> None:
     unresolved = [field for field in RESOLUTION_FIELDS if not _is_resolved(row.get(field))]
     if unresolved:
         raise ProductContractError(f"product contract has unresolved fields for {module_id}: {', '.join(unresolved)}")
+    return row
 
 
 def _parser() -> argparse.ArgumentParser:

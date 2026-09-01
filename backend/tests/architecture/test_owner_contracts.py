@@ -10,6 +10,7 @@ import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_DAG = BACKEND_ROOT / "rewrite" / "owner-dag.json"
+CANONICAL_PRODUCT_MANIFEST = BACKEND_ROOT / "rewrite" / "product-contracts.json"
 SCRIPT_PATH = BACKEND_ROOT / "scripts" / "check_owner_contracts.py"
 SPEC = importlib.util.spec_from_file_location("check_owner_contracts", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -25,6 +26,36 @@ def _built_manifest(tmp_path: Path) -> Path:
     manifest_path = tmp_path / "owner-contracts.json"
     contracts.build_manifest(manifest_path, CANONICAL_DAG)
     return manifest_path
+
+
+def _approved_auth_product(tmp_path: Path) -> tuple[Path, Path]:
+    product_manifest = _read(CANONICAL_PRODUCT_MANIFEST)
+    artifact = tmp_path / ".omx" / "specs" / "backend-products" / "auth.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("# Approved Auth contract\n", encoding="utf-8")
+    evidence = tmp_path / "auth-product-review.txt"
+    evidence.write_text("product contract approved\n", encoding="utf-8")
+    product_manifest["modules"][0].update(
+        {
+            "state": "contract_approved",
+            "contract_artifact": str(artifact),
+            "contract_hash": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "evidence": [{"path": str(evidence), "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest()}],
+            "actors": ["tenant member"],
+            "product_workflow": ["sign in"],
+            "persistence": ["account and membership"],
+            "api_events": ["POST /auth/login"],
+            "authorization": ["public login then tenant principal"],
+            "failure_behavior": ["invalid credentials fail closed"],
+            "consumers": ["web application"],
+            "endpoint_mapping": ["http.auth.login"],
+            "acceptance_tests": ["tests/modules/auth/test_login.py"],
+            "explicit_deletions": ["none"],
+        }
+    )
+    product_manifest_path = tmp_path / "product-contracts.json"
+    product_manifest_path.write_text(json.dumps(product_manifest), encoding="utf-8")
+    return artifact, evidence
 
 
 def test_build_creates_the_exact_approved_owner_roster(tmp_path: Path) -> None:
@@ -133,3 +164,54 @@ def test_build_does_not_replace_an_invalid_existing_ledger(tmp_path: Path) -> No
     with pytest.raises(contracts.ContractError, match="missing owners"):
         contracts.build_manifest(manifest_path, CANONICAL_DAG)
     assert _read(manifest_path) == manifest
+
+
+def test_s3_owner_approval_requires_the_matching_approved_product_contract(tmp_path: Path) -> None:
+    manifest_path = _built_manifest(tmp_path)
+    product_manifest_path = tmp_path / "product-contracts.json"
+    product_manifest_path.write_text(CANONICAL_PRODUCT_MANIFEST.read_text(encoding="utf-8"), encoding="utf-8")
+    arbitrary_artifact = tmp_path / "arbitrary.md"
+    arbitrary_evidence = tmp_path / "arbitrary-review.txt"
+    arbitrary_artifact.write_text("not the product contract\n", encoding="utf-8")
+    arbitrary_evidence.write_text("not the product approval\n", encoding="utf-8")
+
+    with pytest.raises(contracts.ContractError, match="product contract is not approved"):
+        contracts.approve_owner(
+            manifest_path,
+            "auth",
+            str(arbitrary_artifact),
+            [str(arbitrary_evidence)],
+        )
+    auth_row = next(row for row in _read(manifest_path)["owners"] if row["owner_id"] == "auth")
+    assert auth_row["state"] == "unreviewed"
+
+
+def test_s3_owner_approval_rejects_product_artifact_or_evidence_mismatch(tmp_path: Path) -> None:
+    manifest_path = _built_manifest(tmp_path)
+    product_artifact, product_evidence = _approved_auth_product(tmp_path)
+    arbitrary_artifact = tmp_path / "arbitrary.md"
+    arbitrary_evidence = tmp_path / "arbitrary-review.txt"
+    arbitrary_artifact.write_text("not the product contract\n", encoding="utf-8")
+    arbitrary_evidence.write_text("not the product approval\n", encoding="utf-8")
+
+    with pytest.raises(contracts.ContractError, match="artifact does not match product contract"):
+        contracts.approve_owner(manifest_path, "auth", str(arbitrary_artifact), [str(product_evidence)])
+    with pytest.raises(contracts.ContractError, match="evidence does not match product contract"):
+        contracts.approve_owner(manifest_path, "auth", str(product_artifact), [str(arbitrary_evidence)])
+
+
+def test_s3_owner_check_remains_linked_to_product_contract_state(tmp_path: Path) -> None:
+    manifest_path = _built_manifest(tmp_path)
+    product_artifact, product_evidence = _approved_auth_product(tmp_path)
+
+    contracts.approve_owner(manifest_path, "auth", str(product_artifact), [str(product_evidence)])
+    contracts.check_manifest(manifest_path, ["auth"], [])
+
+    product_manifest_path = tmp_path / "product-contracts.json"
+    product_manifest = _read(product_manifest_path)
+    canonical_auth = _read(CANONICAL_PRODUCT_MANIFEST)["modules"][0]
+    product_manifest["modules"][0] = canonical_auth
+    product_manifest_path.write_text(json.dumps(product_manifest), encoding="utf-8")
+
+    with pytest.raises(contracts.ContractError, match="product contract is not approved"):
+        contracts.check_manifest(manifest_path, ["auth"], [])
