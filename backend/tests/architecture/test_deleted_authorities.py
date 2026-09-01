@@ -99,6 +99,26 @@ LEGACY_AGENT_REINTRODUCTIONS = [
     for representation in ("module", "package")
 ]
 LEGACY_AGENT_DAO_EXPORTS = ("agent_dao", "agent_access_dao")
+LEGACY_IDENTITY_TENANT_IMPORT_IDENTITIES = (
+    Path("app/models/user"),
+    Path("app/models/tenant"),
+    Path("app/models/tenant_setting"),
+    Path("app/api/users"),
+    Path("app/api/tenants"),
+    Path("app/dao/identity_dao"),
+    Path("app/dao/user_dao"),
+    Path("app/dao/tenant_dao"),
+)
+LEGACY_IDENTITY_TENANT_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_IDENTITY_TENANT_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_IDENTITY_TENANT_DAO_EXPORTS = (
+    "identity_dao",
+    "user_dao",
+    "tenant_dao",
+)
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
 
@@ -361,6 +381,84 @@ def _assert_deleted_legacy_agent_dao_exports(backend_root: Path) -> None:
                 )
 
 
+def _assert_deleted_legacy_identity_tenant_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_IDENTITY_TENANT_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Identity/Tenant authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Identity/Tenant authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_deleted_legacy_identity_tenant_dao_exports(
+    backend_root: Path,
+) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+        ):
+            raise DeletedAuthorityViolation(
+                "deleted legacy Identity/Tenant DAO package exports can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+    for node in ast.walk(tree):
+        references_dynamic_hook = (
+            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+            )
+        )
+        if references_dynamic_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Identity/Tenant DAO package exports can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+        for export in LEGACY_IDENTITY_TENANT_DAO_EXPORTS:
+            references_export = (
+                isinstance(node, ast.Name) and node.id == export
+            ) or (
+                isinstance(node, ast.Attribute) and node.attr == export
+            ) or (
+                isinstance(node, ast.Constant) and node.value == export
+            ) or (
+                isinstance(node, ast.keyword) and node.arg == export
+            ) or (
+                isinstance(node, ast.alias)
+                and (
+                    node.name.split(".")[-1] == export
+                    or node.asname == export
+                )
+            )
+            if references_export:
+                raise DeletedAuthorityViolation(
+                    "deleted legacy Identity/Tenant DAO package export was "
+                    f"reintroduced: {export}"
+                )
+
+
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
     _assert_deleted_context_authority(BACKEND_ROOT)
 
@@ -611,6 +709,14 @@ def test_legacy_agent_dao_package_exports_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_agent_dao_exports(BACKEND_ROOT)
 
 
+def test_legacy_identity_tenant_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_identity_tenant_authorities(BACKEND_ROOT)
+
+
+def test_legacy_identity_tenant_dao_exports_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_identity_tenant_dao_exports(BACKEND_ROOT)
+
+
 @pytest.mark.parametrize(
     ("identity", "representation"),
     LEGACY_CREDENTIAL_REINTRODUCTIONS,
@@ -737,3 +843,70 @@ def test_reintroduced_legacy_agent_dao_package_export_fails_the_guard(
         match="deleted legacy Agent DAO package export",
     ):
         _assert_deleted_legacy_agent_dao_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_IDENTITY_TENANT_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_IDENTITY_TENANT_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_identity_tenant_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Identity/Tenant authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_identity_tenant_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.identity_dao import identity_dao\n",
+        "from app.dao.user_dao import user_dao as restored\n",
+        "tenant_dao = object()\n",
+        '__all__ = ["identity_dao"]\n',
+        "def __getattr__(name):\n    return object()\n",
+        "__getattr__ = lambda name: object()\n",
+        'globals()["user_dao"] = object()\n',
+    ],
+    ids=[
+        "direct-import",
+        "aliased-import",
+        "assignment-reexport",
+        "all-exposure",
+        "module-getattr",
+        "assigned-module-getattr",
+        "globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_identity_tenant_dao_export_fails_the_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Identity/Tenant DAO package export",
+    ):
+        _assert_deleted_legacy_identity_tenant_dao_exports(tmp_path)
