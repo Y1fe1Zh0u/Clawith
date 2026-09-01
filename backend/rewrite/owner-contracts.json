@@ -1,0 +1,311 @@
+{
+  "version": 1,
+  "owners": [
+    {
+      "owner_id": "identity_tenant",
+      "schema_wave": "S0",
+      "implementation_phase": 2,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "credential",
+      "schema_wave": "S1",
+      "implementation_phase": 2,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "model",
+      "schema_wave": "S1",
+      "implementation_phase": 2,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "agent",
+      "schema_wave": "S1",
+      "implementation_phase": 2,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "permission",
+      "schema_wave": "S1",
+      "implementation_phase": 2,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "audit",
+      "schema_wave": "S1",
+      "implementation_phase": 2,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "workspace",
+      "schema_wave": "S2",
+      "implementation_phase": 3,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "tool",
+      "schema_wave": "S2",
+      "implementation_phase": 3,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "capability_market",
+      "schema_wave": "S2",
+      "implementation_phase": 3,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "run",
+      "schema_wave": "S1",
+      "implementation_phase": 4,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "context",
+      "schema_wave": "S1",
+      "implementation_phase": 4,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "session",
+      "schema_wave": "S2",
+      "implementation_phase": 5,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "a2a",
+      "schema_wave": "S2",
+      "implementation_phase": 5,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "group",
+      "schema_wave": "S2",
+      "implementation_phase": 5,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "trigger",
+      "schema_wave": "S2",
+      "implementation_phase": 5,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "heartbeat",
+      "schema_wave": "S2",
+      "implementation_phase": 5,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "channel",
+      "schema_wave": "S2",
+      "implementation_phase": 5,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "auth",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "sso",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "organization",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "invitation",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "onboarding",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "okr",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "focus",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "notification",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "published_page",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "plaza",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "enterprise_settings",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "platform_administration",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "agentbay",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "directory",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "agent_template",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "observability",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    },
+    {
+      "owner_id": "tenant_knowledge",
+      "schema_wave": "S3",
+      "implementation_phase": 6,
+      "state": "unreviewed",
+      "contract_artifact": null,
+      "contract_hash": null,
+      "evidence": []
+    }
+  ]
+}

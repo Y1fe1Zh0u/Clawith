@@ -1,0 +1,439 @@
+"""Build, approve, and validate the clean-rewrite owner contract ledger.
+
+Run from ``backend/``::
+
+    uv run python scripts/check_owner_contracts.py build \
+        --manifest rewrite/owner-contracts.json --dag rewrite/owner-dag.json
+    uv run python scripts/check_owner_contracts.py approve \
+        --manifest rewrite/owner-contracts.json --owner run \
+        --contract-artifact ../.agents/notes/proposed/architecture/run.md \
+        --evidence ../.omx/evidence/run-contract-review.md
+    uv run python scripts/check_owner_contracts.py check \
+        --manifest rewrite/owner-contracts.json --require-approved-wave S1
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+import tempfile
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+OWNER_FIELDS = {
+    "owner_id",
+    "schema_wave",
+    "implementation_phase",
+    "state",
+    "contract_artifact",
+    "contract_hash",
+    "evidence",
+}
+EVIDENCE_FIELDS = {"path", "sha256"}
+APPROVED_STATE = "contract_approved"
+UNREVIEWED_STATE = "unreviewed"
+
+
+def _owners(*owner_ids: str, wave: str, phase: int) -> list[tuple[str, str, int]]:
+    return [(owner_id, wave, phase) for owner_id in owner_ids]
+
+
+EXPECTED_OWNERS = tuple(
+    _owners("identity_tenant", wave="S0", phase=2)
+    + _owners("agent", "credential", "model", "audit", "run", "permission", "context", wave="S1", phase=4)
+    + _owners(
+        "workspace",
+        "tool",
+        "capability_market",
+        "session",
+        "a2a",
+        "group",
+        "trigger",
+        "heartbeat",
+        "channel",
+        wave="S2",
+        phase=5,
+    )
+    + _owners(
+        "auth",
+        "sso",
+        "organization",
+        "invitation",
+        "onboarding",
+        "okr",
+        "focus",
+        "notification",
+        "published_page",
+        "plaza",
+        "enterprise_settings",
+        "platform_administration",
+        "agentbay",
+        "directory",
+        "agent_template",
+        "observability",
+        "tenant_knowledge",
+        wave="S3",
+        phase=6,
+    )
+)
+
+# Some owners register schema before their service implementation phase. This map is
+# the approved implementation slicing, not a restatement of the schema waves.
+IMPLEMENTATION_PHASE_OVERRIDES = {
+    "agent": 2,
+    "credential": 2,
+    "model": 2,
+    "audit": 2,
+    "permission": 2,
+    "workspace": 3,
+    "tool": 3,
+    "capability_market": 3,
+}
+EXPECTED_OWNER_MAP = {
+    owner_id: (wave, IMPLEMENTATION_PHASE_OVERRIDES.get(owner_id, phase)) for owner_id, wave, phase in EXPECTED_OWNERS
+}
+
+
+class ContractError(ValueError):
+    """A deterministic contract-ledger validation failure."""
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ContractError(f"file does not exist: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ContractError(f"invalid JSON in {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ContractError(f"expected a JSON object in {path}")
+    return value
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        handle.write(rendered)
+        temporary_path = Path(handle.name)
+    os.replace(temporary_path, path)
+
+
+def _require_list(value: Any, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ContractError(f"{label} must be a list")
+    return value
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise ContractError(f"cannot read artifact {path}: {exc}") from exc
+    return digest.hexdigest()
+
+
+def _resolve_artifact(raw_path: str, manifest_path: Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+        if resolved.is_file():
+            return resolved
+        raise ContractError(f"artifact does not exist: {raw_path}")
+
+    repository_root = Path(__file__).resolve().parents[2]
+    candidates = (Path.cwd() / candidate, manifest_path.parent / candidate, repository_root / candidate)
+    for unresolved in candidates:
+        resolved = unresolved.resolve()
+        if resolved.is_file():
+            return resolved
+    raise ContractError(f"artifact does not exist: {raw_path}")
+
+
+def _stored_path(path: Path) -> str:
+    repository_root = Path(__file__).resolve().parents[2]
+    try:
+        return path.relative_to(repository_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _validate_dag(dag: dict[str, Any]) -> list[dict[str, Any]]:
+    if dag.get("version") != 1:
+        raise ContractError("owner DAG version must be 1")
+    rows = _require_list(dag.get("owners"), "owner DAG owners")
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    expected_ids = set(EXPECTED_OWNER_MAP)
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ContractError(f"owner DAG row {index} must be an object")
+        owner_id = row.get("owner_id")
+        if not isinstance(owner_id, str) or not owner_id:
+            raise ContractError(f"owner DAG row {index} has an invalid owner_id")
+        if owner_id in seen:
+            raise ContractError(f"duplicate owner in owner DAG: {owner_id}")
+        seen.add(owner_id)
+        if owner_id not in expected_ids:
+            raise ContractError(f"extra owner in owner DAG: {owner_id}")
+        expected_wave, expected_phase = EXPECTED_OWNER_MAP[owner_id]
+        if row.get("schema_wave") != expected_wave:
+            raise ContractError(
+                f"owner DAG wave mismatch for {owner_id}: expected {expected_wave}, got {row.get('schema_wave')!r}"
+            )
+        if row.get("implementation_phase") != expected_phase:
+            raise ContractError(
+                f"owner DAG phase mismatch for {owner_id}: expected {expected_phase}, "
+                f"got {row.get('implementation_phase')!r}"
+            )
+        dependencies = _require_list(row.get("depends_on"), f"owner DAG depends_on for {owner_id}")
+        if any(not isinstance(dependency, str) or not dependency for dependency in dependencies):
+            raise ContractError(f"owner DAG dependencies for {owner_id} must be non-empty strings")
+        if len(dependencies) != len(set(dependencies)):
+            raise ContractError(f"duplicate dependency in owner DAG for {owner_id}")
+        normalized.append(row)
+
+    missing = sorted(expected_ids - seen)
+    if missing:
+        raise ContractError(f"owner DAG is missing owners: {', '.join(missing)}")
+
+    dependencies_by_owner = {row["owner_id"]: row["depends_on"] for row in normalized}
+    for owner_id, dependencies in dependencies_by_owner.items():
+        unknown = sorted(set(dependencies) - expected_ids)
+        if unknown:
+            raise ContractError(f"owner DAG has unknown dependencies for {owner_id}: {', '.join(unknown)}")
+        if owner_id in dependencies:
+            raise ContractError(f"owner DAG owner depends on itself: {owner_id}")
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(owner_id: str) -> None:
+        if owner_id in visiting:
+            raise ContractError(f"owner DAG contains a dependency cycle at {owner_id}")
+        if owner_id in visited:
+            return
+        visiting.add(owner_id)
+        for dependency in dependencies_by_owner[owner_id]:
+            visit(dependency)
+        visiting.remove(owner_id)
+        visited.add(owner_id)
+
+    for owner_id in dependencies_by_owner:
+        visit(owner_id)
+    return normalized
+
+
+def _validate_evidence(evidence: Any, owner_id: str, manifest_path: Path) -> None:
+    evidence_rows = _require_list(evidence, f"evidence for {owner_id}")
+    if not evidence_rows:
+        raise ContractError(f"approved owner has no evidence: {owner_id}")
+    seen_paths: set[str] = set()
+    for index, row in enumerate(evidence_rows):
+        if not isinstance(row, dict) or set(row) != EVIDENCE_FIELDS:
+            raise ContractError(f"evidence row {index} for {owner_id} must contain path and sha256")
+        raw_path = row.get("path")
+        expected_hash = row.get("sha256")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ContractError(f"evidence row {index} for {owner_id} has an invalid path")
+        if raw_path in seen_paths:
+            raise ContractError(f"duplicate evidence path for {owner_id}: {raw_path}")
+        seen_paths.add(raw_path)
+        evidence_path = _resolve_artifact(raw_path, manifest_path)
+        actual_hash = _sha256(evidence_path)
+        if expected_hash != actual_hash:
+            raise ContractError(f"evidence hash mismatch for {owner_id}: {raw_path}")
+
+
+def validate_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[str, dict[str, Any]]:
+    if manifest.get("version") != 1:
+        raise ContractError("owner contract manifest version must be 1")
+    rows = _require_list(manifest.get("owners"), "owner contract owners")
+    seen: dict[str, dict[str, Any]] = {}
+    expected_ids = set(EXPECTED_OWNER_MAP)
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ContractError(f"owner contract row {index} must be an object")
+        if set(row) != OWNER_FIELDS:
+            raise ContractError(f"owner contract row {index} has unexpected or missing fields")
+        owner_id = row.get("owner_id")
+        if not isinstance(owner_id, str) or not owner_id:
+            raise ContractError(f"owner contract row {index} has an invalid owner_id")
+        if owner_id in seen:
+            raise ContractError(f"duplicate owner in contract manifest: {owner_id}")
+        if owner_id not in expected_ids:
+            raise ContractError(f"extra owner in contract manifest: {owner_id}")
+        expected_wave, expected_phase = EXPECTED_OWNER_MAP[owner_id]
+        if row.get("schema_wave") != expected_wave:
+            raise ContractError(
+                f"owner contract wave mismatch for {owner_id}: expected {expected_wave}, got {row.get('schema_wave')!r}"
+            )
+        if row.get("implementation_phase") != expected_phase:
+            raise ContractError(
+                f"owner contract phase mismatch for {owner_id}: expected {expected_phase}, "
+                f"got {row.get('implementation_phase')!r}"
+            )
+        state = row.get("state")
+        if state not in {UNREVIEWED_STATE, APPROVED_STATE}:
+            raise ContractError(f"invalid owner contract state for {owner_id}: {state!r}")
+        if state == UNREVIEWED_STATE:
+            if (
+                row.get("contract_artifact") is not None
+                or row.get("contract_hash") is not None
+                or row.get("evidence") != []
+            ):
+                raise ContractError(f"unreviewed owner has approval data: {owner_id}")
+        else:
+            raw_artifact = row.get("contract_artifact")
+            expected_hash = row.get("contract_hash")
+            if not isinstance(raw_artifact, str) or not raw_artifact:
+                raise ContractError(f"approved owner has no contract artifact: {owner_id}")
+            artifact_path = _resolve_artifact(raw_artifact, manifest_path)
+            if expected_hash != _sha256(artifact_path):
+                raise ContractError(f"contract artifact hash mismatch for {owner_id}")
+            _validate_evidence(row.get("evidence"), owner_id, manifest_path)
+        seen[owner_id] = row
+
+    missing = sorted(expected_ids - set(seen))
+    if missing:
+        raise ContractError(f"owner contract manifest is missing owners: {', '.join(missing)}")
+    return seen
+
+
+def build_manifest(manifest_path: Path, dag_path: Path) -> None:
+    dag_rows = _validate_dag(_load_json(dag_path))
+    preserved: dict[str, dict[str, Any]] = {}
+    if manifest_path.exists():
+        existing = _load_json(manifest_path)
+        preserved = validate_manifest(existing, manifest_path)
+
+    owners: list[dict[str, Any]] = []
+    for dag_row in dag_rows:
+        owner_id = dag_row["owner_id"]
+        existing_row = preserved.get(owner_id)
+        if existing_row is not None and existing_row["state"] == APPROVED_STATE:
+            owners.append(existing_row)
+            continue
+        owners.append(
+            {
+                "owner_id": owner_id,
+                "schema_wave": dag_row["schema_wave"],
+                "implementation_phase": dag_row["implementation_phase"],
+                "state": UNREVIEWED_STATE,
+                "contract_artifact": None,
+                "contract_hash": None,
+                "evidence": [],
+            }
+        )
+    _write_json(manifest_path, {"version": 1, "owners": owners})
+
+
+def approve_owner(
+    manifest_path: Path,
+    owner_id: str,
+    contract_artifact: str,
+    evidence: Sequence[str],
+) -> None:
+    manifest = _load_json(manifest_path)
+    owners = validate_manifest(manifest, manifest_path)
+    if owner_id not in owners:
+        raise ContractError(f"unknown owner: {owner_id}")
+    row = owners[owner_id]
+    if row["state"] == APPROVED_STATE:
+        raise ContractError(f"owner contract is already approved: {owner_id}")
+    if not evidence:
+        raise ContractError("at least one evidence artifact is required")
+
+    artifact_path = _resolve_artifact(contract_artifact, manifest_path)
+    evidence_rows: list[dict[str, str]] = []
+    seen_paths: set[Path] = set()
+    for raw_evidence_path in evidence:
+        evidence_path = _resolve_artifact(raw_evidence_path, manifest_path)
+        if evidence_path in seen_paths:
+            raise ContractError(f"duplicate evidence artifact: {raw_evidence_path}")
+        seen_paths.add(evidence_path)
+        evidence_rows.append({"path": _stored_path(evidence_path), "sha256": _sha256(evidence_path)})
+
+    row.update(
+        {
+            "state": APPROVED_STATE,
+            "contract_artifact": _stored_path(artifact_path),
+            "contract_hash": _sha256(artifact_path),
+            "evidence": evidence_rows,
+        }
+    )
+    _write_json(manifest_path, manifest)
+
+
+def check_manifest(
+    manifest_path: Path,
+    required_owners: Sequence[str],
+    required_waves: Sequence[str],
+) -> None:
+    owners = validate_manifest(_load_json(manifest_path), manifest_path)
+    for owner_id in required_owners:
+        row = owners.get(owner_id)
+        if row is None:
+            raise ContractError(f"required owner is absent: {owner_id}")
+        if row["state"] != APPROVED_STATE:
+            raise ContractError(f"required owner is not approved: {owner_id}")
+    for wave in required_waves:
+        if wave not in {"S0", "S1", "S2", "S3"}:
+            raise ContractError(f"unknown schema wave: {wave}")
+        wave_rows = [row for row in owners.values() if row["schema_wave"] == wave]
+        if not wave_rows:
+            raise ContractError(f"schema wave has no owners: {wave}")
+        unapproved = sorted(row["owner_id"] for row in wave_rows if row["state"] != APPROVED_STATE)
+        if unapproved:
+            raise ContractError(f"schema wave {wave} has unapproved owners: {', '.join(unapproved)}")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    build = subparsers.add_parser("build", help="Build the exact owner roster from the approved DAG")
+    build.add_argument("--manifest", type=Path, required=True)
+    build.add_argument("--dag", type=Path, required=True)
+
+    approve = subparsers.add_parser("approve", help="Approve one owner contract and record immutable evidence")
+    approve.add_argument("--manifest", type=Path, required=True)
+    approve.add_argument("--owner", required=True)
+    approve.add_argument("--contract-artifact", required=True)
+    approve.add_argument("--evidence", action="append", required=True)
+
+    check = subparsers.add_parser("check", help="Validate the ledger and requested approval gates")
+    check.add_argument("--manifest", type=Path, required=True)
+    check.add_argument("--require-approved-owner", action="append", default=[])
+    check.add_argument("--require-approved-wave", action="append", default=[])
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        if args.command == "build":
+            build_manifest(args.manifest, args.dag)
+            print(f"built owner contract manifest: {args.manifest}")
+        elif args.command == "approve":
+            approve_owner(args.manifest, args.owner, args.contract_artifact, args.evidence)
+            print(f"approved owner contract: {args.owner}")
+        else:
+            check_manifest(args.manifest, args.require_approved_owner, args.require_approved_wave)
+            print(f"owner contract manifest passed: {args.manifest}")
+    except ContractError as exc:
+        print(f"owner contract check failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
