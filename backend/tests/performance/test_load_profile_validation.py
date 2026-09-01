@@ -43,13 +43,40 @@ def test_canonical_backend_50_profile_is_valid() -> None:
     assert validator.validate_profile(_profile()) == ()
 
 
+def test_canonical_profile_declares_local_container_services() -> None:
+    profile = _profile()
+
+    assert profile["environment"]["services"] == {
+        "postgresql": "local_container",
+        "redis": "local_container",
+        "object_storage": "local_container",
+    }
+
+
+def test_canonical_profile_declares_fixture_payload_sizes() -> None:
+    profile = _profile()
+
+    assert profile["fixture_payload_bytes"] == {
+        "session_input": 4096,
+        "hot_context": 32768,
+        "cold_context": 262144,
+        "provider_delta": 1024,
+        "provider_completion": 16384,
+        "ordinary_tool_result": 16384,
+        "slow_tool_result": 65536,
+        "workspace_operation": 65536,
+    }
+
+
 @pytest.mark.parametrize(
     "path",
     [
         ("environment", "cpu_vcpus"),
+        ("environment", "services"),
         ("duration", "measurement_seconds"),
         ("provider", "first_delta_ms"),
         ("capacity", "run_pool"),
+        ("fixture_payload_bytes", "session_input"),
         ("thresholds", "p95_ms"),
         ("fairness", "tenant_agent_admission"),
     ],
@@ -69,11 +96,13 @@ def test_missing_critical_field_is_rejected(path: tuple[str, ...]) -> None:
     ("path", "value"),
     [
         (("environment", "cpu_vcpus"), 16),
+        (("environment", "services", "postgresql"), "external"),
         (("duration", "warmup_seconds"), 0),
         (("provider", "completion_ms"), 499),
         (("tools", "slow_latency_ms"), "2000"),
         (("capacity", "database_pools", "control"), 40),
         (("workload_mix", "direct_session"), 19),
+        (("fixture_payload_bytes", "cold_context"), 262143),
         (("thresholds", "platform_error_rate_max_exclusive"), 1),
         (("fairness", "max_consecutive_skips_per_eligible_tenant"), 2),
     ],
@@ -94,6 +123,7 @@ def test_invalid_critical_field_is_rejected(path: tuple[str, ...], value: object
     [
         (),
         ("capacity",),
+        ("fixture_payload_bytes",),
         ("thresholds", "p95_ms"),
     ],
 )

@@ -120,6 +120,25 @@ The baseline mixed load scenario is:
 
 The test runs long enough to exercise Waiting, resume, cancellation, Streaming reconnect, Workspace reads and writes, Tool Results, and Context growth. Optimization decisions use measured bottlenecks rather than source repetition alone.
 
+### Frozen Backend reference profile
+
+Phase 0 freezes one comparable Backend qualification profile: 8 vCPU, 16 GiB RAM, local-container PostgreSQL, Redis, and object storage, a 180-second warm-up, a 900-second measurement window, deterministic Provider latency of 100 ms to first Delta and 500 ms to completion, ordinary I/O Tool latency of 50 ms, slow Tool latency of 2 seconds, Run pool 50, admission queue 100, isolated control and execution database pools of 20 connections each, I/O Tool concurrency 32, and CPU-heavy Tool concurrency 4. The mixed workload remains the 20/10/10/5/5 distribution above.
+
+The synthetic fixtures use these exact payload sizes so repeated load results are comparable:
+
+| Fixture surface | Bytes |
+|---|---:|
+| Session Input | 4,096 |
+| Hot Context | 32,768 |
+| Cold Context | 262,144 |
+| Provider Delta | 1,024 |
+| Provider completion | 16,384 |
+| Ordinary Tool Result | 16,384 |
+| Slow Tool Result | 65,536 |
+| Workspace operation | 65,536 |
+
+These payload sizes describe benchmark fixtures only. They do not define product payload, Context, Tool Result, Workspace, transport, or storage limits. Runtime configuration may be tuned with recorded evidence while preserving the capacity, isolation, fairness, error, event-loss, and latency contract; a tuned implementation value does not silently change the frozen `backend_50` reference profile or make results from a different profile comparable.
+
 ## Alternatives considered
 
 ### Treat Provider completion time as total platform performance
@@ -161,4 +180,4 @@ Caching and concurrency can move or hide latency while introducing stale state a
 
 ## Risks and open questions
 
-Reference hardware, browser, network, database, storage, Provider quotas, pool sizes, queue limits, test duration, exact workload payloads, and p99 targets remain implementation and benchmark decisions. The first-release single-Runner boundary, 50-Agent floor, and control/Frontend responsiveness are fixed requirements. Deployment validation must prove one non-overlapping Runner process; the first release intentionally has no runtime singleton lock or fencing and treats overlap as unsupported.
+The reference browser and network profile, Frontend qualification environment, live Provider quotas, and p99 targets remain unresolved. The Phase 0 Backend hardware, local-container services, duration, deterministic Provider and Tool behavior, fixture payloads, pool sizes, queue limits, and concurrency budgets are frozen qualification inputs rather than production sizing promises. The first-release single-Runner boundary, 50-Agent floor, and control/Frontend responsiveness are fixed requirements. Deployment validation must prove one non-overlapping Runner process; the first release intentionally has no runtime singleton lock or fencing and treats overlap as unsupported.

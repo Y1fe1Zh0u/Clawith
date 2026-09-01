@@ -18,6 +18,11 @@ REFERENCE_PROFILE: dict[str, object] = {
     "environment": {
         "cpu_vcpus": 8,
         "memory_gib": 16,
+        "services": {
+            "postgresql": "local_container",
+            "redis": "local_container",
+            "object_storage": "local_container",
+        },
     },
     "duration": {
         "warmup_seconds": 180,
@@ -50,6 +55,16 @@ REFERENCE_PROFILE: dict[str, object] = {
         "subagent": 10,
         "heartbeat_or_trigger": 5,
         "a2a": 5,
+    },
+    "fixture_payload_bytes": {
+        "session_input": 4096,
+        "hot_context": 32768,
+        "cold_context": 262144,
+        "provider_delta": 1024,
+        "provider_completion": 16384,
+        "ordinary_tool_result": 16384,
+        "slow_tool_result": 65536,
+        "workspace_operation": 65536,
     },
     "thresholds": {
         "p95_ms": {
