@@ -1,6 +1,4 @@
 from app.dao.activity_dao import activity_dao
-from app.dao.agent_access_dao import agent_access_dao
-from app.dao.agent_dao import agent_dao
 from app.dao.agent_metrics_dao import agent_metrics_dao
 from app.dao.agent_run_dao import agent_run_dao
 from app.dao.agent_template_dao import agent_template_dao
@@ -23,8 +21,6 @@ from app.dao.user_dao import user_dao
 __all__ = [
     "TenantScopedBaseDAO",
     "activity_dao",
-    "agent_access_dao",
-    "agent_dao",
     "agent_metrics_dao",
     "agent_run_dao",
     "agent_template_dao",

@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, and old Agent Credential authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, and overloaded old Agent aggregate authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -126,7 +126,24 @@ These modules owned the Agent-scoped cookie record, direct DAO, CRUD transport, 
 
 This minimum deletion deliberately preserves mixed consumers for their own owner/category commits: AgentBay control and cookie injection still import the removed model; Tenant cleanup still names the old table; legacy Alembic revisions still create and alter the table until the target baseline replaces the full chain; and independently owned Channel configuration, identity-provider, Agent, Tool/MCP, Atlassian, and Provider Secret paths remain untouched. Those residuals do not authorize recreating `app.api.agent_credentials`, `app.dao.agent_credential_dao`, `app.models.agent_credential`, or `app.schemas.agent_credential`.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, or the old Agent Credential authority.
+The overloaded old Agent aggregate authority is also removed as a separate category:
+
+- `backend/app/models/agent.py`
+- `backend/app/api/agents.py`
+- `backend/app/dao/agent_dao.py`
+- `backend/app/dao/agent_access_dao.py`
+- `backend/app/services/agent_seeder.py`
+- the `agent_dao` and `agent_access_dao` compatibility exports from `backend/app/dao/__init__.py`
+- `backend/tests/test_agent_delete_api.py`
+- `backend/tests/test_agent_permission_candidates.py`
+- `backend/tests/test_agent_seeder_storage_repair.py`
+- `backend/tests/test_agent_visibility.py`
+
+These sources combined Agent identity and CRUD with creator ownership, access modes, visibility and management grants, permission candidates, soft deletion, execution/container status, start/stop and API-key operations, OpenClaw fields, runtime and quota counters, template bootstrap, default-Agent seeding and storage repair, and relationships to Runtime, Task, Channel, Model, and User state. The deleted tests asserted only those retired aggregate contracts. They are not moved or adapted; the target Agent and Permission owners must write fresh contract tests when implemented.
+
+`AgentPermission`, `AgentTemplate`, and `AgentUserOnboarding` were physically declared in the removed `models/agent.py`, but they are not accepted as facts owned by the target Agent aggregate. Permission grants, Agent Template, and Onboarding must be reimplemented by their separate approved target owners and receive new persistence and service tests. The retained `agent_template_dao.py`, `advanced.py`, Directory, Metrics, Focus, Onboarding, Identity, Organization, Workspace, storage `agent_files`, mixed `schemas.py`, migrations, dependency declarations, Frontend, and target module packages remain staged for their own minimum commits. Their dangling imports and relationships are evidence of incomplete source disposition, not authorization to recreate the removed aggregate or add a compatibility shim.
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path, and deleted DAO package exports cannot return through static or dynamic re-exports. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, or the overloaded old Agent aggregate.
 
 ### Delete without porting
 
