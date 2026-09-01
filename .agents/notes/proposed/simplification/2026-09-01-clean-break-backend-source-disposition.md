@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, while owner rewrites and final legacy-source removal remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution authority is removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -20,6 +20,23 @@ Each current source area receives one disposition:
 - `defer`: the product capability remains in scope for the complete Backend rewrite but does not block the foundational Agent Runtime slice. It receives its own contract and rewrite before the old Backend is removed.
 
 No current ORM model, API response, internal service contract, migration, or test is automatically compatible with the target. Reuse is code-level implementation reuse, never authority reuse.
+
+### Current target cutover state
+
+The target branch no longer contains the legacy Agent execution authority. The removed source manifest is:
+
+- `backend/app/services/agent_runtime/**`
+- `backend/app/models/agent_run.py`
+- `backend/app/models/agent_run_command.py`
+- `backend/app/models/agent_run_event.py`
+- `backend/app/models/agent_tool_execution.py`
+- `backend/app/models/session_context_state.py`
+- `backend/app/scripts/setup_langgraph_checkpoints.py`
+- `backend/tests/test_agent_runtime_*.py`
+- `backend/tests/test_setup_langgraph_checkpoints.py`
+- the dedicated old-authority tests `test_runtime_schema.py`, `test_session_context_service.py`, `test_tool_exchange.py`, `test_tool_execution.py`, `test_model_capabilities.py`, `test_runtime_model_settings_resolution.py`, `test_chat_session_runtime_state.py`, `test_unified_runtime_group_migration.py`, and `test_websocket_runtime_chat.py`
+
+`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including old Prompt/Context, Task, Approval, fallback/quota, relationship, Experience, Schedule, startup repair, storage compatibility, monolithic Tool/Model facades, product adapters, migrations, and dependencies, remain pending.
 
 ### Delete without porting
 
