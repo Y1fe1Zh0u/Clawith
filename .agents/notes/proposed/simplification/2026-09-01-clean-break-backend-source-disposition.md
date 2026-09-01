@@ -237,6 +237,21 @@ This minimum deletion preserves the mixed Invitation routes in `backend/app/api/
 
 The deleted-authority guard covers both removed Invitation import identities as module and same-named package forms, static or dynamic restoration of the `invitation_code_dao` package export, and ordinary Backend test imports. Fresh target Invitation tests must exercise the new owner contract rather than rename the retained System Email preflight test or restore an old fixture.
 
+The legacy Onboarding authority is removed as its own minimum category:
+
+- `backend/app/models/onboarding.py`
+- `backend/app/api/onboarding.py`
+- `backend/app/services/onboarding.py`
+- `backend/tests/test_onboarding.py`
+
+These sources combined two obsolete facts: `UserTenantOnboarding` tracked company-entry progress and personal-assistant creation, while the service tracked per-user Agent greeting and calibration phases through the already deleted `AgentUserOnboarding` fact. The API also coupled Onboarding completion to old Agent creation, relationship projection, Agent-file initialization, and container startup. The dedicated test file protected only those old prompts, phase transitions, bootstrap-field absence, and file/focus finalization instructions, so it is deleted instead of carried into the target.
+
+Onboarding remains an S3 product capability, but its owner contract remains unreviewed and this deletion does not authorize target implementation or preservation of either old state machine. After contract review and approval, the target `onboarding` owner receives fresh Tenant-scoped lifecycle, idempotency, completion, and Agent-creation orchestration tests. The later S3-wave Agent and Workspace owners receive their own fresh boundary tests; Onboarding tests must consume those public boundaries rather than restore direct Agent-file or container control.
+
+Agent Template sources and `template_seeder.py` remain because template inventory and seeding are independently owned by `agent_template`, not by the deleted Onboarding phases. Generic Auth and Email, Enterprise, Directory, Channel, Workspace, mixed schemas, migrations, dependencies, and Frontend remain staged. Their surviving imports or references are deliberate source-disposition evidence for later minimum owner/category commits and are not repaired here; they do not authorize restoring `app.models.onboarding`, `app.api.onboarding`, `app.services.onboarding`, or the deleted tests.
+
+The deleted-authority guard makes all three old Onboarding import identities absent as modules and same-named packages, with negative fixtures for both representations and ordinary Backend-test imports. Fresh target tests must use the approved S3 owner contracts rather than rename the old prompt, phase, bootstrap, or file-initialization fixtures.
+
 The legacy Tenant Knowledge publication adapter is removed as a separate minimum category:
 
 - `backend/app/services/enterprise_sync.py`
