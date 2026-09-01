@@ -144,8 +144,17 @@ LEGACY_AUTH_PACKAGE_EXPORTS = {
     ),
 }
 LEGACY_AUTH_DOTTED_IMPORT_IDENTITIES = tuple(
-    identity.as_posix().replace("/", ".")
-    for identity in LEGACY_AUTH_IMPORT_IDENTITIES
+    dict.fromkeys(
+        [
+            identity.as_posix().replace("/", ".")
+            for identity in LEGACY_AUTH_IMPORT_IDENTITIES
+        ]
+        + [
+            f"{relative_path.parent.as_posix().replace('/', '.')}.{export}"
+            for relative_path, exports in LEGACY_AUTH_PACKAGE_EXPORTS.items()
+            for export in exports
+        ]
+    )
 )
 DELETED_AUTH_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
@@ -1149,12 +1158,14 @@ def test_reintroduced_legacy_auth_package_export_fails_the_guard(
         "from app.api import auth\n",
         "from app.services.auth_registry import auth_provider_registry\n",
         "from app.services import registration_service\n",
+        "from app.services import auth_provider_registry as registry\n",
     ],
     ids=[
         "direct-module-import",
         "package-submodule-import",
         "service-symbol-import",
         "services-package-import",
+        "aliased-package-export-import",
     ],
 )
 def test_backend_test_import_of_deleted_auth_authority_fails_the_guard(
