@@ -5,7 +5,6 @@ from app.dao.agent_template_dao import agent_template_dao
 from app.dao.base import TenantScopedBaseDAO, tenant_context
 from app.dao.chat_message_dao import chat_message_dao
 from app.dao.chat_session_dao import chat_session_dao
-from app.dao.focus_dao import focus_dao
 from app.dao.group_dao import group_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.query_dao import query_dao
@@ -20,7 +19,6 @@ __all__ = [
     "agent_template_dao",
     "chat_message_dao",
     "chat_session_dao",
-    "focus_dao",
     "group_dao",
     "participant_dao",
     "query_dao",

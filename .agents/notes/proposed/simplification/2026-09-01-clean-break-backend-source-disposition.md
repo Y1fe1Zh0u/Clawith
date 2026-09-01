@@ -266,6 +266,22 @@ There was no separate Directory DAO, helper module, package export, or productio
 
 The deleted-authority guard makes both old Directory import identities absent as modules and same-named packages, prevents static or dynamic API/service package re-exports, and rejects ordinary Backend-test imports. Fresh S3 tests must exercise the approved Directory public composition rather than rename the old API fixture or couple to Group, Channel, Permission, Organization, or Agent persistence.
 
+The legacy Focus authority is removed as its own minimum category:
+
+- `backend/app/models/focus.py`
+- `backend/app/dao/focus_dao.py` and its `app.dao` package export
+- `backend/app/api/focus.py`
+- `backend/app/services/focus_service.py`
+- `backend/tests/test_focus_service.py`
+
+These sources made database-backed `AgentFocusItem` rows, legacy `focus.md` migration, item upsert/completion, model-context rendering, and the Agent-scoped Focus HTTP routes one coupled authority. The sole dedicated test imported the deleted service and protected only its legacy migration and DAO orchestration, so it is deleted instead of adapted.
+
+Focus remains a later S3 product owner, but its owner and product contracts remain unreviewed. After both contracts are reviewed and approved, the target `focus` owner must receive fresh persistence, Tenant and Agent scope, bounded list, upsert, completion, authorization, migration-disposition, API, and model-context tests. The old service test is not renamed or used to infer the target contract.
+
+This minimum deletion preserves OKR and its Focus wording, activity and observability, schedules and Triggers, retained file APIs and storage tests that mention `focus.md`, mixed schemas, migrations, dependencies, Frontend, and the empty target `modules/focus` package. Their surviving imports of the deleted Focus service or model are deliberate staged evidence for later owner/category commits and are not repaired here; they do not authorize restoring the old model, DAO, DAO export, API, service, file-migration path, or compatibility shim.
+
+The deleted-authority guard makes all four old Focus import identities absent as modules and same-named packages, prevents static or dynamic restoration of the `focus_dao` package export, and rejects ordinary Backend-test imports. Fresh S3 Focus tests must exercise the approved target owner rather than preserve the legacy database/file hybrid.
+
 The legacy Tenant Knowledge publication adapter is removed as a separate minimum category:
 
 - `backend/app/services/enterprise_sync.py`

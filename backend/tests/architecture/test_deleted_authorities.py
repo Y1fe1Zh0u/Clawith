@@ -249,6 +249,22 @@ LEGACY_DIRECTORY_DOTTED_IMPORT_IDENTITIES = tuple(
         ]
     )
 )
+LEGACY_FOCUS_IMPORT_IDENTITIES = (
+    Path("app/models/focus"),
+    Path("app/dao/focus_dao"),
+    Path("app/api/focus"),
+    Path("app/services/focus_service"),
+)
+LEGACY_FOCUS_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_FOCUS_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_FOCUS_DAO_EXPORT = "focus_dao"
+LEGACY_FOCUS_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_FOCUS_IMPORT_IDENTITIES
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -1252,6 +1268,118 @@ def _assert_tests_do_not_import_deleted_directory_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test imports deleted legacy Directory authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_focus_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_FOCUS_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Focus authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Focus authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_focus_dao_export(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+        ):
+            raise DeletedAuthorityViolation(
+                "deleted legacy Focus DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+    for node in ast.walk(tree):
+        references_dynamic_hook = (
+            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+            )
+        )
+        if references_dynamic_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Focus DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+        references_export = (
+            isinstance(node, ast.Name) and node.id == LEGACY_FOCUS_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == LEGACY_FOCUS_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Constant) and node.value == LEGACY_FOCUS_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == LEGACY_FOCUS_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == LEGACY_FOCUS_DAO_EXPORT
+                or node.asname == LEGACY_FOCUS_DAO_EXPORT
+            )
+        )
+        if references_export:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Focus DAO package export was reintroduced: "
+                f"{LEGACY_FOCUS_DAO_EXPORT}"
+            )
+
+
+def _assert_tests_do_not_import_deleted_focus_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        imported_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_identities.append(node.module)
+                imported_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+
+        for imported_identity in imported_identities:
+            for deleted_identity in LEGACY_FOCUS_DOTTED_IMPORT_IDENTITIES:
+                if imported_identity == deleted_identity or imported_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test imports deleted legacy Focus authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -2365,6 +2493,122 @@ def test_backend_test_import_of_deleted_directory_authority_fails_guard(
         match="test imports deleted legacy Directory authority",
     ):
         _assert_tests_do_not_import_deleted_directory_authorities(tmp_path)
+
+
+def test_legacy_focus_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_focus_authorities(BACKEND_ROOT)
+
+
+def test_legacy_focus_dao_export_is_absent() -> None:
+    _assert_deleted_legacy_focus_dao_export(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_import_deleted_focus_authorities() -> None:
+    _assert_tests_do_not_import_deleted_focus_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_FOCUS_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_FOCUS_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_focus_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Focus authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_focus_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.focus_dao import focus_dao\n",
+        "focus_dao = object()\n",
+        '__all__ = ["focus_dao"]\n',
+        "def __getattr__(name):\n    return object()\n",
+    ],
+    ids=[
+        "direct-import",
+        "assignment-reexport",
+        "all-exposure",
+        "module-getattr",
+    ],
+)
+def test_reintroduced_legacy_focus_dao_export_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Focus DAO package export",
+    ):
+        _assert_deleted_legacy_focus_dao_export(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.focus\n",
+        "from app.models import focus\n",
+        "from app.models.focus import AgentFocusItem\n",
+        "import app.dao.focus_dao\n",
+        "from app.dao import focus_dao\n",
+        "from app.dao.focus_dao import FocusDAO\n",
+        "import app.api.focus\n",
+        "from app.api import focus\n",
+        "from app.api.focus import router\n",
+        "import app.services.focus_service\n",
+        "from app.services import focus_service\n",
+        "from app.services.focus_service import list_focus_items\n",
+    ],
+    ids=[
+        "model-import",
+        "model-package-import",
+        "model-symbol-import",
+        "dao-import",
+        "dao-package-import",
+        "dao-symbol-import",
+        "api-import",
+        "api-package-import",
+        "api-symbol-import",
+        "service-import",
+        "service-package-import",
+        "service-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_focus_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_focus.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test imports deleted legacy Focus authority",
+    ):
+        _assert_tests_do_not_import_deleted_focus_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
