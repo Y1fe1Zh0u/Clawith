@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, and structured Experience authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, and old Model/LLM authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -36,7 +36,7 @@ The target branch no longer contains the legacy Agent execution authority. The r
 - `backend/tests/test_setup_langgraph_checkpoints.py`
 - the dedicated old-authority tests `test_runtime_schema.py`, `test_session_context_service.py`, `test_tool_exchange.py`, `test_tool_execution.py`, `test_model_capabilities.py`, `test_runtime_model_settings_resolution.py`, `test_chat_session_runtime_state.py`, `test_unified_runtime_group_migration.py`, and `test_websocket_runtime_chat.py`
 
-`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including Task, Approval, fallback/quota, relationship, Schedule, startup repair, storage compatibility, monolithic Tool/Model facades, product adapters, migrations, and dependencies, remain pending.
+`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including Task, Approval, quota, relationship, Schedule, startup repair, storage compatibility, the monolithic Tool facade, product adapters, migrations, and dependencies, remain pending.
 
 The target branch also no longer contains the old Context authority:
 
@@ -51,12 +51,22 @@ The structured Experience authority is also removed:
 - `backend/app/services/experience_retrieval.py`
 - the dedicated Experience API, citation/RAG, and revision-migration tests
 
+The old Model and LLM execution authority is removed as a separate category:
+
+- `backend/app/models/llm.py`
+- the entire `backend/app/services/llm/` package, including Model resolution,
+  fallback, the monolithic caller, finish protocol, single-step execution,
+  Provider clients, and multimodal request assembly
+- the dedicated Model persistence and tenant-scope, runtime Model settings,
+  resolution, fallback, finish, single-step, Provider request-shape, capability
+  probe, and multimodal tests
+
 `backend/tests/architecture/test_deleted_authorities.py` makes every removed
 Python import identity absent as both a module file and a same-named package
 directory. Its negative fixtures prove that recreating either form fails the
 target guard. Surviving legacy callers remain staged evidence for their own
 deletion category; they do not justify compatibility modules, fallback Context
-assembly, or Experience projections. Model authority deletion remains pending.
+assembly, Experience projections, or an old Model execution facade.
 
 ### Delete without porting
 
@@ -115,14 +125,14 @@ The following implementations carry useful bounded behavior and should be evalua
 | Sandbox providers and isolation | `app/services/sandbox/` including local Docker/subprocess and remote providers | keep Sandbox as a separate execution venue; remove Runtime-specific leases or identity assumptions that do not match new Run scope |
 | Local and S3 object operations | `app/services/storage_runtime/local.py`, `s3.py`, atomic storage tests | expose only through the new Workspace owner; remove compatibility fallback and legacy paths |
 | Document and text conversion | `document_conversion/`, `text_extractor.py`, `vision_inject.py` | register as ordinary Tools with bounded results |
-| Provider HTTP and multimodal encoding | `app/services/llm/client.py`, `multimodal_content.py`, and individually verified narrow utilities | place behind Provider Adapter; `llm/caller.py` is deleted rather than reused because it owns the old loop, Prompt, Tool, ORM, and fallback behavior |
+| Provider HTTP and multimodal encoding | individually named functions recovered from Git history for the former `app/services/llm/client.py`, `multimodal_content.py`, and narrow utilities | review and test each recovered function behind the target Provider Adapter; the old package and `llm/caller.py` are never restored |
 | MCP transport and OAuth mechanics | `mcp_client.py` and current OAuth helpers | place behind Tenant Catalog materialization, Agent connection, Credential, and new Tool executor |
 | External Tool protocol operations | capability-specific Atlassian, Feishu, Google Workspace, email, deployment, search, and document helpers | preserve supported operations but regenerate Definition/Grant registration and normalized Tool Result boundaries; `agent_tools.py` and `builtin_tool_definitions.py` remain inventory inputs and are not reusable facades |
 | Channel protocol adapters | Feishu, DingTalk, WeCom, WeChat, Slack, Discord, Teams and Atlassian service modules | retain SDK/webhook/stream protocol code only; rewrite authentication, Product Input, Session/Group ownership, Run start, and delivery |
 | Realtime transport | Redis pub/sub and WebSocket connection mechanics | publish only committed owner events; replace Runtime event/checkpoint payloads |
 | Cross-cutting infrastructure | database engine/session, logging, error mapping, time-zone and business-calendar helpers | retain only generic behavior; rewrite Tenant middleware and security around Principal union |
 
-Reuse requires direct import and behavior review. A candidate that imports deleted ORM models, Runtime contracts, checkpoint data, legacy permission, plaintext Secret fields, or fallback behavior is split or rewritten before use. Code from `llm/caller.py`, `agent_tools.py`, or another authority aggregator may move only as an individually named and tested pure function or single-capability protocol operation; the original module, facade, initialization, fallback, discovery, and dispatch paths are always deleted.
+Reuse requires direct source and behavior review. Deleted Provider candidates may be recovered only from Git history; the immutable legacy checkout remains black-box behavior evidence and is never imported, copied from, or treated as a source tree. A candidate that imports deleted ORM models, Runtime contracts, checkpoint data, legacy permission, plaintext Secret fields, or fallback behavior is split or rewritten before use. Code formerly in `llm/caller.py`, `agent_tools.py`, or another authority aggregator may move only as an individually named and tested pure function or single-capability protocol operation; the original module, facade, initialization, fallback, discovery, and dispatch paths are always deleted.
 
 ### Preserve product capability but rewrite later
 

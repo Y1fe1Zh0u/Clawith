@@ -18,6 +18,15 @@ EXPERIENCE_REINTRODUCTIONS = [
     for identity in EXPERIENCE_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+MODEL_LLM_IMPORT_IDENTITIES = (
+    Path("app/models/llm"),
+    Path("app/services/llm"),
+)
+MODEL_LLM_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in MODEL_LLM_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
 
 
 class DeletedAuthorityViolation(RuntimeError):
@@ -48,6 +57,20 @@ def _assert_deleted_experience_authorities(backend_root: Path) -> None:
         if package.is_dir():
             raise DeletedAuthorityViolation(
                 f"deleted Experience authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_model_llm_authorities(backend_root: Path) -> None:
+    for identity in MODEL_LLM_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted Model/LLM authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted Model/LLM authority package was reintroduced: {identity}"
             )
 
 
@@ -109,3 +132,35 @@ def test_reintroduced_experience_import_identity_fails_the_guard(
         match=f"deleted Experience authority {representation} was reintroduced",
     ):
         _assert_deleted_experience_authorities(tmp_path)
+
+
+def test_legacy_model_llm_import_identities_are_absent_from_target_tree() -> None:
+    _assert_deleted_model_llm_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    MODEL_LLM_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in MODEL_LLM_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_model_llm_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted Model/LLM authority {representation} was reintroduced",
+    ):
+        _assert_deleted_model_llm_authorities(tmp_path)
