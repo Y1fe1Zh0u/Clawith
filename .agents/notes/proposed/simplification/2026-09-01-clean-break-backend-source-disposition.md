@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, and old Identity/Tenant aggregate authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, and old Auth authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -158,9 +158,27 @@ The old Identity/Tenant aggregate authority is also removed as a separate catego
 
 These sources combined a global login Identity, tenant-scoped User membership, Tenant configuration and sparse Tenant settings with CRUD, tenant switching and assignment, self-create and join, quota counters and limits, logo storage, registration configuration, SSO-domain lookup, Tenant deletion, and compatibility association proxies. The removed tests asserted only retired Tenant persistence or API schemas. They are not adapted; the target `identity_tenant` owner must write fresh Account, Membership, Tenant, Tenant Principal, and Platform Principal tests from its approved contract.
 
-This minimum deletion deliberately preserves independently owned Auth routes and services, SSO and identity-provider models and services, Organization, Invitation, Onboarding, Permission core, AgentBay, Channel, Enterprise and Platform Administration, mixed `schemas.py`, migrations, dependency declarations, Frontend, and target module packages. Those consumers still import the deleted model or DAO identities and remain staged for their own owner/category commits. Their dangling imports are evidence of incomplete source disposition, not authorization to recreate the old aggregate, package exports, or a compatibility shim.
+The Identity/Tenant deletion deliberately preserved the then-staged Auth routes and services together with SSO and identity-provider models and services, Organization, Invitation, Onboarding, Permission core, AgentBay, Channel, Enterprise and Platform Administration, mixed `schemas.py`, migrations, dependency declarations, Frontend, and target module packages. The old Auth authority is removed in the following category; the other retained consumers still import deleted model or DAO identities and remain staged for their own owner/category commits. Their dangling imports are evidence of incomplete source disposition, not authorization to recreate an old aggregate, package export, or compatibility shim.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path, and deleted DAO package exports cannot return through static or dynamic re-exports. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, the overloaded old Agent aggregate, or the old Identity/Tenant aggregate.
+The old Auth authority is also removed as a separate category:
+
+- `backend/app/api/auth.py`
+- `backend/app/services/auth_provider.py`
+- `backend/app/services/auth_registry.py`
+- `backend/app/services/registration_service.py`
+- `backend/app/services/password_reset_service.py`
+- `backend/app/services/email_verification_service.py`
+- `backend/tests/test_auth.py`
+- the old Auth Provider assertions removed from `backend/tests/test_auth_provider.py`
+- the password reset and Auth API assertions removed from `backend/tests/test_password_reset_and_notifications.py`
+
+These sources combined password login and registration, Account binding, tenant switching, JWT issuance, password change and reset, email verification, SSO callback/session orchestration, Provider construction, and cross-owner Identity/Tenant, Organization, Invitation, Onboarding, and notification mutations. Their tests asserted that retired orchestration and are deleted rather than adapted. The target Auth owner must receive fresh password, login, token, bind, reset, and verification tests after its approved contract is implemented.
+
+The independently owned IdentityProvider lookup and Google Workspace OAuth-state tests now live in `backend/tests/test_identity_provider_and_google_workspace_oauth.py`; generic system-email transport and broadcast-notification tests now live in `backend/tests/test_system_email_and_notifications.py`. This deletion preserves the SSO API and service, SSO session security, IdentityProvider model and lookup, Google Workspace integration, Organization, Invitation, Onboarding, generic system-email transport, `core/security.py`, core middleware, permissions, errors and logging, mixed `schemas.py`, migrations, dependency declarations, Frontend, and the empty target `modules/auth` package. `core/security.py` remains because retained API, WebSocket, SSO, encryption, Sandbox, and provider boundaries still consume its bearer, JWT, authorization-dependency, and data-encryption helpers; it is not solely the old Auth authority.
+
+Retained SSO, Google Workspace, Feishu, WeCom, DingTalk, Organization, relationship, Plaza, Trigger, OKR, and cleanup-script sources still import one or more deleted Auth identities. They remain staged for their own owner/category commits. Those dangling imports do not authorize recreating the old Auth API, Provider registry, registration orchestrator, password-reset lifecycle, email-verification lifecycle, or package exports.
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path, and deleted DAO or Auth package exports cannot return through static or dynamic re-exports. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, the overloaded old Agent aggregate, the old Identity/Tenant aggregate, or old Auth orchestration.
 
 ### Delete without porting
 

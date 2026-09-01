@@ -119,6 +119,30 @@ LEGACY_IDENTITY_TENANT_DAO_EXPORTS = (
     "user_dao",
     "tenant_dao",
 )
+LEGACY_AUTH_IMPORT_IDENTITIES = (
+    Path("app/api/auth"),
+    Path("app/services/auth_provider"),
+    Path("app/services/auth_registry"),
+    Path("app/services/registration_service"),
+    Path("app/services/password_reset_service"),
+    Path("app/services/email_verification_service"),
+)
+LEGACY_AUTH_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_AUTH_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_AUTH_PACKAGE_EXPORTS = {
+    Path("app/api/__init__.py"): ("auth",),
+    Path("app/services/__init__.py"): (
+        "auth_provider",
+        "auth_registry",
+        "auth_provider_registry",
+        "registration_service",
+        "password_reset_service",
+        "email_verification_service",
+    ),
+}
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
 
@@ -459,6 +483,87 @@ def _assert_deleted_legacy_identity_tenant_dao_exports(
                 )
 
 
+def _assert_deleted_legacy_auth_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_AUTH_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Auth authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Auth authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_auth_package_exports(backend_root: Path) -> None:
+    for relative_path, exports in LEGACY_AUTH_PACKAGE_EXPORTS.items():
+        package_init = backend_root / relative_path
+        if not package_init.is_file():
+            continue
+
+        tree = ast.parse(
+            package_init.read_text(encoding="utf-8"),
+            filename=str(package_init),
+        )
+        for statement in tree.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+            ):
+                raise DeletedAuthorityViolation(
+                    "deleted legacy Auth package exports can be restored by "
+                    f"a module-level __getattr__ hook in {relative_path}"
+                )
+
+        for node in ast.walk(tree):
+            references_dynamic_hook = (
+                isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.Attribute)
+                and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.Constant)
+                and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.keyword)
+                and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.alias)
+                and (
+                    node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                    or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+                )
+            )
+            if references_dynamic_hook:
+                raise DeletedAuthorityViolation(
+                    "deleted legacy Auth package exports can be restored by "
+                    f"a module-level __getattr__ hook in {relative_path}"
+                )
+
+            for export in exports:
+                references_export = (
+                    isinstance(node, ast.Name) and node.id == export
+                ) or (
+                    isinstance(node, ast.Attribute) and node.attr == export
+                ) or (
+                    isinstance(node, ast.Constant) and node.value == export
+                ) or (
+                    isinstance(node, ast.keyword) and node.arg == export
+                ) or (
+                    isinstance(node, ast.alias)
+                    and (
+                        node.name.split(".")[-1] == export
+                        or node.asname == export
+                    )
+                )
+                if references_export:
+                    raise DeletedAuthorityViolation(
+                        "deleted legacy Auth package export was reintroduced in "
+                        f"{relative_path}: {export}"
+                    )
+
+
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
     _assert_deleted_context_authority(BACKEND_ROOT)
 
@@ -717,6 +822,14 @@ def test_legacy_identity_tenant_dao_exports_are_absent_from_target_tree() -> Non
     _assert_deleted_legacy_identity_tenant_dao_exports(BACKEND_ROOT)
 
 
+def test_legacy_auth_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_auth_authorities(BACKEND_ROOT)
+
+
+def test_legacy_auth_package_exports_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_auth_package_exports(BACKEND_ROOT)
+
+
 @pytest.mark.parametrize(
     ("identity", "representation"),
     LEGACY_CREDENTIAL_REINTRODUCTIONS,
@@ -910,3 +1023,72 @@ def test_reintroduced_legacy_identity_tenant_dao_export_fails_the_guard(
         match="deleted legacy Identity/Tenant DAO package export",
     ):
         _assert_deleted_legacy_identity_tenant_dao_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_AUTH_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_AUTH_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_auth_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Auth authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_auth_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "package_source"),
+    [
+        (Path("app/api/__init__.py"), "from app.api import auth\n"),
+        (Path("app/api/__init__.py"), '__all__ = ["auth"]\n'),
+        (Path("app/services/__init__.py"), "auth_provider = object()\n"),
+        (
+            Path("app/services/__init__.py"),
+            "from app.services.auth_registry import auth_provider_registry\n",
+        ),
+        (Path("app/services/__init__.py"), "def __getattr__(name):\n    return object()\n"),
+        (
+            Path("app/services/__init__.py"),
+            'globals()["registration_service"] = object()\n',
+        ),
+    ],
+    ids=[
+        "api-direct-import",
+        "api-all-exposure",
+        "services-assignment",
+        "services-direct-import",
+        "services-module-getattr",
+        "services-globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_auth_package_export_fails_the_guard(
+    tmp_path: Path,
+    relative_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / relative_path
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Auth package export",
+    ):
+        _assert_deleted_legacy_auth_package_exports(tmp_path)
