@@ -178,7 +178,7 @@ Generic system-email transport and broadcast-notification tests remain in `backe
 
 Retained Google Workspace Organization sync, Feishu, WeCom, DingTalk, Organization, relationship, Plaza, Trigger, OKR, and cleanup-script sources still import one or more deleted Auth identities. They remain staged for their own owner/category commits. Those dangling imports do not authorize recreating the old Auth API, Provider registry, registration orchestrator, password-reset lifecycle, email-verification lifecycle, or package exports.
 
-The old SSO authority is also removed as a separate category:
+The old SSO authority and its mixed identity-provider entry surfaces are also removed as a separate category:
 
 - `backend/app/api/sso.py`
 - `backend/app/api/google_workspace.py`
@@ -194,7 +194,9 @@ The old SSO authority is also removed as a separate category:
 - `backend/tests/test_identity_id_mapping.py`
 - `backend/tests/test_sso_toggle.py`
 
-These sources combined SSO browser sessions and binding, IdentityProvider persistence and selection, login identity matching, tenant association, provider enablement, and Google Workspace OAuth state/callback handling. Their tests asserted the old owner, including SSO platform/Tenant toggles coupled to deleted Tenant routes, and are deleted rather than adapted. The target SSO owner must receive fresh persistence, provider-selection, browser-session, callback, binding, policy, and failure-path tests after its approved contract is implemented.
+These sources combined SSO login and browser-session binding with IdentityProvider persistence and selection, Channel identity mapping, Tenant-domain resolution, platform SSO settings, and Google Workspace Organization administration and directory synchronization. `backend/app/api/google_workspace.py`, `backend/app/services/google_workspace_oauth.py`, and their deleted tests were mixed legacy entry surfaces: they joined Google Workspace administrator authorize URLs, OAuth state and callbacks, directory probe/proxy/sync behavior, and SSO browser-session completion. Their presence in this deletion does not assign those Organization capabilities to the target SSO owner. All listed legacy tests are deleted rather than adapted.
+
+Fresh tests follow the target owner contracts: SSO owns login, session, provider selection, and binding-policy tests; Organization owns Google Workspace administrator authorize URL, OAuth state and callback, directory probe, proxy, and synchronization tests; Channel owns external identity mapping tests; `identity_tenant` owns Tenant-domain resolution tests; and `platform_administration` owns platform SSO settings and toggle tests. Each owner writes those tests only after its approved contract is implemented.
 
 This minimum deletion preserves Organization sync adapters and services, provider-specific Channel APIs, mixed IdentityProvider administration and SSO policy routes in `enterprise.py`, Invitation, Onboarding, generic email, `core/security.py`, mixed schemas, migrations, dependencies, Frontend, and the empty target `modules/sso` package. Those retained sources may still import the deleted IdentityProvider model or SSO services, and the Organization adapter may still import the deleted Google Workspace OAuth proxy constant. These dangling consumers are staged evidence for their own owner/category commits; they do not authorize restoring the old SSO API, model, DAO, services, Google Workspace OAuth entrypoint, or compatibility export.
 
