@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the current Backend capability inventory and clean-break source disposition are agreed for implementation planning but no source removal has been applied
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, while owner rewrites and final legacy-source removal remain incomplete
 
 ## Problem
 
@@ -103,9 +103,9 @@ These currently exposed features are not prerequisites for the foundational Runn
 
 ### Migration, composition, and dependency disposition
 
-The target starts with one new Alembic baseline. `alembic/env.py` and the migration template may be reused as infrastructure, but the current version chain and model-import list are replaced. Before that work begins, `backend/alembic/AGENTS.md` is rewritten to record the approved one-time clean-break exception to its current append-only head rule; after the new baseline, it again requires one head, retained forward migrations, and normal verification. Startup runs schema verification and explicit idempotent product bootstrap only; it does not call `create_all`, migrate files, patch existing records, or swallow bootstrap ownership failures.
+The target starts with one new Alembic baseline. `alembic/env.py` and the migration template may be reused as infrastructure, but the current version chain and model-import list are replaced. Before that work begins, `backend/alembic/AGENTS.md` is rewritten to record the approved one-time clean-break exception to its current append-only head rule; after the new baseline, it again requires one head, retained forward migrations, and normal verification. The initial target composition performs no schema mutation or product bootstrap. Later owner integration may add schema verification and explicit idempotent product bootstrap, but startup never calls `create_all`, migrates files, patches existing records, or swallows bootstrap ownership failures.
 
-FastAPI application composition is rewritten so each module registers its own transport adapters and lifecycle resources. Current process-role branches, connector managers, schedulers, Runtime worker startup, and seeding blocks are not copied wholesale. The first release enforces one non-overlapping Runner deployment while connector and product background services retain their own bounded lifecycle owners.
+FastAPI composition has one factory and one application lifespan. The lifespan owns separate control and execution SQLAlchemy engines against the validated target PostgreSQL database, creates isolated pools of twenty connections with zero overflow by default, and awaits disposal of both pools at shutdown. Target configuration loads dotenv values only from `backend/.env`, rejects unknown dotenv settings, requires a complete `postgresql+asyncpg` URL, and fails when neither an explicit application version nor the non-empty `backend/VERSION` artifact is available. Each module later registers its own transport adapters and bounded lifecycle resources; current process-role branches, connector managers, schedulers, Runtime worker startup, and seeding blocks are not copied wholesale. The first release enforces one non-overlapping Runner deployment while connector and product background services retain their own bounded lifecycle owners.
 
 `langgraph`, `langgraph-checkpoint-postgres`, and checkpoint-only `psycopg` usage are removed when no surviving consumer remains. Other dependencies remain only when a retained provider, Channel, conversion, Sandbox, storage, authentication, or product module imports and tests them. Dependency removal follows source removal rather than preceding it.
 

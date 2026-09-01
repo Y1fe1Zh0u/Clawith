@@ -32,11 +32,16 @@ uv.lock         Locked Python dependency graph.
 alembic/        Database schema migrations.
 scripts/        Repository-operated Backend maintenance and data-migration scripts.
 tests/          Backend unit, contract, integration, and regression tests.
-app/main.py    FastAPI application composition, lifespan, middleware, and router
-               registration.
-app/config.py  Application configuration entry point.
-app/database.py
-               Database engine and Session infrastructure.
+app/main.py    ASGI export of the application produced by `app.application`.
+app/application.py
+               The single FastAPI factory and application resource lifespan.
+app/infrastructure/config.py
+               Target application configuration and environment validation.
+app/infrastructure/database.py
+               The single SQLAlchemy registry and application-owned control and
+               execution database resources.
+app/modules/   Target modular-monolith owners.
+app/runtime/   Run-owned Runner and Loop execution mechanics only.
 app/api/       HTTP and WebSocket transport adapters.
 app/schemas/   Request, response, and transport validation models.
 app/models/    SQLAlchemy persistence models.
