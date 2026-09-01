@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,9 @@ LEGACY_CREDENTIAL_REINTRODUCTIONS = [
     for identity in LEGACY_CREDENTIAL_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+LEGACY_CREDENTIAL_DAO_EXPORT = "agent_credential_dao"
+DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
+DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
 
 
 class DeletedAuthorityViolation(RuntimeError):
@@ -205,6 +209,68 @@ def _assert_deleted_legacy_credential_authorities(backend_root: Path) -> None:
         if package.is_dir():
             raise DeletedAuthorityViolation(
                 f"deleted legacy Credential authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_credential_dao_export(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+        ):
+            raise DeletedAuthorityViolation(
+                "deleted legacy Credential DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+    for node in ast.walk(tree):
+        references_dynamic_hook = (
+            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+            )
+        )
+        if references_dynamic_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Credential DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+        references_export = (
+            isinstance(node, ast.Name) and node.id == LEGACY_CREDENTIAL_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Attribute)
+            and node.attr == LEGACY_CREDENTIAL_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Constant)
+            and node.value == LEGACY_CREDENTIAL_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.keyword)
+            and node.arg == LEGACY_CREDENTIAL_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == LEGACY_CREDENTIAL_DAO_EXPORT
+                or node.asname == LEGACY_CREDENTIAL_DAO_EXPORT
+            )
+        )
+        if references_export:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Credential DAO package export was reintroduced: "
+                f"{LEGACY_CREDENTIAL_DAO_EXPORT}"
             )
 
 
@@ -446,6 +512,10 @@ def test_legacy_credential_authorities_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_credential_authorities(BACKEND_ROOT)
 
 
+def test_legacy_credential_dao_package_export_is_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_credential_dao_export(BACKEND_ROOT)
+
+
 @pytest.mark.parametrize(
     ("identity", "representation"),
     LEGACY_CREDENTIAL_REINTRODUCTIONS,
@@ -472,3 +542,39 @@ def test_reintroduced_legacy_credential_import_identity_fails_the_guard(
         match=f"deleted legacy Credential authority {representation} was reintroduced",
     ):
         _assert_deleted_legacy_credential_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.agent_credential_dao import agent_credential_dao\n",
+        "from app.dao.agent_credential_dao import agent_credential_dao as restored\n",
+        "agent_credential_dao = object()\n",
+        '__all__ = ["agent_credential_dao"]\n',
+        "def __getattr__(name):\n    return object()\n",
+        "__getattr__ = lambda name: object()\n",
+        'globals()["agent_credential_dao"] = object()\n',
+    ],
+    ids=[
+        "direct-import",
+        "aliased-import",
+        "assignment-reexport",
+        "all-exposure",
+        "module-getattr",
+        "assigned-module-getattr",
+        "globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_credential_dao_package_export_fails_the_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Credential DAO package export",
+    ):
+        _assert_deleted_legacy_credential_dao_export(tmp_path)
