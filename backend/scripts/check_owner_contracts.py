@@ -99,6 +99,7 @@ IMPLEMENTATION_PHASE_OVERRIDES = {
 EXPECTED_OWNER_MAP = {
     owner_id: (wave, IMPLEMENTATION_PHASE_OVERRIDES.get(owner_id, phase)) for owner_id, wave, phase in EXPECTED_OWNERS
 }
+REQUIRED_APPROVAL_DEPENDENCIES = {"sso": {"credential"}}
 
 
 class ContractError(ValueError):
@@ -219,12 +220,18 @@ def _validate_dag(dag: dict[str, Any]) -> list[dict[str, Any]]:
         raise ContractError(f"owner DAG is missing owners: {', '.join(missing)}")
 
     dependencies_by_owner = {row["owner_id"]: row["depends_on"] for row in normalized}
+    position_by_owner = {row["owner_id"]: index for index, row in enumerate(normalized)}
     for owner_id, dependencies in dependencies_by_owner.items():
         unknown = sorted(set(dependencies) - expected_ids)
         if unknown:
             raise ContractError(f"owner DAG has unknown dependencies for {owner_id}: {', '.join(unknown)}")
         if owner_id in dependencies:
             raise ContractError(f"owner DAG owner depends on itself: {owner_id}")
+        missing_required = sorted(REQUIRED_APPROVAL_DEPENDENCIES.get(owner_id, set()) - set(dependencies))
+        if missing_required:
+            raise ContractError(
+                f"owner DAG is missing required dependencies for {owner_id}: {', '.join(missing_required)}"
+            )
 
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -242,7 +249,34 @@ def _validate_dag(dag: dict[str, Any]) -> list[dict[str, Any]]:
 
     for owner_id in dependencies_by_owner:
         visit(owner_id)
+    for owner_id, dependencies in dependencies_by_owner.items():
+        late_dependencies = sorted(
+            dependency for dependency in dependencies if position_by_owner[dependency] >= position_by_owner[owner_id]
+        )
+        if late_dependencies:
+            raise ContractError(f"owner DAG dependencies must appear before {owner_id}: {', '.join(late_dependencies)}")
     return normalized
+
+
+def _dag_rows_for_manifest(manifest_path: Path) -> list[dict[str, Any]]:
+    return _validate_dag(_load_json(manifest_path.with_name("owner-dag.json")))
+
+
+def _validate_required_approval_dependencies(
+    owner_id: str,
+    owners: dict[str, dict[str, Any]],
+    dag_by_owner: dict[str, dict[str, Any]],
+) -> None:
+    required_dependencies = REQUIRED_APPROVAL_DEPENDENCIES.get(owner_id, set())
+    dag_dependencies = set(dag_by_owner[owner_id]["depends_on"])
+    if not required_dependencies <= dag_dependencies:
+        missing = sorted(required_dependencies - dag_dependencies)
+        raise ContractError(f"owner DAG is missing approval dependencies for {owner_id}: {', '.join(missing)}")
+    unapproved = sorted(
+        dependency for dependency in required_dependencies if owners[dependency]["state"] != APPROVED_STATE
+    )
+    if unapproved:
+        raise ContractError(f"owner contract dependencies are not approved for {owner_id}: {', '.join(unapproved)}")
 
 
 def _validate_evidence(evidence: Any, owner_id: str, manifest_path: Path) -> None:
@@ -309,6 +343,8 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[str
     if manifest.get("version") != 1:
         raise ContractError("owner contract manifest version must be 1")
     rows = _require_list(manifest.get("owners"), "owner contract owners")
+    dag_rows = _dag_rows_for_manifest(manifest_path)
+    dag_by_owner = {row["owner_id"]: row for row in dag_rows}
     seen: dict[str, dict[str, Any]] = {}
     expected_ids = set(EXPECTED_OWNER_MAP)
     for index, row in enumerate(rows):
@@ -359,6 +395,13 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path) -> dict[str
     missing = sorted(expected_ids - set(seen))
     if missing:
         raise ContractError(f"owner contract manifest is missing owners: {', '.join(missing)}")
+    manifest_order = [row["owner_id"] for row in rows]
+    dag_order = [row["owner_id"] for row in dag_rows]
+    if manifest_order != dag_order:
+        raise ContractError("owner contract manifest order does not match owner DAG")
+    for owner_id, row in seen.items():
+        if row["state"] == APPROVED_STATE:
+            _validate_required_approval_dependencies(owner_id, seen, dag_by_owner)
     return seen
 
 
@@ -405,6 +448,8 @@ def approve_owner(
         raise ContractError(f"owner contract is already approved: {owner_id}")
     if not evidence:
         raise ContractError("at least one evidence artifact is required")
+    dag_by_owner = {row["owner_id"]: row for row in _dag_rows_for_manifest(manifest_path)}
+    _validate_required_approval_dependencies(owner_id, owners, dag_by_owner)
 
     artifact_path = _resolve_artifact(contract_artifact, manifest_path)
     evidence_rows: list[dict[str, str]] = []

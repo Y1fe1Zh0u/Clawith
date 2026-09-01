@@ -24,7 +24,9 @@ def _read(path: Path) -> dict:
 
 def _built_manifest(tmp_path: Path) -> Path:
     manifest_path = tmp_path / "owner-contracts.json"
-    contracts.build_manifest(manifest_path, CANONICAL_DAG)
+    dag_path = tmp_path / "owner-dag.json"
+    dag_path.write_text(CANONICAL_DAG.read_text(encoding="utf-8"), encoding="utf-8")
+    contracts.build_manifest(manifest_path, dag_path)
     return manifest_path
 
 
@@ -69,6 +71,51 @@ def test_build_creates_the_exact_approved_owner_roster(tmp_path: Path) -> None:
     assert {row["schema_wave"] for row in manifest["owners"]} == {"S0", "S1", "S2", "S3"}
     assert all(row["state"] == "unreviewed" for row in manifest["owners"])
     contracts.check_manifest(manifest_path, [], [])
+
+
+def test_sso_dependency_and_ledger_order_are_canonical(tmp_path: Path) -> None:
+    manifest_path = _built_manifest(tmp_path)
+    dag_rows = _read(tmp_path / "owner-dag.json")["owners"]
+    owner_rows = _read(manifest_path)["owners"]
+    sso = next(row for row in dag_rows if row["owner_id"] == "sso")
+
+    assert "credential" in sso["depends_on"]
+    assert [row["owner_id"] for row in owner_rows] == [row["owner_id"] for row in dag_rows]
+    assert next(index for index, row in enumerate(dag_rows) if row["owner_id"] == "credential") < next(
+        index for index, row in enumerate(dag_rows) if row["owner_id"] == "sso"
+    )
+
+
+def test_dag_rejects_missing_or_late_sso_credential_dependency(tmp_path: Path) -> None:
+    dag = _read(CANONICAL_DAG)
+    sso = next(row for row in dag["owners"] if row["owner_id"] == "sso")
+    sso["depends_on"].remove("credential")
+    missing_dag = tmp_path / "missing-credential.json"
+    missing_dag.write_text(json.dumps(dag), encoding="utf-8")
+    with pytest.raises(contracts.ContractError, match="missing required dependencies for sso: credential"):
+        contracts.build_manifest(tmp_path / "manifest.json", missing_dag)
+
+    dag = _read(CANONICAL_DAG)
+    rows = dag["owners"]
+    credential_index = next(index for index, row in enumerate(rows) if row["owner_id"] == "credential")
+    sso_index = next(index for index, row in enumerate(rows) if row["owner_id"] == "sso")
+    sso_row = rows.pop(sso_index)
+    rows.insert(credential_index, sso_row)
+    late_dag = tmp_path / "late-credential.json"
+    late_dag.write_text(json.dumps(dag), encoding="utf-8")
+    with pytest.raises(contracts.ContractError, match=r"dependencies must appear before sso: .*credential"):
+        contracts.build_manifest(tmp_path / "manifest.json", late_dag)
+
+
+def test_sso_approval_requires_credential_approval(tmp_path: Path) -> None:
+    manifest_path = _built_manifest(tmp_path)
+    artifact = tmp_path / "sso-contract.md"
+    evidence = tmp_path / "sso-review.txt"
+    artifact.write_text("approved SSO contract\n", encoding="utf-8")
+    evidence.write_text("SSO review passed\n", encoding="utf-8")
+
+    with pytest.raises(contracts.ContractError, match="not approved for sso: credential"):
+        contracts.approve_owner(manifest_path, "sso", str(artifact), [str(evidence)])
 
 
 def test_approve_records_current_hashes_and_rejects_duplicate_approval(tmp_path: Path) -> None:
