@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, and old Tool authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, and old Skill authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -86,15 +86,23 @@ The old Tool authority is also removed as a separate category:
 
 These deleted tests instantiated `Tool`/`AgentTool`, called the old Tool management API, asserted the monolithic builtin definition and seeding catalogs, or executed and patched the `agent_tools` exposure/dispatch/configuration facade. The user explicitly approved deleting all legacy `agent_tools`-era tests, including mixed files and assertions that directly exercised retained MCP, Feishu, Sandbox, AgentBay, Trigger, or Workspace helpers through the old authority. No old test is extracted, moved, or adapted during this deletion. Each retained owner must receive new target-contract tests when it is implemented. The independent MCP transport error test remains in `test_mcp_recovery.py` because it imports and exercises only `MCPClient`.
 
-This removal does not implement the target `modules/tool` owner or Capability Market. `mcp_client.py`, MCP OAuth helpers, `resource_discovery.py`, Skill model/API/seeder/creator sources, provider- and Channel-specific adapters, Atlassian-specific services, collaboration/A2A sources, migrations, and dependency declarations remain staged candidates. Their surviving imports of the deleted identities are intentional dangling evidence for later minimum owner or deletion-category commits, not compatibility authority. `tool_exchange.py` had already left the target tree with the old Agent Runtime cutover and is not recreated.
+This removal does not implement the target `modules/tool` owner or Capability Market. `mcp_client.py`, MCP OAuth helpers, `resource_discovery.py`, provider- and Channel-specific adapters, Atlassian-specific services, collaboration/A2A sources, migrations, and dependency declarations remain staged candidates. Their surviving imports of the deleted identities are intentional dangling evidence for later minimum owner or deletion-category commits, not compatibility authority. `tool_exchange.py` had already left the target tree with the old Agent Runtime cutover and is not recreated.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed
-Python import identity absent as both a module file and a same-named package
-directory. Its negative fixtures prove that recreating either form fails the
-target guard. Surviving legacy callers remain staged evidence for their own
-deletion category; they do not justify compatibility modules, fallback Context
-assembly, Experience projections, an old Model execution facade, or Persistent
-Task persistence.
+The old Skill authority is also removed as a separate category:
+
+- `backend/app/models/skill.py`
+- `backend/app/api/skills.py`
+- `backend/app/services/skill_seeder.py`
+- `backend/app/services/skill_creator_content.py`
+- the complete generated and evaluation asset directory `backend/app/services/skill_creator_files/`
+- `backend/tests/test_skill_seeder_sync.py`
+- `backend/tests/test_skills_api.py`
+
+The deleted tests asserted the old global/tenant Skill ORM, CRUD and direct file mutation API, default-Skill database seeding and repair, and import compatibility. They are not moved or adapted during deletion. The future Workspace and Capability Market owners must write fresh tests from their approved target contracts, including controlled Market/Admin installation and Workspace Skill package behavior.
+
+This removal does not implement Capability Market or remove independently owned capability/resource discovery, MCP transport, Workspace/file/storage behavior, target Tool modules, provider/Channel adapters, templates, migrations, or dependencies. The mixed `files.py` Skill routes, Agent bootstrap repair path, model import lists, and database bootstrap imports remain staged dangling consumers for their own minimum owner/category deletions; none authorizes recreating the old Skill identities. Agent-authored creation, evaluation assets, direct database-backed file mutation, and the old Skill import/install facade are gone.
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, or Persistent Task persistence.
 
 ### Delete without porting
 

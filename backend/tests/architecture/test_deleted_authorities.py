@@ -51,6 +51,18 @@ LEGACY_TOOL_REINTRODUCTIONS = [
     for identity in LEGACY_TOOL_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+LEGACY_SKILL_IMPORT_IDENTITIES = (
+    Path("app/api/skills"),
+    Path("app/models/skill"),
+    Path("app/services/skill_creator_content"),
+    Path("app/services/skill_seeder"),
+)
+LEGACY_SKILL_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_SKILL_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_SKILL_CREATOR_FILES = Path("app/services/skill_creator_files")
 
 
 class DeletedAuthorityViolation(RuntimeError):
@@ -124,6 +136,27 @@ def _assert_deleted_legacy_tool_authorities(backend_root: Path) -> None:
             raise DeletedAuthorityViolation(
                 f"deleted legacy Tool authority package was reintroduced: {identity}"
             )
+
+
+def _assert_deleted_legacy_skill_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_SKILL_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Skill authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Skill authority package was reintroduced: {identity}"
+            )
+
+    creator_files = backend_root / LEGACY_SKILL_CREATOR_FILES
+    if creator_files.exists():
+        raise DeletedAuthorityViolation(
+            "deleted legacy Skill creator-files path was reintroduced: "
+            f"{LEGACY_SKILL_CREATOR_FILES}"
+        )
 
 
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
@@ -280,3 +313,49 @@ def test_reintroduced_legacy_tool_import_identity_fails_the_guard(
         match=f"deleted legacy Tool authority {representation} was reintroduced",
     ):
         _assert_deleted_legacy_tool_authorities(tmp_path)
+
+
+def test_legacy_skill_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_skill_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_SKILL_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_SKILL_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_skill_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Skill authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_skill_authorities(tmp_path)
+
+
+def test_reintroduced_legacy_skill_creator_files_path_fails_the_guard(
+    tmp_path: Path,
+) -> None:
+    creator_files = tmp_path / LEGACY_SKILL_CREATOR_FILES
+    creator_files.mkdir(parents=True)
+    (creator_files / "generated.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Skill creator-files path was reintroduced",
+    ):
+        _assert_deleted_legacy_skill_authorities(tmp_path)
