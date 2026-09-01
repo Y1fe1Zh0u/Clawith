@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, and overloaded old Organization/Relationship authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, and legacy Tenant Knowledge publication authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -200,7 +200,7 @@ Fresh tests follow the target owner contracts: SSO owns login, session, provider
 
 This minimum deletion preserves Organization sync adapters and services, provider-specific Channel APIs, mixed IdentityProvider administration and SSO policy routes in `enterprise.py`, Invitation, Onboarding, generic email, `core/security.py`, mixed schemas, migrations, dependencies, Frontend, and the empty target `modules/sso` package. Those retained sources may still import the deleted IdentityProvider model or SSO services, and the Organization adapter may still import the deleted Google Workspace OAuth proxy constant. These dangling consumers are staged evidence for their own owner/category commits; they do not authorize restoring the old SSO API, model, DAO, services, Google Workspace OAuth entrypoint, or compatibility export.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path; deleted DAO, Auth, SSO, or Organization/Relationship exports cannot return through static or dynamic re-exports; and ordinary Backend tests cannot import a deleted Auth, SSO, or Organization/Relationship identity. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, the overloaded old Agent aggregate, the old Identity/Tenant aggregate, old Auth orchestration, old SSO authority, or the overloaded old Organization/Relationship aggregate.
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path; deleted DAO, Auth, SSO, or Organization/Relationship exports cannot return through static or dynamic re-exports; and ordinary Backend tests cannot import a deleted Auth, SSO, or Organization/Relationship identity. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, the overloaded old Agent aggregate, the old Identity/Tenant aggregate, old Auth orchestration, old SSO authority, the overloaded old Organization/Relationship aggregate, or the legacy Tenant Knowledge publication adapter.
 
 The overloaded legacy Organization/Relationship aggregate is removed as its own minimum category:
 
@@ -222,6 +222,17 @@ The Phase 0 disposition is approved for deleting this legacy aggregate. The targ
 The Organization/Relationship category deliberately excludes Enterprise Info persistence and API ownership, Invitation codes, mixed routes in `enterprise.py`, the Directory API and service, Participant and Group, OKR, Onboarding, Channel, templates, migrations, dependency declarations, Frontend, and the empty target `modules/organization`, `modules/permission`, and `modules/directory` packages. Retained Enterprise, Directory, OKR, Onboarding, Permission-core, Channel, script, seed, and bootstrap sources still import one or more deleted Organization/Relationship identities. Those dangling imports are staged evidence for later owner/category commits and are not repaired here; they do not authorize a compatibility module, DAO export, implicit relationship lookup, or relationship Workspace regeneration.
 
 The deleted-authority guard now covers every removed Organization/Relationship module and same-named package representation, static or dynamic restoration of the `org_member_dao` package export, and ordinary Backend test imports of any deleted identity. After contract review and approval, `identity_tenant`, Auth/Account, Organization, Permission, Directory, and Workspace must write their own boundary tests rather than importing or renaming these legacy tests.
+
+The legacy Tenant Knowledge publication adapter is removed as a separate minimum category:
+
+- `backend/app/services/enterprise_sync.py`
+- `backend/tests/test_enterprise_info_tenant_isolation.py`
+
+`enterprise_sync.py` combined `EnterpriseInfo` creation and update, Redis publication, Agent selection, role filtering, and JSON writes under each Agent's `enterprise_info/` directory. Its test mixed Enterprise Info CRUD and Tenant isolation with publication into the deleted Agent aggregate and old Agent-file layout. The adapter and mixed test are deleted rather than carried into the target.
+
+The target owner is definitively `tenant_knowledge`, but its owner contract remains unreviewed and this deletion does not authorize implementation. Enterprise Info persistence and its mixed API routes remain staged source evidence. After contract review and approval, `tenant_knowledge` owns CRUD, Tenant isolation, source facts, and their tests. Agent and Context test consumption and source attribution through the public Product Context consumer boundary; Product Context is never an alternate owner. Workspace owns and tests only its own mutation boundary and does not own Tenant Knowledge or publish it into Agent files.
+
+The deleted-authority guard makes `app.services.enterprise_sync` absent as both a module and a same-named package, with negative fixtures for both restoration forms. Mixed `enterprise.py` routes retain a dangling import until their later source-disposition category; that staged failure does not authorize restoring the publication adapter.
 
 ### Delete without porting
 
@@ -295,7 +306,7 @@ These currently exposed features are not prerequisites for the foundational Runn
 
 - SSO, OAuth identity binding, Google Workspace directory sync, invitations, registration, password recovery, and organization synchronization.
 - Group administration, membership, announcement, Group Session, Group Workspace, group realtime transport, and external-group channel mapping.
-- Tenant EnterpriseInfo, Tenant Knowledge Base files, administrator mutation, Agent read-only Tenant knowledge Context, and current synchronization. This remains a supported product capability but is not a fourth Workspace by default; its Product Context or Tenant Knowledge owner must be decided before the old routes and storage are removed.
+- Tenant EnterpriseInfo, Tenant Knowledge Base files, administrator mutation, Agent read-only Tenant Knowledge Context, and replacement consumption. The definitive owner is `tenant_knowledge`, whose contract remains unreviewed; Product Context is only the public consumer boundary for Agent and Context, and Workspace is not an alternate owner.
 - Heartbeat, schedules-as-Triggers, webhook and polling Triggers, Trigger execution results, and Focus.
 - Feishu, DingTalk, WeCom, WeChat, Slack, Discord, Microsoft Teams, Atlassian, and other mounted Channel configuration, inbound message, outbound delivery, and connection health.
 - OKR objectives, key results, alignment, progress, daily collection, member/company reports, and the OKR Agent product integration.
@@ -338,7 +349,7 @@ This would force new core modules to reference old User, Agent, permission, Task
 - Every current Backend capability is classified as delete, rewrite, reuse, or defer; omission does not decide product behavior.
 - OpenClaw, LangGraph Checkpoint, Command, Runtime Event, Tool Ledger, persistent Task, Approval, fallback Model, quota enforcement, relationship labels/access metadata and no-op compatibility regeneration, Experience RAG, Session Context State, legacy Schedule, startup repair, and old migration behavior have no target execution path.
 - Explicit Membership/Agent visibility assignment is rewritten as the producer of `agent_visibility_grants`; deleting legacy relationship semantics does not remove this required Permission surface.
-- Tenant EnterpriseInfo and Knowledge Base remain explicitly deferred until a Product Context or Tenant Knowledge owner is approved; they are not silently deleted or placed into Agent Workspace.
+- Tenant EnterpriseInfo and Knowledge Base remain explicitly deferred under `tenant_knowledge` until its owner contract is reviewed and approved; Product Context remains a consumer boundary, and Tenant Knowledge is neither silently deleted nor placed under Workspace ownership.
 - Agent handover through mutable creator identity is removed; creation identity remains immutable audit and Tenant administrator retains management authority.
 - The foundational rewrite starts from new module owners and one new schema baseline rather than modifying old Runtime authority in place.
 - Sandbox, storage, conversion, Provider, MCP, external Tool, Channel, realtime, and infrastructure code is reusable only after removing imports and assumptions owned by deleted contracts.
@@ -349,8 +360,10 @@ This would force new core modules to reference old User, Agent, permission, Task
 
 ## Risks and open questions
 
-This source map is grounded in current route registration, models, services, migrations, tests, and startup composition, but dynamic external consumers and Frontend calls still require a separate cross-layer inventory before each API removal. A route with no Backend registration is not treated as supported solely because a file exists. Tenant Knowledge remains an explicit unresolved product owner rather than an omitted capability.
+This source map is grounded in current route registration, models, services, migrations, tests, and startup composition, but dynamic external consumers and Frontend calls still require a separate cross-layer inventory before each API removal. A route with no Backend registration is not treated as supported solely because a file exists. `tenant_knowledge` is the definitive owner, but its unreviewed contract, persistence, API, source-attribution, and Product Context consumption boundaries remain unresolved implementation work.
 
 The exact package tree, implementation slices, retained third-party dependencies, and temporary development branch cutover order remain implementation-planning decisions. No old persistence contract may leak into those decisions merely to reduce short-term code movement.
 
 The final handoff for this deletion is to `identity_tenant` for Membership, Auth/Account for global login fields, Organization for departments and external-directory synchronization, Permission for visibility grants and authorization, Directory for public-service composition, and Workspace only for its independent mutation boundary after each owner contract is reviewed and approved.
+
+The Tenant Knowledge publication handoff is to `tenant_knowledge` for CRUD, isolation, and source facts, Agent and Context for Product Context consumption and source-attribution tests, and Workspace only for its independent mutation boundary after the `tenant_knowledge` owner contract is reviewed and approved.

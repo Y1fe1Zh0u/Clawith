@@ -195,6 +195,14 @@ LEGACY_ORGANIZATION_RELATIONSHIP_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_ORGANIZATION_RELATIONSHIP_IMPORT_IDENTITIES
 )
+LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
+    Path("app/services/enterprise_sync"),
+)
+LEGACY_TENANT_KNOWLEDGE_PUBLICATION_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
 DELETED_AUTHORITY_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
@@ -892,6 +900,24 @@ def _assert_tests_do_not_import_deleted_organization_relationship_authorities(
                         "test imports deleted legacy Organization/Relationship authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
+
+
+def _assert_deleted_legacy_tenant_knowledge_publication_authority(
+    backend_root: Path,
+) -> None:
+    for identity in LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Tenant Knowledge publication authority module was "
+                f"reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Tenant Knowledge publication authority package was "
+                f"reintroduced: {identity}"
+            )
 
 
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
@@ -1685,3 +1711,40 @@ def test_backend_test_import_of_deleted_organization_relationship_fails_guard(
         _assert_tests_do_not_import_deleted_organization_relationship_authorities(
             tmp_path
         )
+
+
+def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
+    _assert_deleted_legacy_tenant_knowledge_publication_authority(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_TENANT_KNOWLEDGE_PUBLICATION_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in (
+            LEGACY_TENANT_KNOWLEDGE_PUBLICATION_REINTRODUCTIONS
+        )
+    ],
+)
+def test_reintroduced_legacy_tenant_knowledge_publication_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Tenant Knowledge publication authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_tenant_knowledge_publication_authority(tmp_path)
