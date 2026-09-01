@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, and old Skill authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, and dedicated OpenClaw/Gateway authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -102,7 +102,19 @@ The deleted tests asserted the old global/tenant Skill ORM, CRUD and direct file
 
 This removal does not implement Capability Market or remove independently owned capability/resource discovery, MCP transport, Workspace/file/storage behavior, target Tool modules, provider/Channel adapters, templates, migrations, or dependencies. The mixed `files.py` Skill routes, Agent bootstrap repair path, model import lists, and database bootstrap imports remain staged dangling consumers for their own minimum owner/category deletions; none authorizes recreating the old Skill identities. Agent-authored creation, evaluation assets, direct database-backed file mutation, and the old Skill import/install facade are gone.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, or Persistent Task persistence.
+The dedicated OpenClaw/Gateway authority is also removed as a separate category:
+
+- `backend/app/api/gateway.py`
+- `backend/app/models/gateway_message.py`
+- `backend/app/services/agent_manager.py`
+- `backend/tests/test_gateway_runtime_a2a.py`
+- `backend/tests/test_agent_manager_soul.py`
+
+The Gateway API, queued remote-message model, API-key polling/report/heartbeat/send-message protocol, OpenClaw container lifecycle, and the combined legacy Agent file-initialization manager no longer exist as importable target authorities. The two deleted tests asserted the retired Gateway protocol and behavior embedded in that combined manager; they are not moved or adapted during deletion. The target Agent, Workspace, Session, A2A, and Channel owners must write fresh tests from their approved contracts.
+
+This minimum deletion deliberately leaves mixed residual branches for their own owner/category commits: OpenClaw fields and API-key/container routes in `models/agent.py` and `api/agents.py`; Gateway queueing in `api/websocket.py`; legacy Gateway schemas in `schemas/schemas.py`; file initialization calls in `api/onboarding.py` and `services/agent_seeder.py`; container status in `api/advanced.py`; Gateway model imports in bootstrap and cleanup/backfill scripts; and mixed storage/API tests that still import `app.services.agent_manager`. Those dangling consumers do not authorize restoring `app.api.gateway`, `app.models.gateway_message`, or `app.services.agent_manager`. Discord's independently owned connection mode and generic Sandbox publication-owner terminology are not classified as OpenClaw authority by this removal.
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, or OpenClaw/Gateway authority.
 
 ### Delete without porting
 

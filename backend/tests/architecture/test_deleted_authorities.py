@@ -63,6 +63,16 @@ LEGACY_SKILL_REINTRODUCTIONS = [
     for representation in ("module", "package")
 ]
 LEGACY_SKILL_CREATOR_FILES = Path("app/services/skill_creator_files")
+OPENCLAW_GATEWAY_IMPORT_IDENTITIES = (
+    Path("app/api/gateway"),
+    Path("app/models/gateway_message"),
+    Path("app/services/agent_manager"),
+)
+OPENCLAW_GATEWAY_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in OPENCLAW_GATEWAY_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
 
 
 class DeletedAuthorityViolation(RuntimeError):
@@ -157,6 +167,20 @@ def _assert_deleted_legacy_skill_authorities(backend_root: Path) -> None:
             "deleted legacy Skill creator-files path was reintroduced: "
             f"{LEGACY_SKILL_CREATOR_FILES}"
         )
+
+
+def _assert_deleted_openclaw_gateway_authorities(backend_root: Path) -> None:
+    for identity in OPENCLAW_GATEWAY_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted OpenClaw/Gateway authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted OpenClaw/Gateway authority package was reintroduced: {identity}"
+            )
 
 
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
@@ -359,3 +383,35 @@ def test_reintroduced_legacy_skill_creator_files_path_fails_the_guard(
         match="deleted legacy Skill creator-files path was reintroduced",
     ):
         _assert_deleted_legacy_skill_authorities(tmp_path)
+
+
+def test_openclaw_gateway_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_openclaw_gateway_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    OPENCLAW_GATEWAY_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in OPENCLAW_GATEWAY_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_openclaw_gateway_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted OpenClaw/Gateway authority {representation} was reintroduced",
+    ):
+        _assert_deleted_openclaw_gateway_authorities(tmp_path)
