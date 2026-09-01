@@ -1,0 +1,150 @@
+# Agent Note: Clean-Break Backend Source Disposition
+
+Status: proposed — the current Backend capability inventory and clean-break source disposition are agreed for implementation planning but no source removal has been applied
+
+## Problem
+
+The current Backend contains the product capabilities that the target must account for, but its implementation joins Agent identity, LangGraph execution, checkpoints, Commands, Tool execution ledgers, product reconciliation, relationship Workspaces, quotas, approvals, compatibility paths, and channel delivery across the same models and services. The `backend/app/services/agent_runtime/` package alone contains about sixty Python files and thirty-four thousand lines. Incrementally reshaping those authorities would preserve the exact lifecycle and compatibility structures the target architecture removes.
+
+The rewrite must not lose supported product capabilities merely because their current owner is wrong. It also must not retain an obsolete model, route, test, dependency, migration, or adapter merely because some useful behavior currently passes through it. This Note classifies current source by capability and disposition; the target architecture Notes remain the authority for replacement behavior.
+
+## Proposal
+
+### Classification
+
+Each current source area receives one disposition:
+
+- `delete`: the capability or compatibility behavior is absent from the accepted target and is not ported.
+- `rewrite`: the product capability remains, but its current authority, persistence, API, or lifecycle is replaced.
+- `reuse`: a bounded provider, transport, conversion, storage, or pure helper implementation may move behind a new owner after its imports and behavior are verified.
+- `defer`: the product capability remains in scope for the complete Backend rewrite but does not block the foundational Agent Runtime slice. It receives its own contract and rewrite before the old Backend is removed.
+
+No current ORM model, API response, internal service contract, migration, or test is automatically compatible with the target. Reuse is code-level implementation reuse, never authority reuse.
+
+### Delete without porting
+
+The following behavior and its dedicated source, schema, tests, configuration, and dependencies are removed:
+
+| Removed behavior | Current source evidence |
+|---|---|
+| OpenClaw Agent type, API key, Gateway polling/report/send-message, remote online status, and Native/OpenClaw branching | `app/models/agent.py`, `app/models/gateway_message.py`, `app/api/gateway.py`, OpenClaw branches in `app/api/websocket.py`, Gateway and OpenClaw tests |
+| Agent execution status, container identity, start/stop lifecycle, Agent expiry, `agent_type`, system-Agent runtime variants, and Agent-owned Runtime counters | current `Agent` fields and `app/api/agents.py` start/stop/API-key routes |
+| LangGraph graph, PostgreSQL Checkpoint, Thread state, Checkpoint compatibility decoding, Command worker, execution takeover/replay, scheduling lanes, and checkpoint-side-effect reconciliation | `app/services/agent_runtime/graph.py`, `state.py`, `checkpointer.py`, `langgraph_driver.py`, `command_worker.py`, `checkpoint_side_effects.py`, `worker_service.py`, `scheduling_lane.py`; `agent_run_commands`; LangGraph dependencies |
+| Generic Runtime Event, Tool execution Ledger, async Tool polling, Tool repair budget, and product reconciler | `agent_run_events`, `agent_tool_executions`, `event_stream.py`, `tool_result_store.py`, `async_tool_poll.py`, `tool_repair_budget.py`, `product_reconciler.py` |
+| Old Prompt and Context authority, implicit relationship/setting queries, and fallback Context assembly | `app/services/agent_context.py`, its direct consumers and tests; replacement comes only from the target Context source contract |
+| Persistent Task and Task Log lifecycle, Task CRUD/intake, Task completion projection, and Task execution service | `app/models/task.py`, `app/api/tasks.py`, `app/services/task_executor.py`, `task_completion.py`, related tests |
+| Approval Request, L1/L2/L3 autonomy policy, approval-driven Waiting/Resume, and approval APIs | `ApprovalRequest`, Agent `autonomy_policy`, `autonomy_service.py`, approval routes in `agents.py` and `enterprise.py`, Runtime approval authorization |
+| Model fallback, cross-Model failover, Model-step/Tool-round cap, Run duration cap, and Token/message/call quota enforcement | `fallback_model_id`, `app/services/llm/failover.py`, `quota_guard.py`, Agent and User quota fields, quota APIs and tests |
+| Relationship labels, creator-management semantics, relationship Memory/access metadata, relationship Workspace, and legacy relationship compatibility API | `AgentRelationship`, `AgentAgentRelationship`, obsolete portions of `app/api/relationships.py`, `access_relationships.py`, relationship Workspace behavior; explicit Membership/Agent visibility assignment is rewritten under Permission rather than removed |
+| Structured Experience library, revision drafts, citation projection, and retrieval/RAG path | `ExperienceEntry`, `ExperienceReference`, `app/api/experience.py`, `experience_retrieval.py`, Runtime experience citation paths |
+| Agent-authored Skill creation, evaluation loop, generated Skill assets, and direct Skill file mutation | `skill_creator_content.py`, `skill_creator_files/`, Agent-facing Skill write/browse routes; first release permits only controlled Market/Admin installation |
+| Agent handover by changing creator identity | `app/api/advanced.py` handover route; target creation audit is immutable and Agent management belongs to Tenant administrator |
+| Session Context State, background Session compaction authority, and checkpoint-derived Context state | `session_context_states`, `session_context_*` services and their tests |
+| Legacy schedule object separate from Trigger | `AgentSchedule`, `app/api/schedules.py`, `scheduler.py`; schedule behavior is re-expressed by Trigger ownership |
+| Startup schema repair, default-Tenant repair, inline data migration, backfill scripts, old bootstrap patches, and the existing Alembic chain | migration and repair blocks in `app/main.py`, `app/scripts/migrate_*`, `backfill_*`, `setup_langgraph_checkpoints.py`, every current `alembic/versions/*` migration |
+| Storage compatibility fallback and old key/path fallback | `app/services/storage_runtime/fallback.py` and compatibility reads of legacy Workspace or storage layouts |
+| Monolithic Model/Tool authority facades | `app/services/llm/caller.py` and `app/services/agent_tools.py`, which combine old ORM, Prompt, permission, fallback, Tool exposure/dispatch, approval, Ledger, plaintext-Secret compatibility, and loop behavior |
+| Unmounted or unconsumed transport code with no current application route or runtime consumer | presently unregistered modules such as `app/api/whatsapp.py`, unless a later Channel inventory establishes a real consumer before removal |
+
+Tests whose only purpose is to preserve one of these deleted contracts are deleted with it. A useful scenario is rewritten against the new owner rather than retaining an old fixture or compatibility adapter.
+
+### Rewrite as foundational modules
+
+These capabilities are required by the first implementation slices and receive new modules, tables, services, APIs, and tests:
+
+| Target module | Current capability to inventory, not preserve | Replacement owner |
+|---|---|---|
+| Identity and Tenant | `Identity`, `User`, `Tenant`, auth middleware, tenant switching | Account, Membership, Tenant, Tenant Principal, Platform Principal |
+| Minimal Permission | Agent access modes, `AgentPermission`, current relationship assignment APIs, scattered route checks | one Permission Resolver, explicit Membership/Agent visibility-grant mutation surface, authorization generation, Run dependency projection |
+| Credential and Audit | Agent credential table, Secret-bearing Channel/Tool/LLM JSON, audit logger | one Credential store with binding-specific owner matrix; closed Audit actor union |
+| Agent | overloaded `Agent` row, templates and bootstrap fields | narrow Tenant Agent identity, Soul, greeting, model relation, enabled/archive controls |
+| Model System | LLM rows, caller/client, runtime settings, capability probing, failover | fixed per-Run Model Policy, Provider adapters, normalized result, required continuation state |
+| Tool and Capability | `Tool`, `AgentTool`, builtin definitions, MCP discovery, Skill database and ClawHub paths | Registry, Tenant Tool Definitions and Grants, Capability Market, per-Agent MCP connections, Workspace Skill packages |
+| Workspace | Agent files, group files, Skill browse/write, Experience Memory, revision and edit-lock tables | Membership, Agent, and Group Workspaces with `memory/`, `skills/`, `files/`, CAS mutation and one-way publication |
+| Agent Runner and Loop | the entire `app/services/agent_runtime/` execution authority | Run, immutable Snapshot, append-only History, Context Projection, one lightweight Runner and Loop |
+| Context | `agent_context.py`, Runtime context builders, Session Context State, implicit relationship/settings lookup, and old Base Prompt | explicit Platform Instructions, Agent Identity/Soul, Product Input, Run Context, Workspace Discovery, Tool Exposure, Retrieved Content, and Model Context Profile sources |
+| Direct Session | `ChatSession`, `ChatMessage`, WebSocket chat intake and delivery | immutable human Session Input, cutoff, Main Run initiation/resume, atomic Session Reply |
+| Task, Todo, A2A, Goal | current Task tables, planning services, A2A Runtime and Gateway correlations | model-facing Tools and Session Goal configuration without Task/Todo/Goal lifecycle objects |
+| Product handoff | checkpoint completion handlers and generic reconciler | owner-specific atomic result records and A2A pending delivery |
+
+The old `app/services/agent_runtime/` package is not incrementally converted. New Runtime modules are built from the accepted contracts; only independently pure helpers may be copied after review. Once the new composition owns a path, the corresponding old Runtime files and tests are deleted rather than kept behind a compatibility switch.
+
+### Reuse behind new owners
+
+The following implementations carry useful bounded behavior and should be evaluated for extraction instead of rewritten automatically:
+
+| Reusable capability | Candidate source | Required adaptation |
+|---|---|---|
+| Sandbox providers and isolation | `app/services/sandbox/` including local Docker/subprocess and remote providers | keep Sandbox as a separate execution venue; remove Runtime-specific leases or identity assumptions that do not match new Run scope |
+| Local and S3 object operations | `app/services/storage_runtime/local.py`, `s3.py`, atomic storage tests | expose only through the new Workspace owner; remove compatibility fallback and legacy paths |
+| Document and text conversion | `document_conversion/`, `text_extractor.py`, `vision_inject.py` | register as ordinary Tools with bounded results |
+| Provider HTTP and multimodal encoding | `app/services/llm/client.py`, `multimodal_content.py`, and individually verified narrow utilities | place behind Provider Adapter; `llm/caller.py` is deleted rather than reused because it owns the old loop, Prompt, Tool, ORM, and fallback behavior |
+| MCP transport and OAuth mechanics | `mcp_client.py` and current OAuth helpers | place behind Tenant Catalog materialization, Agent connection, Credential, and new Tool executor |
+| External Tool protocol operations | capability-specific Atlassian, Feishu, Google Workspace, email, deployment, search, and document helpers | preserve supported operations but regenerate Definition/Grant registration and normalized Tool Result boundaries; `agent_tools.py` and `builtin_tool_definitions.py` remain inventory inputs and are not reusable facades |
+| Channel protocol adapters | Feishu, DingTalk, WeCom, WeChat, Slack, Discord, Teams and Atlassian service modules | retain SDK/webhook/stream protocol code only; rewrite authentication, Product Input, Session/Group ownership, Run start, and delivery |
+| Realtime transport | Redis pub/sub and WebSocket connection mechanics | publish only committed owner events; replace Runtime event/checkpoint payloads |
+| Cross-cutting infrastructure | database engine/session, logging, error mapping, time-zone and business-calendar helpers | retain only generic behavior; rewrite Tenant middleware and security around Principal union |
+
+Reuse requires direct import and behavior review. A candidate that imports deleted ORM models, Runtime contracts, checkpoint data, legacy permission, plaintext Secret fields, or fallback behavior is split or rewritten before use. Code from `llm/caller.py`, `agent_tools.py`, or another authority aggregator may move only as an individually named and tested pure function or single-capability protocol operation; the original module, facade, initialization, fallback, discovery, and dispatch paths are always deleted.
+
+### Preserve product capability but rewrite later
+
+These currently exposed features are not prerequisites for the foundational Runner, but they are not silently deleted. Each becomes a later module slice with its own owner decision and target tests:
+
+- SSO, OAuth identity binding, Google Workspace directory sync, invitations, registration, password recovery, and organization synchronization.
+- Group administration, membership, announcement, Group Session, Group Workspace, group realtime transport, and external-group channel mapping.
+- Tenant EnterpriseInfo, Tenant Knowledge Base files, administrator mutation, Agent read-only Tenant knowledge Context, and current synchronization. This remains a supported product capability but is not a fourth Workspace by default; its Product Context or Tenant Knowledge owner must be decided before the old routes and storage are removed.
+- Heartbeat, schedules-as-Triggers, webhook and polling Triggers, Trigger execution results, and Focus.
+- Feishu, DingTalk, WeCom, WeChat, Slack, Discord, Microsoft Teams, Atlassian, and other mounted Channel configuration, inbound message, outbound delivery, and connection health.
+- OKR objectives, key results, alignment, progress, daily collection, member/company reports, and the OKR Agent product integration.
+- Agent templates, onboarding, directory presentation, activity/usage observability, notifications, public pages, Plaza, enterprise settings, platform administration, email configuration, and AgentBay control.
+
+`defer` means the old implementation remains only until its replacement slice is ready. It does not authorize old tables or APIs in the final clean-break Backend, and it does not create a compatibility layer between old and new identities.
+
+### Migration, composition, and dependency disposition
+
+The target starts with one new Alembic baseline. `alembic/env.py` and the migration template may be reused as infrastructure, but the current version chain and model-import list are replaced. Before that work begins, `backend/alembic/AGENTS.md` is rewritten to record the approved one-time clean-break exception to its current append-only head rule; after the new baseline, it again requires one head, retained forward migrations, and normal verification. Startup runs schema verification and explicit idempotent product bootstrap only; it does not call `create_all`, migrate files, patch existing records, or swallow bootstrap ownership failures.
+
+FastAPI application composition is rewritten so each module registers its own transport adapters and lifecycle resources. Current process-role branches, connector managers, schedulers, Runtime worker startup, and seeding blocks are not copied wholesale. The first release enforces one non-overlapping Runner deployment while connector and product background services retain their own bounded lifecycle owners.
+
+`langgraph`, `langgraph-checkpoint-postgres`, and checkpoint-only `psycopg` usage are removed when no surviving consumer remains. Other dependencies remain only when a retained provider, Channel, conversion, Sandbox, storage, authentication, or product module imports and tests them. Dependency removal follows source removal rather than preceding it.
+
+### Test disposition
+
+New tests are organized by target owner and contract. Runtime tests cover Run start/resume/cancel, Status and History atomicity, Child and product handoffs, Waiting, interruption, Context source reconstruction, Tool exposure/dispatch identity, Provider continuation, and concurrency. Database tests cover fresh baseline creation, composite Tenant foreign keys, partial uniqueness, owner checks, idempotency, authorization generation, and concurrent duplicate submission.
+
+Existing pure tests for provider encoding, Sandbox isolation, S3/local storage atomicity, document conversion, Channel protocol parsing, and external Tool behavior may be retained after their imports are moved to the new boundary. Tests for deleted models, routes, fields, compatibility reads, fallback, quotas, approvals, Checkpoints, Commands, Ledger, Task persistence, relationship Memory, or OpenClaw are removed.
+
+## Alternatives considered
+
+### Incrementally refactor the current Agent Runtime
+
+The current package makes Checkpoint, Command, Tool Ledger, scheduling lane, product reconciliation, and LangGraph Thread state central to execution. Preserving it while introducing Run History and the new owner boundaries would create two authorities and prolong compatibility work the clean break explicitly rejects.
+
+### Delete every Backend file and recreate all provider code
+
+Provider adapters, Channel protocol handling, Sandbox isolation, storage operations, document conversion, and external Tool implementations contain useful bounded behavior. Rewriting all of them simultaneously adds risk without changing their responsibility. They are reused only after separation from old authority.
+
+### Keep every current product table until its frontend is rewritten
+
+This would force new core modules to reference old User, Agent, permission, Task, Credential, and Workspace identities. Deferred product modules may remain temporarily during staged development, but the final Backend has one target schema and no cross-schema compatibility contract.
+
+## Acceptance criteria
+
+- Every current Backend capability is classified as delete, rewrite, reuse, or defer; omission does not decide product behavior.
+- OpenClaw, LangGraph Checkpoint, Command, Runtime Event, Tool Ledger, persistent Task, Approval, fallback Model, quota enforcement, relationship Workspace, Experience RAG, Session Context State, legacy Schedule, startup repair, and old migration behavior have no target execution path.
+- Explicit Membership/Agent visibility assignment is rewritten as the producer of `agent_visibility_grants`; deleting legacy relationship semantics does not remove this required Permission surface.
+- Tenant EnterpriseInfo and Knowledge Base remain explicitly deferred until a Product Context or Tenant Knowledge owner is approved; they are not silently deleted or placed into Agent Workspace.
+- Agent handover through mutable creator identity is removed; creation identity remains immutable audit and Tenant administrator retains management authority.
+- The foundational rewrite starts from new module owners and one new schema baseline rather than modifying old Runtime authority in place.
+- Sandbox, storage, conversion, Provider, MCP, external Tool, Channel, realtime, and infrastructure code is reusable only after removing imports and assumptions owned by deleted contracts.
+- Every currently mounted product capability is either included in a rewrite slice or explicitly deferred; deferred does not mean silently removed.
+- Old APIs, models, tests, configuration, and dependencies are deleted together when their replacement or removal becomes authoritative.
+- No compatibility adapter, dual write, fallback read, startup repair, or legacy data migration connects the current Backend to the target.
+- Implementation planning sequences owner prerequisites before consumers and verifies each cutover through the target contract rather than old test expectations.
+
+## Risks and open questions
+
+This source map is grounded in current route registration, models, services, migrations, tests, and startup composition, but dynamic external consumers and Frontend calls still require a separate cross-layer inventory before each API removal. A route with no Backend registration is not treated as supported solely because a file exists. Tenant Knowledge remains an explicit unresolved product owner rather than an omitted capability.
+
+The exact package tree, implementation slices, retained third-party dependencies, and temporary development branch cutover order remain implementation-planning decisions. No old persistence contract may leak into those decisions merely to reduce short-term code movement.

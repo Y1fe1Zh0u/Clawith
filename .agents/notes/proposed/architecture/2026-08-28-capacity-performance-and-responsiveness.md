@@ -16,6 +16,8 @@ The initial capacity target is 50 simultaneously active Agent executions, counti
 
 Waiting Runs do not retain execution workers. Work above the configured execution capacity may enter a bounded fair queue, but queue pressure must not block control-plane APIs, new input acceptance, active Streaming, cancellation, or Frontend reads.
 
+The first release reaches this target with exactly one Agent Runner instance, a bounded in-memory admission queue, and a bounded asynchronous Run pool. It does not use one process per Agent and does not add distributed Worker ownership. Queue capacity is reserved before Run creation; full capacity rejects Run admission while leaving the initiating product input intact for an idempotent retry. Model and asynchronous Tool waits do not hold database connections or locks, and blocking or CPU-heavy work executes outside request and Runner event loops.
+
 Workspace concurrency uses short resource-scoped commit locks only. Agent-Agent semantic conflict resolution happens outside the lock through Agent execution and bounded retry, so model latency never serializes unrelated Workspace access.
 
 ### Control and execution isolation
@@ -151,6 +153,7 @@ Caching and concurrency can move or hide latency while introducing stale state a
 - Heavy Tools use bounded execution venues and cannot block request, Streaming, or browser event loops.
 - Queries, histories, file operations, Tool batches, and fan-out are bounded.
 - Admission is fair and prevents one Agent, Tenant, Group, Goal loop, or Tool class from starving unrelated work.
+- One non-overlapping Agent Runner instance sustains the initial 50-execution load with bounded in-memory admission and execution, while its startup interruption sweep completes before readiness.
 - Workspace locks cover only revision validation and atomic commit; Agent merge and retry happen outside the lock and remain bounded.
 - Cancellation releases queued and active resources.
 - No accepted durable or Stream event is silently lost.
@@ -158,4 +161,4 @@ Caching and concurrency can move or hide latency while introducing stale state a
 
 ## Risks and open questions
 
-Reference hardware, browser, network, database, storage, Provider quotas, pool sizes, worker counts, queue limits, test duration, exact workload payloads, and p99 targets remain implementation and benchmark decisions. The 50-Agent floor and control/Frontend responsiveness are fixed requirements.
+Reference hardware, browser, network, database, storage, Provider quotas, pool sizes, queue limits, test duration, exact workload payloads, and p99 targets remain implementation and benchmark decisions. The first-release single-Runner boundary, 50-Agent floor, and control/Frontend responsiveness are fixed requirements. Deployment validation must prove one non-overlapping Runner process; the first release intentionally has no runtime singleton lock or fencing and treats overlap as unsupported.

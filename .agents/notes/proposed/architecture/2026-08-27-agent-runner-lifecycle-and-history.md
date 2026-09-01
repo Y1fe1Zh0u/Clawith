@@ -22,7 +22,7 @@ Agent Runner creates Run identity, invokes Agent Loop, owns Run Status and Run H
 
 ### Initiation and creation
 
-The owning product capability initiates a Main Run and supplies Run Input. A Main Agent may call Task Tool; its concrete Executor requests Agent Runner to create one Subagent Run per accepted delegated work description. Each Child Run Input contains that description, and its resolved authorization scope exactly matches the parent Main Run. Agent Runner remains the only Run creator.
+The owning product capability initiates a Main Run and supplies Run Input. A Main Agent may call Task Tool; its concrete Executor requests Agent Runner to create one same-Agent Subagent Run per accepted delegated work description. Each Child Run Input contains that description, uses the Parent Run's Agent identity, and receives exactly the Parent Main Run's resolved authorization scope. Task Tool cannot select another Agent; cross-Agent work uses A2A and creates the target Agent's independent Main Run. Agent Runner remains the only Run creator.
 
 Product source and output ownership follow [Product Input, Main Run, and Output Boundaries](2026-08-28-product-input-main-run-and-output-boundaries.md); Agent Runner consumes only the shared execution contract.
 
@@ -54,7 +54,7 @@ resume
 cancel
 ```
 
-`start` creates a Run for one initiator-owned source identity and returns its reference without waiting for Agent Loop to finish. Repeating `start` with the same initiator and source identity returns the existing Run reference rather than creating another Run. `resume` submits one explicitly related input with its owner-issued source identity to an existing non-terminal Run; the input may be a human reply, correlated Child Result or Need Input, correlated A2A Result Input, Approval result, or another authorized product input. If the Run is Waiting, Agent Runner records the input, changes it to Running, and schedules Agent Loop. If the Run is already Running, Agent Runner records the input without changing status, and Context includes it in the next Model Step Delta. `cancel` applies one authorized cancellation request from a product owner, User, administrator, permission owner, or other valid caller to the target Run.
+`start` creates a Run for one initiator-owned source identity and returns its reference without waiting for Agent Loop to finish. Repeating `start` with the same initiator and source identity returns the existing Run reference rather than creating another Run. `resume` submits one explicitly related input with its owner-issued source identity to an existing non-terminal Run; the input may be a human reply, correlated Child Result or Need Input, correlated A2A Result Input, or another authorized product input. If the Run is Waiting, Agent Runner records the input, changes it to Running, and schedules Agent Loop. If the Run is already Running, Agent Runner records the input without changing status, and Context includes it in the next Model Step Delta. `cancel` applies one authorized cancellation request from a product owner, User, administrator, permission owner, or other valid caller to the target Run.
 
 Agent Runner atomically serializes related-input commits per Run and appends concurrent inputs in commit order. For one target Run, the same source identity is accepted at most once; a duplicate submission returns the already-accepted outcome without another History entry, status transition, or scheduling action. Run History and the existing model-view cursor are the pending-input and deduplication record; there is no separate input queue, idempotency table, or event bus. A terminal Run rejects new input for execution. The source owner retains a late result according to its own product contract, but the result cannot revive the Run.
 
@@ -86,9 +86,11 @@ Running
 
 Waiting is non-terminal. Completed, Failed, Cancelled, and Interrupted are terminal. Task, Todo, and Goal do not add lifecycle states to Run Status.
 
+The first release has no total Run wall-clock limit or idle timeout. A progressing Run continues until it emits Final Output, enters Waiting, encounters an owned failure, is cancelled, or loses execution. Waiting releases its execution slot. Individual Provider, Tool, Sandbox, and external I/O operations must remain technically bounded by their owner so one hung call cannot retain the Runner indefinitely; exact timeouts, error classification, retry, and presentation are implementation decisions rather than another Run limit.
+
 Agent Runner also serializes input commit with terminal outcome commit. Completed cannot commit from a Final Output produced before an already-committed related input was included in a Model Step; Agent Loop continues with that input instead. If Completed, Failed, Cancelled, or Interrupted commits first, a later input cannot change the terminal status. Explicit cancellation and unrecoverable failure may terminate a Run even when unconsumed inputs remain.
 
-A Subagent uses Waiting for missing human or product input and preserves its Run History. Agent Runner submits a correlated Child Need Input to the responsible Main Run without completing the Child. Main may answer immediately or enter its own Waiting state while obtaining human input.
+A Subagent uses Waiting for missing human or product input and preserves its Run History. Agent Runner commits the Child Waiting fact and its correlated Child Need Input to the responsible Main Run in one Parent-first transaction without completing the Child. If Parent is Running, the input remains ordered for its next Model Step; if Parent is Waiting, the same transaction resumes it. If Parent is already terminal, the transaction cancels Child instead of leaving it Waiting. Main may answer immediately or enter its own Waiting state while obtaining human input.
 
 Agent Runner is the only Run Status writer. It records structured Agent Loop events and explicit cancellation or execution-loss facts. Ordinary Tool errors return Tool Results to Agent Loop and do not directly fail the Run.
 
@@ -111,6 +113,36 @@ Agent Loop submits execution events; Agent Runner writes them. Context reads the
 
 Run History is an execution and audit record, not a Checkpoint of process, coroutine, network connection, model request, or in-flight Tool implementation state.
 
+### Persistence shape and upgrade contract
+
+The logical execution authority is `Run` plus append-only `Run History`. The initial physical design uses `agent_runs` for the current lifecycle aggregate, `agent_run_snapshots` for one immutable start snapshot, `agent_run_history` for ordered execution facts, and `run_context_projections` for replaceable Context compaction state. Only `agent_runs` and `agent_run_history` own execution lifecycle facts. Snapshot has no transitions, and Context Projection may be deleted and rebuilt.
+
+`agent_runs` remains a narrow frequently locked row containing Tenant, Agent, optional same-Agent Parent, Status, initiating owner and stable source identity, latest History sequence, active Waiting reference, and lifecycle timestamps. `agent_run_snapshots` contains the immutable secret-free Agent Identity and Soul, resolved authorization and Workspace sources, complete Available Tool Set with versioned executor bindings, resolved non-Secret executor configuration and authorized connection descriptors, Model Policy and Context Profile, product input reference and cutoff, schema version, and content hash. `agent_run_history` assigns one per-Run sequence to each initial or related input, normalized model output, Tool Result, Waiting request, and terminal outcome. `run_context_projections` contains only a derived compaction base, coverage cursor, and rebuild metadata.
+
+The database enforces the Run aggregate's structural invariants. `agent_runs` has globally unique `id`, unique `(tenant_id, id)` and `(tenant_id, agent_id, id)` keys, and a unique start identity `(tenant_id, initiator_kind, initiator_owner_id, source_key)`. All four source-identity fields are non-null. A Child Run references its Parent through `(tenant_id, agent_id, parent_run_id)`, so Parent and Child cannot cross Tenant or Agent; `parent_run_id` is either null or different from the Child identity. Main-only Task dispatch remains enforced by Agent Runner and Task Tool, the only Run writers, rather than a recursive database Trigger.
+
+`agent_run_snapshots` uses `run_id` as its primary key, giving each Run exactly one Snapshot. `agent_run_history` uses `(run_id, sequence)` as its primary key with positive sequence values. Initial and related input rows carry a non-null source kind, owner identity, and source key; a partial unique index on `(run_id, source_kind, source_owner_id, source_key)` for those input kinds makes their submission idempotent. `run_context_projections` uses `run_id` as its primary key because a Run has at most one replaceable projection. Tenant-bearing child tables use `(tenant_id, run_id)` foreign keys to `agent_runs`; database relationships never infer Tenant equality from application filtering.
+
+Run Status is a closed database constraint containing only `Running`, `Waiting`, `Completed`, `Failed`, `Cancelled`, and `Interrupted`. `Waiting` requires one active Waiting reference, every other Status forbids it, terminal Status requires `finished_at`, and Running or Waiting forbids `finished_at`. These checks protect row shape but do not create another transition owner.
+
+Every structured Snapshot and History payload records an explicit kind and schema version and is decoded through a closed typed contract. The stored raw authoritative payload remains available after upgrade. New target releases must either retain a decoder that preserves the existing semantics or perform a verified lossless migration; an unknown or unsupported stored version blocks upgrade or startup rather than being skipped, emptied, defaulted, or reinterpreted. Waiting Runs must remain resumable and terminal Runs inspectable after upgrade. Projection and cache formats may be invalidated and rebuilt because they are not authority.
+
+`start` atomically inserts one Running Run, one immutable Snapshot, and the initial History input. Related input locks the non-terminal Run, deduplicates the owner-issued source identity, appends the next History sequence, and changes Waiting to Running in the same transaction. Waiting, cancellation, and terminal outcomes likewise append their History fact and update Status atomically. A Model Step records the History sequence it read; Final Output cannot commit if a related fact was appended after that read.
+
+History sequencing uses a short row lock on the target `agent_runs` row: the transaction reads `latest_history_sequence`, inserts the next value, and updates the aggregate before commit. It does not use a Tenant-wide or global lock. Different Runs therefore append independently, while concurrent writes to one Run serialize in commit order without duplicate or skipped committed sequence values. Duplicate start or related-input submissions resolve through the unique indexes and return the existing accepted result.
+
+The target has no Run Command, command claim or execution retry, LangGraph Checkpoint, Runtime Event projection, generic Run Relation, Run Output, or execution-to-product reconciliation table. Product owners store Session, Group, A2A, Trigger, Heartbeat, and delivery relations and results. Model System separately owns any required temporary Provider continuation state.
+
+### Durable owner handoff
+
+Run terminal settlement and a same-database initiating owner's result record use one transaction through an in-process owner Outcome Consumer. The owner writes its own Session Reply, Group result, Trigger execution result, Heartbeat result, or equivalent fact without becoming a Run Status or History writer. If owner result recording fails, the terminal transaction rolls back; Agent Runner may retry terminal settlement from the already-produced Final Output without calling Model or Tool again. External Channel delivery occurs after commit under the Channel owner's independent status and retry contract.
+
+Child terminal outcome and its correlated Parent Input commit atomically. Agent Runner locks Parent before Child, appends Child outcome, changes Child Status, appends the exact Parent Input, and resumes a Waiting Parent in one transaction. Parent terminal settlement locks Parent and its bounded active Children in a deterministic order and commits Parent outcome plus Child cancellation outcomes together. A process cannot leave a terminal Parent with a permanently active Child or a Completed Child whose result was never accepted by its non-terminal Parent.
+
+A2A target is independent and therefore uses an A2A-owned durable request/result handoff. Target terminal outcome and A2A result record commit together. A2A then submits the exact result to the source Run idempotently and records delivered, or records `source_terminal` when the source can no longer accept input. Pending delivery survives process loss and may be retried without replaying either Run. This is capability-owned result delivery, not a generic Runtime reconciliation or event bus.
+
+Product input acceptance may precede Run admission. Each product owner persists whether its input has no Run, started Run, explicit admission failure, or retryable pending admission according to that product's contract. It uses the same owner-issued source identity on retry and never presents an unstarted input as Running.
+
 ### Isolation and explicit Context access
 
 Every Run has isolated history. Context receives an explicit Run identity and authorized source set; it never queries a global current Run or implicitly merges concurrent histories.
@@ -125,11 +157,11 @@ The initiating Session supplies the fixed history cutoff defined by [Direct Sess
 
 Waiting pauses only one Run and releases its execution resources. A Main Run may wait for one or more Subagent Run outcomes without blocking Session or unrelated Runs.
 
-When a Subagent Run completes, Agent Runner uses its parent-child relation to submit a Child Result Input containing the Child Run reference and outcome to the responsible Main Run. It resumes a Waiting Main Run or remains ordered in a Running Main Run's History for the next Model Step. The originating Task Tool Call was already settled by acceptance; no Task record routes or stores the outcome.
+When a Subagent Run completes, Agent Runner uses its parent-child relation to commit the Child outcome and one Child Result Input containing the Child Run reference and outcome to the responsible Main Run atomically. It resumes a Waiting Main Run or leaves the input ordered in a Running Main Run's History for the next Model Step. The originating Task Tool Call was already settled by acceptance; no Task record routes or stores the outcome.
 
-When a Child Need Input event occurs, Agent Runner submits it to the responsible Main Run while leaving the Child Waiting. A later Task Tool resume operation supplies the answer to the exact Child Run, which continues with its existing History. Any terminal Parent outcome still cancels the Waiting Child.
+When a Child Need Input event occurs, Agent Runner locks Parent before Child and atomically appends the Child Waiting request, changes Child to Waiting, and appends one idempotent Parent Input keyed by Child Run and Waiting reference. A later Task Tool resume operation supplies the answer to the exact Child Run, which continues with its existing History. Process loss cannot preserve the Waiting Child without its Parent notification, and any terminal Parent outcome cancels the Child in the same transaction.
 
-If a parent Main Run becomes Completed, Failed, Cancelled, or Interrupted, Agent Runner cancels its still-active Subagent Runs. Completed does not wait for Child completion and adds no completion gate; if Main finishes prematurely, that execution error is accepted and its abandoned Child work is cancelled. A late Child outcome may remain recorded but cannot revive the parent or settle new work.
+If a parent Main Run becomes Completed, Failed, Cancelled, or Interrupted, Agent Runner atomically cancels its still-active Subagent Runs in the Parent terminal transaction. Completed does not wait for Child completion and adds no completion gate; if Main finishes prematurely, that execution error is accepted and its abandoned Child work is cancelled. A late Child outcome may remain recorded but cannot revive the parent or settle new work.
 
 When the permission owner revokes authorization required by a Running or Waiting Run, it requests cancellation through Agent Runner. Agent Runner cancels that Run and propagates cancellation to its active Child Runs. Permission grant never resumes or expands an existing Run; later work starts a new Run with newly resolved authorization.
 
@@ -142,6 +174,14 @@ A structured Model Error reporting missing or uncommitted required Provider cont
 ### No durable execution layer
 
 Agent Runner does not implement a Durable Coordinator, cross-Worker takeover, arbitrary-execution-point Checkpoint recovery, Lease ownership, or generic side-effect reconciliation. A future Run may use committed facts from prior work without reviving that execution.
+
+### Initial single-Runner execution
+
+The first target release runs exactly one Agent Runner instance with one bounded in-memory admission queue, one bounded asynchronous Run pool, and one in-memory active-Run registry. It has no Worker table, execution owner or fencing field, Worker heartbeat, distributed claim, durable execution queue, advisory lock, or `SKIP LOCKED` scheduling protocol. Fifty active Runs are concurrent asynchronous executions rather than fifty Worker processes. Blocking or CPU-heavy Tool and Sandbox work leaves the Runner event loop through bounded execution venues.
+
+Agent Runner reserves queue capacity before creating a Run. If the bounded queue is full, it rejects admission without creating the Run; the initiating product fact remains committed and may retry the same stable source identity later. Database failure releases the reservation without creating a Run. After capacity is reserved, Runner atomically creates Run, Snapshot, and initial History, enqueues the Run after commit, and returns its reference. If the process remains alive but enqueue fails after commit, Runner releases the reservation and atomically marks that Run Interrupted with its terminal History outcome. A process loss after database commit but before or during execution leaves a Running Run that the startup sweep marks Interrupted rather than replaying.
+
+Before the single Runner becomes ready after process start, it atomically marks every pre-existing Running Run Interrupted, appends the terminal outcome, and cancels active Child Runs. Waiting and terminal Runs remain unchanged. The deployment must prevent overlapping Runner instances and use stop-then-start replacement; readiness remains false until the startup sweep completes. The first release deliberately adds no code- or database-enforced singleton lock or fencing. Runner replicas must equal one, Runner must not start in multiple Uvicorn workers, and deployment validation must reject rolling overlap. Starting overlapping Runner processes is an unsupported deployment state that may cause duplicate or uncertain external side effects. A later need for multiple Runner instances, rolling overlap, or execution high availability requires a new execution-ownership and fencing decision rather than silently adding claims to this design.
 
 ## Alternatives considered
 
@@ -173,6 +213,7 @@ That would reintroduce takeover, arbitrary Checkpoints, Leases, and recovery pol
 - Delegated Task descriptions are carried by Tool Calls and Child Run Input and do not create another ID, persistent record, execution history, result object, or lifecycle state machine.
 - A Subagent Run inherits its parent Main Run's complete resolved authorization and Workspace access without inheriting parent or sibling Run History.
 - Main Runs and Subagent Runs use the same Agent Runner, Agent Loop, Status, and History contracts.
+- Each Subagent Run uses the same Agent as its Parent Main Run; another Agent is invoked only through an independent A2A Main Run.
 - Agent Runner exposes conceptual start, resume, and cancel operations.
 - Start is non-blocking and returns a Run reference before execution completes.
 - Start is idempotent for one initiator-owned source identity and returns the existing Run reference on duplicate submission.
@@ -181,17 +222,29 @@ That would reintroduce takeover, arbitrary Checkpoints, Leases, and recovery pol
 - Concurrent related inputs retain Agent Runner commit order in Run History without a separate pending-input queue.
 - Completed cannot commit over already-recorded input that was absent from its producing Model Step; terminal status committed first cannot be revived by later input.
 - Run Status is limited to Running, Waiting, Completed, Failed, Cancelled, and Interrupted until a real execution consumer requires another state.
+- Run has no total wall-clock or idle timeout; per-operation technical timeout belongs to Provider, Tool, Sandbox, or external I/O implementation and does not become a hidden Model Step, Token, or Run-duration quota.
 - Agent Runner is the only Run Status and Run History writer.
+- Run and append-only Run History are the only execution lifecycle authorities; immutable Run Snapshot and replaceable Context Projection add no lifecycle owner.
+- Composite foreign keys prevent cross-Tenant and cross-Agent Run relationships; one Snapshot per Run, ordered History identity, closed Status shape, start idempotency, and related-input idempotency are database-enforced.
+- Concurrent History writes lock only their target Run aggregate; different Runs proceed independently and repeated source identities do not create duplicate Runs or History facts.
+- Start, related input, Waiting, cancellation, and terminal outcome commit Status and their ordered History facts atomically without Run Command, Checkpoint, Runtime Event, generic Relation, Run Output, or execution-to-product reconciliation tables.
+- Same-database product outcome recording, Child-to-Parent result delivery, and Parent-to-Child terminal cancellation use the defined atomic handoff; independent A2A uses its own durable idempotent pending-result delivery without replaying execution.
+- Child Waiting and its correlated Parent Need Input commit atomically; a terminal Parent cancels the Child instead of leaving an unreported Waiting Run.
+- Authoritative Snapshot and History payloads are explicitly versioned, remain losslessly readable across target-version upgrades, and never disappear through unsupported-version fallback or projection invalidation.
 - Run Histories are isolated and Context receives an explicit Run identity and authorized source set.
 - Task Tool Calls settle immediately with acceptance; later Child outcomes become correlated Child Inputs for Parent Main Runs without a Task object or another lifecycle owner.
 - Subagent Need Input is a non-terminal correlated Child event; Main may wait for human input and later resume the exact same Waiting Child through Task Tool.
 - Every terminal Parent outcome, including Completed, cancels active Child Runs without a completion gate, replay, or revival.
 - Permission revocation cancels affected Running and Waiting Runs and their Child Runs; permission grant changes only newly started Runs.
 - Agent Runner contains no Goal or Task state machine, Durable Coordinator, cross-Worker takeover, arbitrary Checkpoint recovery, Lease, or generic reconciliation protocol.
+- The first release has exactly one non-overlapping Agent Runner instance with bounded in-memory admission and execution; startup converts every inherited Running Run to Interrupted before readiness, while Waiting Runs survive.
+- Single Runner is enforced only by first-release deployment configuration and validation; overlapping Runner processes are unsupported and no advisory lock, epoch, or fencing is implemented.
+- Queue saturation rejects admission before Run creation, and process loss never causes an accepted Run to be replayed by the restarted Runner.
+- Database or enqueue failure releases reserved capacity; a committed Run that cannot enter the live queue becomes Interrupted rather than remaining an orphaned Running Run.
 - Agent Runner does not own Session, parent-requirement judgment, Goal continuation policy, Context, Model, Tool, Workspace, or product-delivery facts.
 
 ## Risks and open questions
 
-Exact APIs, storage schema, parent-child correlation fields, Task Tool settlement, cancellation propagation, streaming subscription, admission limits, and future queue behavior remain implementation decisions.
+Exact column types, bounded payload schemas, parent-child correlation fields, Task Tool settlement, cancellation propagation, streaming subscription, and admission limits remain implementation decisions within the fixed persistence ownership, upgrade contract, and initial single-Runner boundary.
 
 Concurrent Main Runs intentionally observe fixed Session cutoffs supplied by their initiating inputs. Context must preserve those cutoffs and source attribution without merging private Run histories implicitly.

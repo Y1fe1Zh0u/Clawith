@@ -12,7 +12,7 @@ The current Agent file root and its nested `workspace/` use Workspace to mean tw
 
 ### One Workspace per subject
 
-Every User, Agent, and Group has exactly one persistent Workspace. All three use the same fixed top-level areas:
+Every User, Agent, and Group has exactly one persistent Workspace. In this product vocabulary, User means one Tenant Membership defined by [Account, Membership, Tenant, and Principal](2026-08-31-account-membership-tenant-principal.md), not the global Account. All three use the same fixed top-level areas:
 
 ```text
 User Workspace
@@ -31,35 +31,38 @@ Group Workspace
   └── files/
 ```
 
-Workspace identity is keyed only by its owning User, Agent, or Group. The architecture does not create a Workspace for each `(User, Agent)`, `(User, Group)`, Task, or other relationship. Conversation, Task Tool Call, Child Run, and other execution facts remain with Session and Run History unless an explicit operation writes selected content into a Workspace.
+Workspace identity is keyed only by its owning Membership, Agent, or Group. A User Workspace key contains Tenant and Membership identity; two Memberships of the same Account never share one Workspace. The architecture does not create a Workspace for each `(User, Agent)`, `(User, Group)`, Task, or other relationship. Conversation, Task Tool Call, Child Run, and other execution facts remain with Session and Run History unless an explicit operation writes selected content into a Workspace.
 
 The same Workspace capability provides scoped list, search, read, preview, write, move, delete, current-revision conflict, and audit behavior for all three subject types. Humans receive only authorized list, search, read, and preview surfaces. Workspace mutation is available only to authorized Agent Runs through Workspace Tools. Subject type changes authorization and available content, not the basic file protocol.
 
 ### Visibility and isolation
 
-A User Workspace is the User's one private persistent Workspace across every Agent the User authorizes. Its owner may inspect and preview it, while authorized Runs acting for that User may read and mutate it. Different Users' Workspaces are isolated.
+A User Workspace is one Membership's private persistent Workspace across every same-Tenant Agent the Membership authorizes. Its owner may inspect and preview it, while authorized Runs acting for that Membership may read and mutate it. Different Memberships' Workspaces are isolated, including Memberships of the same Account in different Tenants.
 
-An Agent Workspace is the Agent's shared persistent Workspace across its authorized Users and Runs. Same-Tenant authorized Users may inspect and preview the same Agent Memory, Skills, and Files rather than receiving private copies; only authorized Agent Runs mutate them.
+An Agent Workspace is the Agent's shared persistent Workspace across its authorized Users and Runs. A Tenant Membership may inspect and preview the Agent Memory, Skills, and Files exactly when the Agent visibility owner says that Membership can see the Agent; Tenant membership alone is not sufficient. Only authorized Agent Runs mutate the Workspace.
 
 A Group Workspace is shared within the Group. Active members may inspect and preview it, and authorized Group Runs may read and mutate it. Individual members' User Workspaces remain private and are not imported automatically.
 
 ```text
 Direct Run for User U by Agent A
-  ├── User U Workspace
-  └── Agent A Workspace
+  ├── User U Workspace: read and write
+  └── Agent A Workspace: read; Main-only Memory distillation exception
 
 Group Run for Group G by Agent A
-  ├── Group G Workspace
-  └── Agent A Workspace
+  ├── Group G Workspace: read and write
+  └── Agent A Workspace: read; Main-only Memory distillation exception
 
 Heartbeat for Agent A
-  └── Agent A Workspace
+  └── Agent A Workspace: read and write
+
+Agent-owned Trigger or A2A Main Run for Agent A
+  └── Agent A Workspace: read and write
 
 A2A Main Run received by Agent B
-  └── Agent B Workspace
+  └── Agent B Workspace: read and write
 
 Subagent Run created by Main Run A
-  └── exactly the Workspaces authorized for Main Run A
+  └── Parent Workspace direction, without Agent Memory distillation Tool
 ```
 
 Subagent Run inherits the complete resolved Workspace access of its parent Main Run. A delegated Task work description has no Workspace or persistence of its own. A2A is different: its receiving Main Run uses the receiver's own Workspace and only explicit A2A Input, never the sender's Workspaces.
@@ -72,7 +75,9 @@ The beginning of `MEMORY.md` contains a standard compact Guide and Index. When a
 
 Multiple authorized Memory Indexes remain separate. Context does not merge them into one Memory source, and search is always scoped to an explicitly authorized Workspace.
 
-Every Memory creation, edit, deletion, Index update, and cross-Workspace copy is explicit. Agent Final Output, Run completion, delegated-work judgment, Context compaction, search, and reads do not mutate Memory implicitly.
+Every Memory creation, edit, deletion, and Index update is explicit. Agent Final Output, Run completion, delegated-work judgment, Context compaction, search, and reads do not mutate Memory implicitly.
+
+Direct and Group Main Runs may update the executing Agent's own Memory only through a dedicated distillation Tool. Distillation creates new Agent-owned generalized knowledge rather than copying a Membership or Group file or Memory entry. Memory owner defines first-release privacy and Secret filtering during implementation and records source Run, source Workspace type, and content hash in non-model-visible Audit. Subagent Run cannot distill; it returns a proposed reusable insight to Main for judgment. The current Run observes a successful write only through Tool Result, while the updated Agent Memory Index becomes a source only for later Runs.
 
 ### Skills
 
@@ -84,7 +89,11 @@ User Skills provide methods reusable across the User's authorized Agents. Agent 
 
 When a Run receives more than one Workspace, each Skill Index retains its User, Agent, or Group source. Same-named Skills from different Workspaces do not silently overwrite or merge. Context selection and precedence are defined later.
 
-Installed Workspace Skill files are the only authority for that subject's Skill package. An Agent may use an authorized catalog, marketplace, installer, or loader Tool to discover, validate, and copy Skills into a Workspace, but that external source does not become a second store for the installed content.
+Installed Workspace Skill files are the only authority for that subject's Skill package. [Tenant Capability Market and Agent Installation](2026-08-31-tenant-capability-market-and-agent-installation.md) owns shared package discovery, deduplication, source, and version metadata. An authorized Agent may install a Market Skill into its Workspace, but another Agent receives no files or Context until it installs the item separately. Market source does not replace the installed Workspace content authority, and installation affects only new Runs.
+
+The first release prohibits Agent Runs from creating, editing, deleting, or publishing Skill content. Agent may install an existing Market Skill only through Capability Management, which validates and atomically materializes the package but does not let the model rewrite it. Tenant management and later Frontend editing may update installed Skill through the same Workspace Service, Permission, package validation, atomic commit, cache invalidation, and Audit boundary.
+
+Skill uses mainstream load-time freshness rather than immutable per-Run package revisions. The Run fixes only the Skill Index visible at start, so a newly installed, removed, or renamed Skill changes discovery from the next Run. Full `SKILL.md` and auxiliary files are read from the current installed package on explicit load; an update never retroactively changes content already placed in a model request or Run History, but the next load after Workspace Service invalidates the Skill cache reads the new content. Process restart is not required, and the first release has no Skill revision table, retained package history, or file-system watcher outside controlled Workspace mutations.
 
 ### Files
 
@@ -97,13 +106,17 @@ files/
 
 Directories such as `projects/`, `reports/`, `source-code/`, `datasets/`, and `images/` are examples only. The platform does not pre-create them, treat them as product objects, or move files automatically based on type.
 
-Generation, authorized import, and delivery are ways a file enters or leaves a Workspace, not separate persistent namespaces. Human-uploaded or externally received content remains Product Input or temporary content until an Agent explicitly writes or copies it into an authorized Workspace. User-private files belong to a User Workspace, Group-shared files belong to a Group Workspace, and Agent-shared files belong to an Agent Workspace. Cross-Workspace copy or movement is an explicit Agent publication across ownership boundaries.
+Generation, authorized import, and delivery are ways a file enters or leaves a Workspace, not separate persistent namespaces. Human-uploaded or externally received content remains Product Input or temporary content until an Agent explicitly writes it into the current Membership or Group Workspace. User-private files belong to a User Workspace, Group-shared files belong to a Group Workspace, and Agent-shared files belong to an Agent Workspace.
+
+The first release permits file publication only from Agent Workspace into the current Membership or Group Workspace. It uses revision-checked Copy, never Move, and does not mutate the Agent source. Direct and Group Runs cannot copy Membership or Group files into Agent Workspace and cannot write Agent `files/`; their outputs go directly to the Membership or Group Workspace. Agent-owned Main Runs may write Agent `files/`. Memory distillation is the only Direct or Group exception for writing the executing Agent Workspace and is not generic cross-Workspace copy.
 
 Run Output and Child Result content may reference Workspace files without creating a separate Artifact store. Runtime temporary files, sandbox copies, caches, and uncommitted candidates are not Workspace content; they become durable only through an explicit write to an authorized Workspace.
 
 ### Agent-only mutation and concurrency
 
-Workspace Tools are the only mutation boundary for `memory/`, `skills/`, and `files/`; Agent Runs do not bypass them to modify underlying storage, and human product surfaces expose no direct mutation operation. Every readable mutable resource has a logical current revision. An Agent mutation supplies the revision it was based on, and Workspace commits only when that revision is still current.
+Workspace Tools are the only mutation boundary for `memory/`, `skills/`, and `files/`; Agent Runs do not bypass them to modify underlying storage, and first-release human product surfaces expose no direct mutation operation. Every readable mutable resource has a logical current revision. An Agent mutation supplies the revision it was based on, and Workspace commits only when that revision is still current.
+
+Later Frontend editing may let an authorized human mutate Workspace content, but it must call the same Workspace mutation contract with Permission, Revision/CAS, atomic commit, and Audit. It cannot write storage directly or introduce a second mutation authority.
 
 ```text
 read content + revision
@@ -142,7 +155,7 @@ Soul is mandatory Agent identity and behavior configuration. It is loaded by Con
 
 Group Announcement is public Group product content, not Group Soul, Memory, or Skill. Long-term Group knowledge belongs in Group Memory, and flexible collaboration behavior belongs in Group Skills.
 
-Session and its Goal-mode configuration, Task Tool Calls, Child Run facts, Run History, Focus, Trigger, Schedule, messages, credentials, permissions, model configuration, checkpoints, Runtime state, file revisions, locks, audit metadata, and reconciliation data remain outside Workspace even when their implementations use persistence.
+Session and its Goal-mode configuration, Task Tool Calls, Child Run facts, Run History, Focus, Trigger, Schedule, messages, credentials, permissions, model configuration, file revisions, locks, and audit metadata remain outside Workspace even when their implementations use persistence.
 
 ### Minimal Tenant and RBAC boundary
 
@@ -158,7 +171,8 @@ User Workspace
   - authorized Runs acting for that User may read and mutate
 
 Agent Workspace
-  - same-Tenant authorized humans may list, search, read, and preview
+  - a Membership that can see the same-Tenant Agent may list, search, read, and preview
+  - an unseen Agent cannot be reached through Workspace API, direct path, or known Agent identity
   - authorized Agent Runs may read and mutate
   - Soul and Agent product configuration remain Tenant-admin operations
 
@@ -168,6 +182,8 @@ Group Workspace
 ```
 
 Subagent Runs inherit the parent Main Run's resolved Workspace access exactly. A2A resolves the receiver's own Tenant and Workspace access and never inherits the sender's. The initial architecture has no company/private/custom Agent modes, per-file ACL, directory ACL, ABAC, policy engine, or capability-token hierarchy. More granular policy requires a later product decision.
+
+Workspace does not own or duplicate Agent visibility rules. [Minimal RBAC and Agent Visibility](2026-08-31-minimal-rbac-and-agent-visibility.md) supplies one visibility decision used consistently by Agent discovery, Session creation, A2A target discovery, and Agent Workspace preview.
 
 Newly granted Workspace authorization affects only new Runs. When User, Agent, Group, or Tenant authorization required by a Running or Waiting Run is revoked, the permission owner cancels that Run through Agent Runner, which also cancels its active Child Runs. Workspace does not attempt to remove already-observed Index content from model Context or rewrite Run History.
 
@@ -201,12 +217,18 @@ Automatic summarization can persist incorrect conclusions or move private inform
 - No Workspace is created for a User-Agent or other relationship pair.
 - Every Workspace has fixed `memory/`, `skills/`, and `files/` areas and no nested second Workspace boundary.
 - User Workspaces are isolated from other Users and remain continuous across authorized Agents.
+- User Workspace means Membership Workspace and is keyed by Tenant and Membership, never by global Account alone.
 - Agent Workspaces are shared across the Agent's authorized Users and Runs.
+- A Membership can preview an Agent Workspace if and only if it can see that Agent; direct Workspace access cannot bypass Agent visibility.
 - Group Workspaces are shared within the Group without importing members' User Workspaces.
 - Memory initially consists of one `memory/MEMORY.md` per Workspace; only its labeled Guide and Index entry section is injected automatically and all other content requires scoped search and read.
 - Skills are authoritative Workspace file packages; only their labeled Index is injected automatically and full instructions and resources are read on demand.
 - User, Agent, and Group Memory and Skill Indexes remain separate and retain source identity.
 - `files/` is an arbitrary durable file tree; uploads and outputs do not create additional persistent namespaces or a separate Artifact store.
+- Direct and Group Runs write ordinary files only to their Membership or Group Workspace; Agent-owned Main Runs may write Agent files, and Agent-to-Membership/Group file publication is one-way Copy.
+- Membership and Group files cannot be copied or moved into Agent Workspace in the first release.
+- Direct and Group Main Runs may distill only generalized Agent Memory through a dedicated Tool; Subagent Runs only return proposals, and new Memory Index content becomes available from the next Run.
+- Agent Runs cannot create, edit, delete, or publish Skill in the first release; controlled Market/Admin installation or future Frontend editing invalidates caches, and the next explicit load reads current content without a Skill revision system.
 - Authorized humans may inspect and preview Workspace content but cannot mutate it directly; all Workspace mutations come from authorized Agent Runs through Workspace Tools.
 - Every Workspace mutation and cross-Workspace publication is explicit and authorized.
 - Every mutable Workspace resource uses revision-checked atomic mutation; locks remain resource-scoped and cover only storage commit rather than model, Run, or surrounding Tool latency.
@@ -214,14 +236,16 @@ Automatic summarization can persist incorrect conclusions or move private inform
 - Repeated contention preserves competing content through a non-destructive Agent-selected result rather than overwriting a newer revision or persisting unresolved conflict markers.
 - Multi-file Skill installation and update publish one complete package atomically.
 - Soul, Heartbeat, Announcement, product state, Runtime state, and operational metadata remain outside Workspace with their owning modules.
-- Workspace authorization uses Tenant isolation, User ownership, Tenant membership for Agent Workspace, and active Group membership only; these relations grant humans preview access and authorized Runs mutation access without a relationship Workspace or fine-grained file policy.
+- Workspace authorization uses Tenant isolation, User ownership, resolved Agent visibility for Agent Workspace preview, and active Group membership; these relations grant humans preview access and authorized Runs scoped mutation access without a relationship Workspace or fine-grained file policy.
 - Workspace permission grants affect only new Runs; revocation cancels affected non-terminal Runs and their Child Runs rather than dynamically editing Context.
 - Permission detail beyond the accepted minimal Tenant/RBAC model, Context precedence, and concrete file APIs remain later product or implementation decisions.
 
 ## Risks and open questions
 
-Subagent Runs inherit their parent Main Run's resolved Workspace permissions exactly. Concrete authorization queries must implement the accepted Tenant, User-owner, Tenant-member, and Group-member rules without adding relationship Workspaces or finer ACLs.
+Subagent Runs inherit their parent Main Run's resolved Workspace authorization but not Main-only Agent Memory distillation eligibility. Concrete authorization queries must implement the accepted Tenant, User-owner, Agent-visibility, and Group-member rules without adding relationship Workspaces or finer ACLs.
 
 Context must preserve source identity when same-named Skills or conflicting Memory appear in multiple authorized Workspaces. Any permission model beyond the minimal Tenant, owner, and membership rules requires a later product decision.
+
+Agent Memory distillation is an accepted first-release privacy risk. It may transform facts observed in a Membership or Group Run into Memory shared with every Membership that can see the Agent. The first release relies on the Memory owner's bounded content, source audit, and implementation-time privacy and Secret filtering, but it does not provide deterministic data-owner consent, PII classification, preview approval, or revocable publication. Those controls belong to the later Memory security version; this capability must not be represented as safe for untrusted private data merely because the model calls it generalized knowledge.
 
 The implementation must choose current-revision, atomic-commit, bounded-retry, and package-publication mechanisms that preserve these semantics across every Agent process that may mutate the same Workspace. This choice must not turn model latency into lock duration or require human conflict resolution. Retained version history and accidental-deletion recovery are not part of the initial Workspace contract.

@@ -6,7 +6,7 @@ Status: proposed — the macro Context source categories, ownership, and assembl
 
 Every model call needs instructions, product input, execution history, Workspace discovery, and executable capabilities from different authoritative owners. Without explicit source categories, Context can become another global state store, duplicate product facts, merge private sources, expose all Tools, or leak Runtime implementation vocabulary into the model prompt.
 
-The architecture must define the macro composition before choosing exact Prompt text, product fields, Provider message roles, caching, token budgets, or persistence formats.
+The architecture must define the macro composition before choosing exact Prompt text, product fields, Provider message roles, caching, context-window allocation, or persistence formats.
 
 ## Proposal
 
@@ -82,7 +82,7 @@ Product Input does not grant Tool or Workspace authorization, does not become Ru
 
 ### Run Context
 
-Run Context comes from Agent Runner and includes Run Input, current isolated Run History, Waiting requests, and ordered related inputs such as Child Result, Child Need Input, A2A Result, Approval result, or human reply. Main and Subagent histories remain isolated. Parent, Child, sibling, source, and target Run History never enters implicitly.
+Run Context comes from Agent Runner and includes Run Input, current isolated Run History, Waiting requests, and ordered related inputs such as Child Result, Child Need Input, A2A Result, or human reply. Main and Subagent histories remain isolated. Parent, Child, sibling, source, and target Run History never enters implicitly.
 
 A delegated work description enters a Subagent Run through Run Input. Task Tool acceptance enters Main Run History immediately; later Subagent Result or Need Input enters the responsible Main Run as a correlated Child Input regardless of whether Main is Running or Waiting. Task view is derived from these Run facts and has no separate source category or persistence. Fixed Session history remains bounded by the initiating Session cutoff rather than growing with concurrent Session activity.
 
@@ -106,7 +106,7 @@ Context injects the separately labeled Guide and Index entry section from each a
 
 Workspace Discovery includes only a compact model-facing usage rule that an authorized `files/` area exists and must be inspected through list, search, and read Tools when current work may depend on files. The rule does not claim that any particular file exists and does not enumerate paths. Actual file information enters the next model call only through the resulting Workspace Tool Result.
 
-The authorized Workspace set, Memory entry sections, and Skill Indexes are fixed in the Run-scoped source snapshot. Subagent Runs inherit the parent snapshot. Explicit writes become visible through Tool Results when relevant, but entry sections and Indexes do not refresh silently; new Runs resolve the current Workspace versions. Newly granted authorization does not expand the active Run snapshot. Revocation cancels every affected Running or Waiting Run before another Model Step rather than attempting to erase already-observed Context or rewrite History.
+The authorized Workspace set, Memory entry sections, and Skill Indexes are fixed in the Run-scoped source snapshot. Subagent Runs inherit the parent snapshot. Explicit writes become visible through Tool Results when relevant, but entry sections and Indexes do not refresh silently; new Runs resolve the current Workspace versions. A full Skill package is retrieved explicitly from the current controlled Workspace installation and the resulting content enters History; later file updates cannot rewrite content already observed, but a later explicit load may read updated content because the first release keeps no immutable Skill revision archive. Newly granted authorization does not expand the active Run snapshot. Revocation cancels every affected Running or Waiting Run before another Model Step rather than attempting to erase already-observed Context or rewrite History.
 
 Workspace Index presence is discovery context, not authorization enforcement. Every real Workspace read or mutation still enforces the resolved scope at the Tool execution boundary.
 
@@ -190,7 +190,7 @@ The model request preserves exact stable-prefix ordering and serialization so Mo
 
 Current time is not injected universally. Model System and the initiating product capability first determine whether the model already has sufficient date knowledge and whether local time materially affects the work. When time is model-visible, it is rounded to the minute, includes its timezone, belongs in the volatile delta after stable instruction and source prefixes, and changes only when the displayed minute changes. Seconds and subsecond precision require a separate product need.
 
-The current Run does not silently refresh fixed Soul, Platform Instruction, Memory Index, Skill Index, or Product Input versions after their sources change. Explicit Tool Results make current-Run mutations visible when relevant, and a new Run resolves the new source versions.
+The current Run does not silently refresh fixed Soul, Platform Instruction, Memory Index, Skill Index, or Product Input versions after their sources change. Explicit Tool Results make current-Run mutations visible when relevant, a controlled update affects the next explicit full Skill load after cache invalidation, and a new Run resolves the new index versions.
 
 Compaction intentionally creates a new Run Base and coverage position. Later model steps reuse that base and continue loading only events after its cursor. Tool discovery updates the Tool Exposure segment and later request view without requiring unrelated source categories to be read again.
 
@@ -281,4 +281,4 @@ Second-level timestamps invalidate otherwise identical request prefixes without 
 
 ## Risks and open questions
 
-Exact source payloads, Prompt wording, message-role mapping, Provider encoding, token budgeting, compaction policy, stable-source fingerprinting, cache APIs and keys, event cursors, telemetry schemas, and persistence representations remain implementation decisions.
+Exact source payloads, Prompt wording, message-role mapping, Provider encoding, context-window allocation, compaction policy, stable-source fingerprinting, cache APIs and keys, event cursors, telemetry schemas, and persistence representations remain implementation decisions.

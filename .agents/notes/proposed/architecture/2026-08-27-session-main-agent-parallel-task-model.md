@@ -12,7 +12,7 @@ The conceptual model must not use Session, Run, Task, Goal, or an implementation
 
 ### Session and Main Run
 
-A direct Session belongs to one User and one Main Agent. A User may have multiple Sessions. Session is the human-facing conversation containing human inputs, Main Agent replies, visible delegated-work progress, and completed results. Its detailed input, history-cutoff, concurrency, reply, and delivery boundaries are defined by [Direct Session Input, History, and Concurrency](2026-08-27-direct-session-input-history-and-concurrency.md).
+A direct Session belongs to one User and one Main Agent. User means one Tenant Membership under [Account, Membership, Tenant, and Principal](2026-08-31-account-membership-tenant-principal.md), not a global Account. A User may have multiple Sessions. Session is the human-facing conversation containing human inputs, Main Agent replies, visible delegated-work progress, and completed results. Its detailed input, history-cutoff, concurrency, reply, and delivery boundaries are defined by [Direct Session Input, History, and Concurrency](2026-08-27-direct-session-input-history-and-concurrency.md).
 
 Each Session Input may create a Main Run. One Main Agent may have multiple concurrent Main Runs in one Session. A running or waiting Main Run does not hold an exclusive Main Agent or Session lock, so later input can start another Main Run without waiting.
 
@@ -23,6 +23,8 @@ A Main Run owns the human conversation, intent understanding, direct execution, 
 Task Tool is part of the Main Run's directly exposed core Tool set. Subagent Runs are leaf executions: they do not receive or discover Task Tool and cannot recursively create Tasks or Subagent Runs. A Subagent that needs further decomposition reports that need to the responsible Main Run.
 
 Subagent Runs own concrete delegated execution. They receive a Run-scoped Todo Tool for planning and tracking their own steps, use the authorized work Tools and Workspaces, verify outputs, and return a complete Run Result. Main Runs do not receive Todo Tool; their delegated-work view is derived from Task Tool Calls, Child Run facts, and correlated Child Results.
+
+Task Tool always creates Child Runs for the same Agent that executes the responsible Main Run. It accepts delegated work descriptions but no target Agent selection. The Child therefore keeps the same Agent Identity, Soul, and Agent Workspace while inheriting the Parent Run's resolved authorization. Calling another Agent is A2A: the target Agent receives an independent Main Run, resolves its own authorization and Workspace, and may use its own Task Tool to create same-Agent Child Runs.
 
 Task is a delegated work description submitted by Main Agent through Task Tool in the current Main Run. It is analogous to a Run-scoped Todo item but has the side effect of starting a Child Run. Task has no independent table, ID, persistent record, planner, controller, status, transition loop, Workspace, completion judge, cross-Run lifecycle, or result object.
 
@@ -127,7 +129,7 @@ User, Agent, and Group Workspace ownership and progressive Memory and Skill load
 
 Human messages and Goal continuation enter through Session; Group events, Heartbeats, Triggers, A2A requests, and other product inputs enter through their respective owners. All create or resume only Main Runs. A Subagent Run can start only through Task Tool from a Main Run. No external or product input enters a Subagent Run directly.
 
-A2A is a separate trust boundary. The receiving Agent executes an independent Main Run with its own resolved authorization and Workspace plus only the text, file, Artifact, or other content explicitly carried by the A2A Input. It does not inherit the sender's User or Group Workspace, Agent Workspace, Tools, credentials, approvals, Run History, or implicit Context.
+A2A is a separate trust boundary. The receiving Agent executes an independent Main Run with its own resolved authorization and Workspace plus only the text, file, Artifact, or other content explicitly carried by the A2A Input. It does not inherit the sender's User or Group Workspace, Agent Workspace, Tools, credentials, Run History, or implicit Context.
 
 An Agent-calling Tool Call returns acceptance immediately. `notify` is one-way. For `consult` and `task_delegate`, the A2A capability submits a correlated A2A Result Input after the target Main Run completes. The input resumes the exact source Main Run when Waiting or enters its next Model Step when Running. The target is independent: source termination does not cancel it, and its late result cannot revive a terminal source Run.
 
@@ -141,7 +143,7 @@ The detailed lifecycle contract is defined by [Agent Runner Lifecycle and Run Hi
 
 Waiting pauses only the corresponding Run and releases its current execution resources. A Main Run waiting for Subagent Run Results does not block Session, another Main Run, or unrelated delegated work.
 
-A Subagent missing human or product input enters Waiting and preserves its Run History. Agent Runner submits one correlated Child Need Input to the responsible Main Run. The input identifies the exact Child Run and requested information but does not complete the Child or judge the parent requirement. It resumes Main if Waiting or remains ordered for its next Model Step if Running.
+A Subagent missing human or product input enters Waiting and preserves its Run History. Agent Runner commits that Waiting transition and one correlated Child Need Input to the responsible Main Run atomically. The input identifies the exact Child Run and requested information but does not complete the Child or judge the parent requirement. It resumes Main if Waiting or remains ordered for its next Model Step if Running. If Main is already terminal, the same transaction cancels Child rather than leaving an unreachable Waiting Run.
 
 The Main Agent first decides whether its own Context can answer. If so, it uses Task Tool to resume the same Waiting Child Run with the answer. Otherwise the Main Run requests input through its owning product capability and enters Waiting. Explicit human input resumes the Main Run, which then resumes the exact Child through Task Tool. Task Tool returns acceptance immediately, Main waits for the next Child Input, and the Child continues with its original Run Input and preserved History.
 
@@ -189,7 +191,7 @@ Cancelling Goal mode disables the Session configuration, stops further continuat
 - **Main Run:** A root Run initiated by the owner of human, Group, Heartbeat, Trigger, A2A, Goal-mode, or another product input.
 - **Task:** One Run-scoped delegated work description submitted through Task Tool; not a persistent object, ID, status, state machine, or execution engine.
 - **Task Tool:** The Main-only Tool that accepts one or more delegated work descriptions and starts one Child Run for each accepted description.
-- **Subagent:** The Agent selected to execute delegated Task work.
+- **Subagent:** A Child Run in which the same Agent as the Parent Main Run executes delegated Task work.
 - **Subagent Run:** A leaf Run created through Task Tool with the Task description as Run Input; it cannot invoke Task Tool recursively.
 - **Todo Tool:** A Run-scoped Subagent planning Tool for recording execution steps; not a Task, state machine, permission owner, or completion gate.
 - **Run Result:** The outcome emitted by one Subagent Run and delivered to the responsible Main Run as a correlated Child Result Input.
@@ -246,13 +248,14 @@ These mechanisms are not required for responsive conversation or reconstructable
 - Main Run selects further work, consumes Child Results, and judges whether the parent requirement is satisfied without Task completion or Task Result objects.
 - Task and Todo are Run-scoped model working views rather than independent planners or lifecycle controllers; Goal mode is lightweight Session configuration and policy rather than a Goal entity or state machine.
 - Main Runs and Subagent Runs use the same Agent Runner and Agent Loop.
+- Task Tool creates only same-Agent Child Runs and has no target-Agent argument; work for another Agent uses A2A and creates that Agent's independent Main Run.
 - Task has no Workspace; every Subagent Run inherits its parent Main Run's complete resolved authorization and Workspace access without inheriting parent Run History.
 - An A2A Main Run resolves the receiver's own authorization and receives only explicit A2A Input; it never inherits the sender's authorization or implicit Context.
 - A2A Tool Calls settle immediately; correlated A2A Result Input enters the exact non-terminal source Main Run for `consult` and `task_delegate`, while `notify` never waits for output.
 - An A2A target Main Run survives source termination, and its late result cannot revive a terminal source Run.
 - A waiting Main Run does not block new Session input, other Main Runs, or unrelated delegated work.
 - Every terminal Parent Main Run outcome, including Completed, cancels its active Subagent Runs without a completion gate or revival.
-- A Subagent missing required input remains Waiting and emits a correlated Child Need Input event; Main answers or waits for human input and then resumes the exact same Child Run.
+- A Subagent missing required input atomically enters Waiting with a correlated Child Need Input to Main; Main answers or waits for human input and then resumes the exact same Child Run, while a terminal Main causes immediate Child cancellation.
 - A Session has at most one active Goal mode and stores its objective, committed progress, wait condition, and original `/goal` Session Input relation without a separate Goal table or ID.
 - Goal mode repeatedly invokes the same Main Agent through ordinary Main Runs and adds no Goal object, status state machine, Agent role, Run type, Runner, or Agent Loop.
 - A new Goal-mode Main Run reuses the original Session relation and cutoff, receives bounded committed continuation facts rather than inheriting earlier Run History, and never resumes a failed or interrupted Run.
@@ -263,6 +266,6 @@ These mechanisms are not required for responsive conversation or reconstructable
 
 ## Risks and open questions
 
-Task Tool names, arguments, selected-Agent policy, derived delegated-work presentation, and concurrency bounds remain implementation decisions.
+Task Tool names, remaining arguments, derived delegated-work presentation, and concurrency bounds remain implementation decisions.
 
 The concrete Session storage shape, failure bound, wake-condition representation, and user controls remain implementation decisions under the fixed constraint that Goal mode adds no separate table, ID, domain object, or state machine.

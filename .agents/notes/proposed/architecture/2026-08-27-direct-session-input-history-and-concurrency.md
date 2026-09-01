@@ -6,13 +6,13 @@ Status: proposed — the direct Session input, Run-routing, history-cutoff, and 
 
 A direct Session must remain responsive while multiple Main Runs execute or wait concurrently. The architecture needs one authoritative definition of what creates Session Input, when input starts or resumes a Main Run, which committed history that Run may see, and how interleaved replies retain their origin.
 
-Session must not become the global input bus for Group, Heartbeat, Trigger, A2A, Task, approval, or other product events. Channel transport, Run History, Task internals, streaming, and delivery also need to remain outside Session ownership.
+Session must not become the global input bus for Group, Heartbeat, Trigger, A2A, Task, or other product events. Channel transport, Run History, Task internals, streaming, and delivery also need to remain outside Session ownership.
 
 ## Proposal
 
 ### Direct Session and Session Input
 
-A direct Session is the human-facing conversation between one User and one Main Agent. Session Input is an immutable, authenticated human input explicitly submitted to that Session for the Main Agent to process.
+A direct Session is the human-facing conversation between one User and one Main Agent. User here means one Tenant Membership under [Account, Membership, Tenant, and Principal](2026-08-31-account-membership-tenant-principal.md), not a global Account. Session Input is an immutable, authenticated human input explicitly submitted to that Session for the Main Agent to process.
 
 ```text
 Direct Web message --------+
@@ -32,7 +32,6 @@ Heartbeat ------------> Heartbeat
 Trigger event --------> Trigger
 A2A request ----------> A2A capability
 Subagent Run Result --> correlated Child Result Input --> parent Main Run
-Approval result ------> Approval capability
 Goal continuation ----> Session Goal mode
 ```
 
@@ -85,7 +84,7 @@ Later facts enter an existing Run only through an explicit owned path. A Subagen
 
 Every Main Run initiated by Session remains related to an existing Session Input. An ordinary direct Main Run relates to its current human input. Automatic Goal-mode Main Runs relate to the original `/goal` Session Input without creating new inputs.
 
-For an ordinary direct Main Run, Session commits its final Run Output as an Agent Reply related to the current input. For Goal mode, `continue` and `wait` are terminal iteration outputs consumed internally by Session to update the existing Goal fields and do not create Agent Replies. `continue` starts the next ordinary Main Run immediately; `wait` starts it only after the stored wake condition is satisfied. `achieved` and final stopped failure produce ordinary Agent Replies related to the original `/goal` input. No Goal-specific Reply or projection type is introduced.
+For an ordinary direct Main Run, Session commits its Agent Reply related to the current input in the same database transaction as Run terminal Status and outcome History. If Reply persistence fails, terminal settlement rolls back without re-executing Model or Tool. For Goal mode, `continue` and `wait` are terminal iteration outputs consumed in that terminal transaction to update the existing Goal fields and do not create Agent Replies. `continue` starts the next ordinary Main Run immediately; `wait` starts it only after the stored wake condition is satisfied. `achieved` and final stopped failure produce ordinary Agent Replies related to the original `/goal` input. No Goal-specific Reply or projection type is introduced.
 
 Goal mode has no separate `require_user` output. When a Goal Main Run produces ordinary Need Input, it remains Waiting. A human answer is an ordinary Session Input explicitly related to that wait and resumes the same Main Run under the standard Session rule. Other Session messages remain independent.
 
@@ -111,13 +110,15 @@ Session owns accepted human Inputs, committed Main Agent Replies, their relation
 
 Channel Adapter owns transport parsing and provider delivery. A committed Session Reply remains committed if channel delivery fails. Streaming deltas, delivery attempts, and provider acknowledgements are projections and do not become alternate Session or Run outcomes.
 
-Session does not own Run History, Task Tool Calls, Child Run facts, Group events, Heartbeat, Trigger, A2A, Approval, Workspace content, or Channel delivery state. It references facts produced by those owners when they need to become visible in the human conversation.
+Session Input remains authoritative even when no Run was admitted. Session records whether the input has a started Run, explicit admission failure, or retryable pending start and never displays an unstarted input as Running. Retrying uses the same Session-owned source identity.
+
+Session does not own Run History, Task Tool Calls, Child Run facts, Group events, Heartbeat, Trigger, A2A, Workspace content, or Channel delivery state. It references facts produced by those owners when they need to become visible in the human conversation.
 
 ## Alternatives considered
 
 ### Route every product input through Session
 
-Group, Heartbeat, Trigger, A2A, Child Run, Task Tool Call, and approval facts have different owners and are not human-authored direct conversation. Routing them through Session would turn it into a shared lifecycle and event bus.
+Group, Heartbeat, Trigger, A2A, Child Run, and Task Tool Call facts have different owners and are not human-authored direct conversation. Routing them through Session would turn it into a shared lifecycle and event bus.
 
 ### Resume the latest active Main Run for every new message
 
@@ -140,7 +141,7 @@ This preserves a superficial order by delaying independently completed work. Rep
 - A direct Session belongs to one User and one Main Agent.
 - Only an authenticated human input explicitly submitted to the direct Session creates Session Input.
 - Direct Channel Adapters normalize and route messages but do not own Session Input or Agent behavior.
-- Group, Heartbeat, Trigger, A2A, Subagent Run Result, Approval, and automatic Goal continuation facts do not create Session Input; the original human `/goal` command does.
+- Group, Heartbeat, Trigger, A2A, Subagent Run Result, and automatic Goal continuation facts do not create Session Input; the original human `/goal` command does.
 - Session Input is recorded before execution and remains distinct from Run Input.
 - An explicit human reply resumes the exact related Waiting Main Run; every other Session Input starts a new Main Run.
 - Every started Main Run receives a fixed Session-history cutoff through its originating input.

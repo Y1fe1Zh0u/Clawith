@@ -75,6 +75,16 @@ The Registry is the only current capability directory. A canonical name resolves
 
 The clean-break target has no aliases, old-name dispatch, legacy protocol adapters after registration, or runtime name inference. A source adapter may construct an explicit canonical name before registration, but downstream code consumes that name without parsing it for behavior.
 
+### Minimal configuration persistence
+
+Tool System persists Tenant-scoped `tool_definitions` and `agent_tool_grants`; shared Tool, MCP, and Skill discovery and installation are owned by [Tenant Capability Market and Agent Installation](2026-08-31-tenant-capability-market-and-agent-installation.md). `tool_definitions` stores stable identity, Tenant, source, related Tenant Catalog or MCP identity, upstream name when applicable, model description and input schema, schema version, executor key, non-Secret configuration, enabled state, and timestamps. Code-owned Builtins remain global Registry capabilities, but bootstrap materializes their fixed Definition identity once per Tenant so every persisted Grant and Run reference uses an ordinary same-Tenant foreign key. `agent_tool_grants` stores Tenant, Agent, Tool Definition, optional same-Agent MCP connection, optional non-MCP Credential reference, non-Secret per-Agent configuration, granting Membership, revocation timestamp, and timestamps, with one row per Agent and Tool Definition. A non-MCP Grant may reference only a Tenant Credential or a Credential owned by that same Agent; personal Credential uses the separate Membership-Agent-Tool connection. Default Tools become explicit Grants when an Agent is created rather than remaining implicit through missing assignment rows.
+
+Builtin and code-owned Product Definitions and Executors remain code-owned. Bootstrap materializes their fixed identities for foreign keys and management projection; an editable database row cannot redefine their contract or Executor, and startup fails if its materialized Definition contradicts code. An MCP Catalog Item owns its Tenant-scoped server route and discovery revision while related Tool Definitions store stable upstream identity and Executor binding. Secret material never enters Definition or non-Secret configuration and follows [Credential and Secret Boundary](2026-08-31-credential-and-secret-boundary.md).
+
+Canonical model-facing names are immutable lowercase Provider-compatible identifiers matching `^[a-z][a-z0-9_]{0,63}$`. Builtin and reserved names are unique globally; Tenant Tool names are unique within their Tenant and cannot shadow a global or reserved name. Two Tenant MCP servers with the same upstream Tool name receive distinct stable names within that Tenant, while different Tenants may use the same model-facing name. Registry uses scoped identity and explicit Executor binding; prefixes and source names never authorize, schedule, or dispatch behavior.
+
+Tool Call and Tool Result require no execution table. The committed normalized model output records each Tool Call before dispatch, and each bounded Tool Result appends directly to Run History. The initial physical design has no Tool execution, Ledger, Lease, Progress, recovery, or reconciliation table.
+
 ### Skills remain separate
 
 Installed Skills are authoritative file packages in User, Agent, and Group Workspaces. A logical Skill catalog indexes the authorized Workspace packages and provides instructions, workflows, examples, and static resources to Context. It is not a second persistence authority, and Skills do not enter the Tool Registry.
@@ -89,7 +99,7 @@ A reusable script that authenticates to or calls an external system API is an ex
 
 ### Authorization and the available Tool set
 
-Authorization runs before exposure and Context assembly. It resolves the Registry into one immutable Available Tool Set containing the Definitions and Executor bindings that the current execution may use.
+Authorization runs before exposure and Context assembly. It resolves the Registry into one immutable Available Tool Set containing the Definitions and Executor bindings that the current execution may use. Run Snapshot stores the complete secret-free set: canonical name, model description, input schema and schema version, Definition identity, versioned executor key, Grant or connection identity, and the complete versioned resolved executor configuration assembled from Definition, Catalog route, Agent Grant, MCP connection, and other capability-owned non-Secret settings. It also stores every authorized Membership, Agent, and Tenant connection descriptor that the model may select, including stable reference, owner kind, label, capabilities, and configuration schema version but no Secret bytes. Default versus searchable exposure is a view over this fixed set and does not require every Definition to enter the prompt.
 
 ```text
 Tool Registry
@@ -107,11 +117,15 @@ Available Tool Set
       +------------> Tool Call dispatch
 ```
 
-Dispatch performs an ordinary name lookup in the same frozen Available Tool Set supplied to exposure. An absent name returns Unknown Tool. Tool System does not rerun complete discovery or exposure policy when the model calls a Tool, but every protected read, mutation, or external side effect still enforces current Tenant isolation and basic RBAC at the concrete execution boundary.
+Dispatch performs an ordinary name lookup in the same frozen Available Tool Set supplied to exposure. An absent name returns Unknown Tool. After process restart or Waiting resume, Tool System reconstructs dispatch target and non-Secret parameters from the persisted Run Snapshot rather than current mutable Definition, Catalog, Grant, or Connection configuration. Current rows are read only to revalidate Tenant, enablement, revocation, Credential ownership, and Secret availability or rotation; they cannot redirect or reconfigure the current Run. Tool System does not rerun complete discovery or exposure policy when the model calls a Tool, but every protected read, mutation, or external side effect still enforces current Tenant isolation and basic RBAC at the concrete execution boundary.
+
+Executor keys are versioned code contracts. Deployment validation must retain every executor key referenced by a non-terminal Run and every decoder required by its Snapshot schema; an upgrade that removes one is blocked rather than silently binding the Run to new behavior. Definition refresh changes current catalog and new Runs but never rewrites a stored Available Tool Set. External service behavior may still fail at call time, but the Tool name, schema, authorization identity, and local dispatch meaning observed by the Run do not drift.
 
 The permission owner retains enough relation to identify active Running or Waiting Runs that depend on a revoked Tenant, User, Agent, Group, Tool, or Workspace authorization. Revocation requests cancellation through Agent Runner for those Runs and their Child Runs; it does not attempt to remove facts already observed by the model or rewrite Run History. Newly granted permission never expands a frozen Available Tool Set or current Context and becomes available only to new Runs.
 
-Tools with no permission never enter the direct or searchable candidate set. Whether a potentially approvable Tool is discoverable before user approval belongs to the later authorization policy.
+Tools with no permission never enter the direct or searchable candidate set. Approval policy, approval persistence, approver selection, and approval-driven Run behavior are deferred to the future Permission architecture and do not add fields or states to the first-release Tool contract.
+
+Workspace Tool eligibility also applies the accepted directional contract. Direct and Group Main Runs receive one dedicated Agent Memory distillation Tool but no Agent Skill mutation, Agent-file write, or private-to-Agent copy capability. Subagent Runs do not receive Memory distillation and return candidate reusable knowledge to Main. Agent-owned Main Runs may receive ordinary Agent Workspace file mutation but no Skill mutation. Controlled Capability Management installs Market Skills outside model-authored Workspace editing. These role rules do not change the inherited Workspace authorization set.
 
 ### Exposure and search
 
@@ -187,7 +201,7 @@ Agent-calling Tools preserve three product intents: `notify`, `consult`, and `ta
 
 A2A content may contain text, file references, Artifact references, and other supported content blocks. Sending a file does not create another A2A lifecycle mode. Whether the model-facing surface uses one Tool with modes, multiple Tools, or a separate file convenience Tool is deferred implementation design.
 
-The concrete Agent-calling Tool Executor requests Agent Runner to create the target Agent's independent Main Run. That Run resolves the target Agent's own authorization and Workspace and receives only the content explicitly carried by the A2A Input. The Tool System does not create a Run directly, the target execution is not a Subagent Run in the caller's Task tree, and no separate A2A Runtime or Agent role is introduced.
+The concrete Agent-calling Tool Executor requests Agent Runner to create the target Agent's independent Main Run. That Run resolves the target Agent's own authorization and Workspace and receives only the content and authenticated request-scoped Membership connection references explicitly carried by the A2A Input. It never receives Token bytes or implicit sender authorization. The Tool System does not create a Run directly, the target execution is not a Subagent Run in the caller's Task tree, and no separate A2A Runtime or Agent role is introduced.
 
 ```text
 notify
@@ -209,7 +223,7 @@ Every Agent-calling Tool Call settles immediately with acceptance and a stable A
 
 The target Main Run remains independent from the source Main Run. Failure, cancellation, interruption, or completion of the source does not cancel the target. A late result is recorded by A2A but cannot resume or revive a terminal source Run; later product presentation of that result remains an A2A implementation decision.
 
-A2A never carries the sender's User or Group Workspace, Agent Workspace, Tool authorization, credentials, approvals, Run History, or implicit Context. Text, files, Artifacts, and other content cross the boundary only when the A2A Input explicitly includes them through an authorized reference or copy.
+A2A never carries the sender's User or Group Workspace, Agent Workspace, broad Tool authorization, Run History, or implicit Context. Text, files, Artifacts, and explicitly delegated Membership connection references cross the boundary only when the A2A Input includes their bounded authorized reference. Credential material never crosses.
 
 ### Task Tool
 
@@ -218,6 +232,8 @@ Task Tool is the optional Main Agent delegation surface. Main Agent decides whet
 Task Tool belongs to the Main Run's small directly exposed core set. A Subagent Run is a leaf execution and does not receive Task Tool in its directly exposed set, searchable candidates, or dispatchable Run bindings. This role eligibility is separate from inherited business, Tool, and Workspace authorization.
 
 One Task Tool Call accepts one or more delegated work descriptions and requests Agent Runner to create one Child Run for each accepted description. Each Child creation has stable correlation derived from the existing Parent Run, Tool Call, and assignment within that call, so retry cannot duplicate a Child and no Task ID is introduced. Each description becomes its Child Run Input, and every Child inherits the parent Main Run's complete resolved authorization and Workspace access. The Tool returns acceptance and Child references immediately rather than waiting for Child completion. A later Task Tool Call appends new work and starts new Child Runs; it does not update or reopen an earlier Task object.
+
+Task Tool has no target-Agent selection. Every Child Run uses the responsible Main Run's Agent Identity, Soul, Agent Workspace, and resolved authorization. Work assigned to another Agent uses an A2A Tool and creates the target Agent's independent Main Run; that target Main Run may use its own Task Tool to create its own same-Agent Child Runs.
 
 ```text
 Main Run Tool Call
@@ -236,7 +252,7 @@ Authorization inheritance does not copy parent model context or private Run Hist
 
 If a Subagent determines that the delegated work needs another specialist, further decomposition, or broader coordination, it reports that need in its Run Result. The responsible Main Agent decides whether to submit another work description through Task Tool. Subagent Runs cannot recursively delegate through Task Tool.
 
-If required human or product input is missing, the Subagent remains Waiting and Agent Runner submits a correlated Child Need Input containing the exact Child Run reference and requested information. Main may answer from Context or request input through its product capability and enter Waiting. Task Tool then resumes the same Child Run with the answer and returns acceptance immediately; the Child's prior Context and Run History remain intact.
+If required human or product input is missing, Agent Runner atomically moves the Subagent to Waiting and appends a correlated Child Need Input containing the exact Child Run reference and requested information to its non-terminal Main. Main may answer from Context or request input through its product capability and enter Waiting. Task Tool then resumes the same Child Run with the answer and returns acceptance immediately; the Child's prior Context and Run History remain intact. A terminal Main causes Child cancellation in that transaction.
 
 ### Todo Tool
 
@@ -257,6 +273,8 @@ Run History
 ```
 
 A terminal interrupted Run may contain a Tool Call without a Tool Result. That absence records an incomplete exchange and never authorizes automatic replay. A concrete Tool may own a provider idempotency key, receipt lookup, or status query when that external provider supports one; Tool System does not generalize those operations.
+
+Tool Executor derives a stable external idempotency key from the committed Run and Tool Call identity and supplies it when the provider supports idempotent operations. A definite provider rejection or failure returns an ordinary error Tool Result. A timeout, disconnect, or ambiguous provider response after a possible external side effect returns a bounded `uncertain_outcome` Tool Result when the execution boundary remains alive; it must not be presented as a definite failure or authorize automatic retry. The Agent may issue an explicit capability-owned receipt or status query when available. If the execution process disappears before any Tool Result is committed, the Run becomes Interrupted and the recorded Tool Call remains without a Result.
 
 ### Presentation
 
@@ -323,14 +341,18 @@ The three intents have different product meaning, but only `notify` is one-way; 
 
 - The model-visible Tool Definition contains only `name`, `description`, and `input_schema`.
 - Every Builtin, MCP, product, and external Tool enters one Registry through Tool Registration containing one Definition and one Executor.
+- Tool System persists Tool Definitions and explicit Agent Tool Grants; Capability Market and Agent MCP Connections own shared registration and Agent-specific authentication, and no Secret or approval policy enters Tool Definition.
+- Canonical Tool names are stable Provider-compatible identifiers, while upstream MCP names and explicit Executor bindings remain separate and no behavior is inferred from a name prefix.
 - Duplicate canonical names fail registration; no downstream behavior is inferred from name prefixes, aliases, source types, or Executor classes.
 - Skills remain authoritative Workspace file packages behind a logical catalog and do not enter the Tool Registry; reusable external API scripts become Tools.
-- Authorization produces one immutable Available Tool Set used by both Context and dispatch.
+- Authorization produces one immutable Available Tool Set used by both Context and dispatch; Run Snapshot persists every Definition, versioned executor binding, complete resolved non-Secret executor configuration, and authorized connection descriptor required for Waiting resume.
+- Deployment retains every executor binding referenced by a non-terminal Run and blocks an incompatible upgrade rather than dispatching that Run through new Tool semantics.
 - Permission grants affect only new Runs; revocation cancels affected Running and Waiting Runs and their Child Runs without rewriting prior Context or History.
 - Unauthorized Tools are neither directly exposed nor searchable.
 - A small default Tool set and one `search_tools` Tool provide access to the authorized searchable remainder.
 - Tool Call contains `id`, `name`, and `input`; Tool Result contains `call_id`, model-visible `content`, and `is_error`.
 - Ordinary Tool failures return Tool Results to the Agent Loop rather than terminating the Run or entering Verify.
+- Tool execution distinguishes definite failure from `uncertain_outcome`; possible external side effects are never retried automatically, while provider-supported idempotency and explicit capability-owned status lookup remain available.
 - Executor dependencies are explicit and the per-call context does not become a shared lifecycle or service bus.
 - Model output determines Tool Call grouping and dependency order; Scheduler only applies bounded execution policy to one model-produced batch.
 - Agent-calling Tools preserve `notify`, `consult`, and `task_delegate` as product intents and support text, file, Artifact, and other approved content without treating attachments as another lifecycle mode.
@@ -338,8 +360,9 @@ The three intents have different product meaning, but only `notify` is one-way; 
 - A2A request reference makes target Run creation and result delivery idempotent without a separate A2A Runtime.
 - `notify` uses one-way send; `consult` and `task_delegate` use one asynchronous request-result path whose correlated A2A Result Input enters the exact non-terminal source Main Run.
 - Source termination never cancels the independent target Main Run, and a late A2A result cannot revive a terminal source Run.
-- A2A carries only explicit Input content and never inherits the sender's Workspace, Tool authorization, credentials, approvals, Run History, or implicit Context.
+- A2A carries only explicit Input content and optional authenticated request-scoped Membership connection references; it never inherits the sender's Workspace, broad Tool authorization, Credential material, Run History, or implicit Context.
 - Task Tool is optional and selected by Main Agent through ordinary model behavior rather than an Agent Loop rule; one call submits one or more work descriptions and starts one Child Run for each accepted description.
+- Task Tool creates only same-Agent Child Runs and cannot select another Agent; A2A is the sole cross-Agent execution path.
 - Child creation is idempotent from existing Parent Run, Tool Call, and assignment correlation and adds no Task ID.
 - Later Task Tool Calls append new delegated work rather than updating a persistent Task; Task has no table, ID, status, result object, cross-Run lifecycle, or Workspace.
 - Task Tool Executor returns acceptance immediately; correlated Child Result and Need Input enter Main Run History later without adding another lifecycle owner.
@@ -355,6 +378,6 @@ The three intents have different product meaning, but only `notify` is one-way; 
 
 The canonical name format and MCP namespace rules must preserve stable uniqueness without restoring name parsing as behavior. The implementation must define this contract before migrating registrations.
 
-The initial default Tool set, search ranking and bounds, authorization and approval policy, safe parallel allowlist and limit, ContentBlock variants, A2A Tool names and interface count, and frontend presentation details remain implementation decisions.
+The initial default Tool set, search ranking and bounds, basic authorization policy, safe parallel allowlist and limit, ContentBlock variants, A2A Tool names and interface count, and frontend presentation details remain implementation decisions. Approval remains outside this Tool design until the Permission architecture owns it.
 
 The migration must trace every current Tool producer, persisted representation, consumer, compatibility path, and cleanup path before deleting the old protocols and aggregators. This Note authorizes a clean target, not partial coexistence between old and new authorities.
