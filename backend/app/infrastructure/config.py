@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -26,8 +26,10 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="Clawith", min_length=1)
     APP_VERSION: str = Field(default_factory=_read_version, min_length=1)
     DEBUG: bool = False
-    DATABASE_URL: str = Field(
-        default="postgresql+asyncpg://clawith:clawith@localhost:5432/clawith_target",
+    DATABASE_URL: SecretStr = Field(
+        default=SecretStr(
+            "postgresql+asyncpg://clawith:clawith@localhost:5432/clawith_target"
+        ),
     )
     CONTROL_DATABASE_POOL_SIZE: int = Field(default=20, gt=0)
     EXECUTION_DATABASE_POOL_SIZE: int = Field(default=20, gt=0)
@@ -35,9 +37,10 @@ class Settings(BaseSettings):
 
     @field_validator("DATABASE_URL")
     @classmethod
-    def _complete_async_postgres_url(cls, value: str) -> str:
+    def _complete_async_postgres_url(cls, value: SecretStr) -> SecretStr:
+        secret_value = value.get_secret_value()
         try:
-            url = make_url(value)
+            url = make_url(secret_value)
         except ArgumentError as exc:
             raise ValueError("DATABASE_URL must be a complete SQLAlchemy URL") from exc
 
@@ -65,6 +68,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="forbid",
+        hide_input_in_errors=True,
+        validate_default=True,
     )
 
 

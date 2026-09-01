@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -35,14 +36,14 @@ class DatabaseResources:
 
 
 def _create_role_engine(
-    database_url: str,
+    database_url: SecretStr,
     *,
     echo: bool,
     pool_size: int,
     max_overflow: int,
 ) -> AsyncEngine:
     return create_async_engine(
-        database_url,
+        database_url.get_secret_value(),
         echo=echo,
         pool_size=pool_size,
         max_overflow=max_overflow,

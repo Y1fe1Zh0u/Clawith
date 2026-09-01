@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -122,6 +122,53 @@ def test_target_configuration_rejects_incomplete_database_urls(database_url: str
         _settings(DATABASE_URL=database_url)
 
 
+@pytest.mark.parametrize(
+    ("password", "database_url"),
+    [
+        (
+            "alpha-secret-value",
+            "postgresql+asyncpg://clawith:alpha-secret-value@localhost:65536/clawith_target",
+        ),
+        (
+            "bravo-secret-value",
+            "mysql+asyncmy://clawith:bravo-secret-value@localhost:3306/clawith_target",
+        ),
+        (
+            "charlie-secret-value",
+            "postgresql+asyncpg://clawith:charlie-secret-value@localhost:5432",
+        ),
+    ],
+)
+def test_invalid_database_url_errors_never_expose_password(
+    password: str,
+    database_url: str,
+) -> None:
+    with pytest.raises(ValidationError) as captured:
+        _settings(DATABASE_URL=database_url)
+
+    rendered_errors = (
+        str(captured.value),
+        repr(captured.value),
+    )
+    assert all(password not in rendered for rendered in rendered_errors)
+
+
+@pytest.mark.parametrize("password", ["alpha-valid-secret", "bravo-valid-secret"])
+def test_database_url_is_masked_in_settings_representations_and_dumps(password: str) -> None:
+    database_url = f"postgresql+asyncpg://clawith:{password}@localhost:5432/clawith_target"
+    settings = _settings(DATABASE_URL=database_url)
+
+    rendered_settings = (
+        str(settings),
+        repr(settings),
+        str(settings.model_dump()),
+        repr(settings.model_dump()),
+        settings.model_dump_json(),
+    )
+    assert all(password not in rendered for rendered in rendered_settings)
+    assert settings.DATABASE_URL.get_secret_value() == database_url
+
+
 def test_target_configuration_uses_role_isolated_20_connection_pools() -> None:
     settings = _settings()
 
@@ -168,7 +215,7 @@ async def test_database_resources_create_and_dispose_both_role_pools(
         engines.append(engine)
         return cast(AsyncEngine, engine)
 
-    monkeypatch.setattr(database, "_create_role_engine", create_engine)
+    monkeypatch.setattr(database, "create_async_engine", create_engine)
 
     resources = await database.create_database_resources(_settings())
     await resources.aclose()
@@ -208,7 +255,7 @@ async def test_database_resources_dispose_control_pool_when_execution_creation_f
     calls = 0
 
     def create_engine(
-        _database_url: str,
+        _database_url: SecretStr,
         *,
         echo: bool,
         pool_size: int,
