@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution and old Context authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, and structured Experience authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -36,19 +36,27 @@ The target branch no longer contains the legacy Agent execution authority. The r
 - `backend/tests/test_setup_langgraph_checkpoints.py`
 - the dedicated old-authority tests `test_runtime_schema.py`, `test_session_context_service.py`, `test_tool_exchange.py`, `test_tool_execution.py`, `test_model_capabilities.py`, `test_runtime_model_settings_resolution.py`, `test_chat_session_runtime_state.py`, `test_unified_runtime_group_migration.py`, and `test_websocket_runtime_chat.py`
 
-`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including Task, Approval, fallback/quota, relationship, Experience, Schedule, startup repair, storage compatibility, monolithic Tool/Model facades, product adapters, migrations, and dependencies, remain pending.
+`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including Task, Approval, fallback/quota, relationship, Schedule, startup repair, storage compatibility, monolithic Tool/Model facades, product adapters, migrations, and dependencies, remain pending.
 
 The target branch also no longer contains the old Context authority:
 
 - `backend/app/services/agent_context.py`
 - `backend/tests/test_agent_context.py`
 
-`backend/tests/architecture/test_deleted_authorities.py` makes the Python import
-identity absent as both a module file and a same-named package directory. Its
-negative fixtures prove that recreating either form fails the target guard.
-Surviving legacy callers remain staged evidence for their own deletion category;
-they do not justify a compatibility module or fallback Context assembly. Model
-and Experience authority deletion remains pending.
+The structured Experience authority is also removed:
+
+- `backend/app/api/experience.py`
+- `backend/app/models/experience.py`
+- `backend/app/models/experience_reference.py`
+- `backend/app/services/experience_retrieval.py`
+- the dedicated Experience API, citation/RAG, and revision-migration tests
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed
+Python import identity absent as both a module file and a same-named package
+directory. Its negative fixtures prove that recreating either form fails the
+target guard. Surviving legacy callers remain staged evidence for their own
+deletion category; they do not justify compatibility modules, fallback Context
+assembly, or Experience projections. Model authority deletion remains pending.
 
 ### Delete without porting
 
