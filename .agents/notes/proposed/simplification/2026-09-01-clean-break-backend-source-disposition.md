@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, and dedicated OpenClaw/Gateway authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, and old Agent Credential authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -114,7 +114,19 @@ The Gateway API, queued remote-message model, API-key polling/report/heartbeat/s
 
 This minimum deletion deliberately leaves mixed residual branches for their own owner/category commits: OpenClaw fields and API-key/container routes in `models/agent.py` and `api/agents.py`; Gateway queueing in `api/websocket.py`; legacy Gateway schemas in `schemas/schemas.py`; file initialization calls in `api/onboarding.py` and `services/agent_seeder.py`; container status in `api/advanced.py`; Gateway model imports in bootstrap and cleanup/backfill scripts; and mixed storage/API tests that still import `app.services.agent_manager`. Those dangling consumers do not authorize restoring `app.api.gateway`, `app.models.gateway_message`, or `app.services.agent_manager`. Discord's independently owned connection mode and generic Sandbox publication-owner terminology are not classified as OpenClaw authority by this removal.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, or OpenClaw/Gateway authority.
+The old Agent Credential authority is also removed as a separate category:
+
+- `backend/app/models/agent_credential.py`
+- `backend/app/dao/agent_credential_dao.py`
+- `backend/app/api/agent_credentials.py`
+- `backend/app/schemas/agent_credential.py`
+- the `agent_credential_dao` compatibility export from `backend/app/dao/__init__.py`
+
+These modules owned the Agent-scoped cookie record, direct DAO, CRUD transport, encryption-on-write behavior, and legacy request/response shapes. They are deleted rather than migrated. No dedicated legacy Credential tests remain in the target tree, and no legacy test is extracted or adapted during this deletion. The target Credential owner must write fresh model, persistence, authorization, Secret-handling, and transport tests from its approved contract.
+
+This minimum deletion deliberately preserves mixed consumers for their own owner/category commits: AgentBay control and cookie injection still import the removed model; Tenant cleanup still names the old table; legacy Alembic revisions still create and alter the table until the target baseline replaces the full chain; and independently owned Channel configuration, identity-provider, Agent, Tool/MCP, Atlassian, and Provider Secret paths remain untouched. Those residuals do not authorize recreating `app.api.agent_credentials`, `app.dao.agent_credential_dao`, `app.models.agent_credential`, or `app.schemas.agent_credential`.
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, or the old Agent Credential authority.
 
 ### Delete without porting
 

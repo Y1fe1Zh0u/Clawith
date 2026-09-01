@@ -1,6 +1,5 @@
 from app.dao.activity_dao import activity_dao
 from app.dao.agent_access_dao import agent_access_dao
-from app.dao.agent_credential_dao import agent_credential_dao
 from app.dao.agent_dao import agent_dao
 from app.dao.agent_metrics_dao import agent_metrics_dao
 from app.dao.agent_run_dao import agent_run_dao
@@ -22,9 +21,9 @@ from app.dao.trigger_dao import trigger_dao
 from app.dao.user_dao import user_dao
 
 __all__ = [
+    "TenantScopedBaseDAO",
     "activity_dao",
     "agent_access_dao",
-    "agent_credential_dao",
     "agent_dao",
     "agent_metrics_dao",
     "agent_run_dao",
@@ -43,6 +42,5 @@ __all__ = [
     "tenant_context",
     "tenant_dao",
     "trigger_dao",
-    "TenantScopedBaseDAO",
     "user_dao",
 ]
