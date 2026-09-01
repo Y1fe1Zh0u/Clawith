@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 _SCRIPT = Path(__file__).parents[2] / "scripts/rewrite_inventory.py"
+_CANONICAL_OWNER_DAG = Path(__file__).parents[2] / "rewrite/owner-dag.json"
 sys.path.insert(0, str(_SCRIPT.parent))
 _SPEC = importlib.util.spec_from_file_location("rewrite_inventory", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -105,6 +106,15 @@ def _canonical_owner_manifest() -> dict[str, object]:
             }
         )
     return manifest
+
+
+def _write_owner_contract_fixture(rewrite_dir: Path, owner_manifest: dict[str, object]) -> None:
+    rewrite_dir.mkdir(parents=True, exist_ok=True)
+    (rewrite_dir / "owner-contracts.json").write_text(json.dumps(owner_manifest), encoding="utf-8")
+    (rewrite_dir / "owner-dag.json").write_text(
+        _CANONICAL_OWNER_DAG.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
 
 def _approve_owner(
@@ -280,7 +290,7 @@ def test_contract_transition_uses_the_canonical_owner_ledger(tmp_path: Path) -> 
     owner_manifest = _canonical_owner_manifest()
     row["owner_contract_hash"] = _approve_owner(owner_manifest, "agent", contract, evidence)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    (manifest_path.parent / "owner-contracts.json").write_text(json.dumps(owner_manifest), encoding="utf-8")
+    _write_owner_contract_fixture(manifest_path.parent, owner_manifest)
 
     rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)
     rewrite_inventory.transition(manifest_path, row["id"], "contract_approved", evidence)
@@ -340,10 +350,7 @@ def test_contract_transition_rejects_invalid_canonical_owner_link(
         assert approved_hash == contract_hash
 
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    (manifest_path.parent / "owner-contracts.json").write_text(
-        json.dumps(owner_manifest),
-        encoding="utf-8",
-    )
+    _write_owner_contract_fixture(manifest_path.parent, owner_manifest)
 
     with pytest.raises(rewrite_inventory.InventoryError, match=message):
         rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)
@@ -360,10 +367,7 @@ def test_disposition_transition_rejects_target_outside_canonical_roster(tmp_path
     _complete_row(row, _artifact(evidence), disposition="rewrite")
     row["target_owner_id"] = "definitely_not_an_owner"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    (manifest_path.parent / "owner-contracts.json").write_text(
-        json.dumps(_canonical_owner_manifest()),
-        encoding="utf-8",
-    )
+    _write_owner_contract_fixture(manifest_path.parent, _canonical_owner_manifest())
 
     with pytest.raises(rewrite_inventory.InventoryError, match="not in the canonical roster"):
         rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)

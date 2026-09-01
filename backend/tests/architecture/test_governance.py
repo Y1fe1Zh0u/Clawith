@@ -75,7 +75,7 @@ EXPECTED_DEPENDENCIES = {
     "heartbeat": ["run", "context"],
     "channel": ["run", "context", "credential"],
     "auth": ["identity_tenant", "permission"],
-    "sso": ["auth", "identity_tenant"],
+    "sso": ["auth", "identity_tenant", "credential"],
     "organization": ["identity_tenant", "permission"],
     "invitation": ["identity_tenant", "organization", "auth"],
     "onboarding": ["identity_tenant", "organization", "agent"],
@@ -200,10 +200,15 @@ def _revision(source: str) -> tuple[str, str | None]:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         value = node.value
+        if value is None:
+            continue
         for target in targets:
             if isinstance(target, ast.Name) and target.id in {"revision", "down_revision"}:
                 values[target.id] = ast.literal_eval(value)
-    return values["revision"], values.get("down_revision")
+    revision = values.get("revision")
+    if revision is None:
+        raise GovernanceViolation("migration revision must be a string")
+    return revision, values.get("down_revision")
 
 
 def _validate_forward_only_single_head(revisions: list[str]) -> None:
