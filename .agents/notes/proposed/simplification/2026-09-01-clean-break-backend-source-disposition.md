@@ -252,6 +252,20 @@ Agent Template sources and `template_seeder.py` remain because template inventor
 
 The deleted-authority guard makes all three old Onboarding import identities absent as modules and same-named packages, with negative fixtures for both representations and ordinary Backend-test imports. Fresh target tests must use the approved S3 owner contracts rather than rename the old prompt, phase, bootstrap, or file-initialization fixtures.
 
+The legacy Directory authority is removed as its own minimum category:
+
+- `backend/app/api/directory.py`
+- `backend/app/services/agent_directory.py`
+- `backend/tests/test_agent_directory_api.py`
+
+These sources joined a read-only human/Agent roster query with Custom Directory maintenance. The API directly queried and mutated the deleted Organization/Relationship aggregate and old Agent Permission persistence, while the service directly combined Agent, Permission, Organization, IdentityProvider, ChatSession, and Channel-contact readiness facts. Its sole dedicated test imported the deleted API directly and protected only old route shapes, Organization-backed candidate SQL, roster filtering, and error translation, so it is deleted instead of carried into the target.
+
+Directory remains an S3 composition owner, but its owner contract remains unreviewed and this deletion does not authorize a replacement implementation or preservation of the old route and payload contracts. After contract review and approval, the target `directory` owner receives fresh composition tests over public Identity/Tenant, Organization, Permission, Agent, Group/Participant, and Channel contracts. Those tests must cover bounded search, Tenant isolation, visibility, contactability, and unavailable-target behavior without restoring direct imports of private persistence models.
+
+There was no separate Directory DAO, helper module, package export, or production router registration to delete. The empty `backend/app/modules/directory` target-owner package remains. Group/Participant, Channel identity mapping and delivery, Permission core, `participant_identity.py`, `channel_user_service.py`, mixed query DAOs, Enterprise and administration surfaces, schemas, migrations, dependencies, and Frontend remain staged. Their surviving Directory wording or dangling imports are evidence for later owner/category commits and do not authorize restoring `app.api.directory`, `app.services.agent_directory`, or the deleted tests.
+
+The deleted-authority guard makes both old Directory import identities absent as modules and same-named packages, prevents static or dynamic API/service package re-exports, and rejects ordinary Backend-test imports. Fresh S3 tests must exercise the approved Directory public composition rather than rename the old API fixture or couple to Group, Channel, Permission, Organization, or Agent persistence.
+
 The legacy Tenant Knowledge publication adapter is removed as a separate minimum category:
 
 - `backend/app/services/enterprise_sync.py`

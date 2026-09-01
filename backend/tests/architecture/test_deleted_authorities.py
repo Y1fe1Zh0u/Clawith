@@ -223,6 +223,32 @@ LEGACY_ONBOARDING_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_ONBOARDING_IMPORT_IDENTITIES
 )
+LEGACY_DIRECTORY_IMPORT_IDENTITIES = (
+    Path("app/api/directory"),
+    Path("app/services/agent_directory"),
+)
+LEGACY_DIRECTORY_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_DIRECTORY_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_DIRECTORY_PACKAGE_EXPORTS = {
+    Path("app/api/__init__.py"): ("directory",),
+    Path("app/services/__init__.py"): ("agent_directory",),
+}
+LEGACY_DIRECTORY_DOTTED_IMPORT_IDENTITIES = tuple(
+    dict.fromkeys(
+        [
+            identity.as_posix().replace("/", ".")
+            for identity in LEGACY_DIRECTORY_IMPORT_IDENTITIES
+        ]
+        + [
+            f"{relative_path.parent.as_posix().replace('/', '.')}.{export}"
+            for relative_path, exports in LEGACY_DIRECTORY_PACKAGE_EXPORTS.items()
+            for export in exports
+        ]
+    )
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -1098,6 +1124,134 @@ def _assert_tests_do_not_import_deleted_onboarding_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test imports deleted legacy Onboarding authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_directory_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_DIRECTORY_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Directory authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Directory authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_deleted_legacy_directory_package_exports(backend_root: Path) -> None:
+    for relative_path, exports in LEGACY_DIRECTORY_PACKAGE_EXPORTS.items():
+        package_init = backend_root / relative_path
+        if not package_init.is_file():
+            continue
+
+        tree = ast.parse(
+            package_init.read_text(encoding="utf-8"),
+            filename=str(package_init),
+        )
+        for statement in tree.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+            ):
+                raise DeletedAuthorityViolation(
+                    "deleted legacy Directory package exports can be restored by "
+                    f"a module-level __getattr__ hook in {relative_path}"
+                )
+
+        for node in ast.walk(tree):
+            references_dynamic_hook = (
+                isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.Attribute)
+                and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.Constant)
+                and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.keyword)
+                and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+            ) or (
+                isinstance(node, ast.alias)
+                and (
+                    node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                    or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+                )
+            )
+            if references_dynamic_hook:
+                raise DeletedAuthorityViolation(
+                    "deleted legacy Directory package exports can be restored by "
+                    f"a module-level __getattr__ hook in {relative_path}"
+                )
+
+            for export in exports:
+                imports_export_module = (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    == f"{relative_path.parent.as_posix().replace('/', '.')}.{export}"
+                )
+                references_export = (
+                    imports_export_module
+                    or (isinstance(node, ast.Name) and node.id == export)
+                ) or (
+                    isinstance(node, ast.Attribute) and node.attr == export
+                ) or (
+                    isinstance(node, ast.Constant) and node.value == export
+                ) or (
+                    isinstance(node, ast.keyword) and node.arg == export
+                ) or (
+                    isinstance(node, ast.alias)
+                    and (
+                        node.name.split(".")[-1] == export
+                        or node.asname == export
+                    )
+                )
+                if references_export:
+                    raise DeletedAuthorityViolation(
+                        "deleted legacy Directory package export was reintroduced in "
+                        f"{relative_path}: {export}"
+                    )
+
+
+def _assert_tests_do_not_import_deleted_directory_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        imported_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_identities.append(node.module)
+                imported_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+
+        for imported_identity in imported_identities:
+            for deleted_identity in LEGACY_DIRECTORY_DOTTED_IMPORT_IDENTITIES:
+                if imported_identity == deleted_identity or imported_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test imports deleted legacy Directory authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -2091,6 +2245,126 @@ def test_backend_test_import_of_deleted_onboarding_authority_fails_guard(
         match="test imports deleted legacy Onboarding authority",
     ):
         _assert_tests_do_not_import_deleted_onboarding_authorities(tmp_path)
+
+
+def test_legacy_directory_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_directory_authorities(BACKEND_ROOT)
+
+
+def test_legacy_directory_package_exports_are_absent() -> None:
+    _assert_deleted_legacy_directory_package_exports(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_import_deleted_directory_authorities() -> None:
+    _assert_tests_do_not_import_deleted_directory_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_DIRECTORY_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_DIRECTORY_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_directory_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Directory authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_directory_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "package_source"),
+    [
+        (
+            Path("app/api/__init__.py"),
+            "from app.api.directory import router\n",
+        ),
+        (
+            Path("app/services/__init__.py"),
+            "agent_directory = object()\n",
+        ),
+        (
+            Path("app/api/__init__.py"),
+            '__all__ = ["directory"]\n',
+        ),
+        (
+            Path("app/services/__init__.py"),
+            "def __getattr__(name):\n    return object()\n",
+        ),
+    ],
+    ids=[
+        "api-direct-import",
+        "service-assignment-reexport",
+        "api-all-exposure",
+        "service-module-getattr",
+    ],
+)
+def test_reintroduced_legacy_directory_package_export_fails_guard(
+    tmp_path: Path,
+    relative_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / relative_path
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Directory package export",
+    ):
+        _assert_deleted_legacy_directory_package_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.api.directory\n",
+        "from app.api import directory\n",
+        "from app.api.directory import router\n",
+        "import app.services.agent_directory\n",
+        "from app.services import agent_directory\n",
+        "from app.services.agent_directory import query_agent_directory\n",
+    ],
+    ids=[
+        "api-import",
+        "api-package-import",
+        "api-symbol-import",
+        "service-import",
+        "service-package-import",
+        "service-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_directory_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_directory.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test imports deleted legacy Directory authority",
+    ):
+        _assert_tests_do_not_import_deleted_directory_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
