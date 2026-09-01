@@ -50,6 +50,67 @@ app/scripts/   Application maintenance, bootstrap, backfill, and migration tools
 
 Read the nearest nested `AGENTS.md` before modifying a specialized subtree. Detailed module structure belongs to that subtree's instruction or owning architecture document, not this file.
 
+## Clean-break rewrite governance
+
+The clean-break rewrite is implemented directly on `develop`. The target tree has one final-form application factory and one SQLAlchemy `Base`/metadata registry throughout the rewrite. The immutable `8ed4ae2f` legacy checkout is black-box evidence only: it uses separate disposable persistence and must not share imports, traffic, state, or authority with the target tree.
+
+The target is one modular monolith under `app/modules/<owner>/`, with narrow execution mechanics under `app/runtime/` and shared database, transaction, and configuration infrastructure under `app/infrastructure/`. Every owner keeps its ORM models and repositories private. Another owner may use only its typed public service contract; it must not import the private model or repository, issue writes to the owner's tables, or recreate the owner's policy.
+
+Cross-owner atomic operations use the infrastructure `TransactionContext` and typed application orchestration ports. The orchestrator selects one transaction and invokes owner services; it never writes owner tables directly. Define consumer-facing ports such as `OutcomeConsumer` and the authorization-dependency writer before their callers depend on them.
+
+The public service/import DAG is:
+
+```text
+Infrastructure database/transactions/config
+              |
+      Identity/Tenant + Audit
+          /             \
+   Credential       Agent + Permission
+       |              /       |       \
+       +------ Model      Workspace   Capability/Tool
+                    \        |        /
+                     Run Snapshot inputs
+                              |
+                     Run + Runner + Loop
+                              |
+                         Context view
+                              |
+                Session / Task / A2A / Goal
+                              |
+              Group / Trigger / Heartbeat / Channel
+                              |
+                    Remaining product modules
+```
+
+`identity_tenant` is one owner. `run` owns Run persistence and Runner/Loop mechanics; `app/runtime/` is only its implementation package. `session` owns Goal configuration and continuation; neither `runtime` nor `goal` is an owner. `tool` and `capability_market` are separate owners.
+
+The owner roster and schema-registration waves are exact:
+
+| Wave | Owners |
+| --- | --- |
+| S0 | `identity_tenant` |
+| S1 | `agent`, `credential`, `model`, `audit`, `run`, `permission`, `context` |
+| S2 | `workspace`, `tool`, `capability_market`, `session`, `a2a`, `group`, `trigger`, `heartbeat`, `channel` |
+| S3 | `auth`, `sso`, `organization`, `invitation`, `onboarding`, `okr`, `focus`, `notification`, `published_page`, `plaza`, `enterprise_settings`, `platform_administration`, `agentbay`, `directory`, `agent_template`, `observability`, `tenant_knowledge` |
+
+The acyclic public DAG controls service implementation order. S0-S3 control schema integration and may register strongly connected foreign keys together; they do not authorize a service to bypass the public DAG. One serialized schema-integration owner registers each wave into the complete shared metadata registry. Each wave gate uses real PostgreSQL to create and drop every registered table, constraint, and index, reject unresolved foreign keys and duplicate table ownership, and exercise positive and negative constraints.
+
+Database registry, application composition, dependency lock, initial baseline, capability coverage, and final source disposition each have one serialized owner. Do not add another declarative base, metadata registry, application factory, or independently changing copy of these shared files.
+
+### Phase 0 ledgers and gates
+
+The three rewrite ledgers have separate authority:
+
+- `rewrite/coverage.json` records old endpoint and lifecycle disposition, replacement, deletion, consumer, test, and removal evidence.
+- `rewrite/owner-contracts.json` is the sole readiness authority for every target owner, including owners without a legacy endpoint.
+- `rewrite/product-contracts.json` records S3 product decisions and supplies evidence for approving the corresponding owner-contract row; it does not replace that row.
+
+A rewrite coverage row reaches `contract_approved` only when it references exactly one approved owner-contract row and the contract hashes match. Target-tree replacement must not begin until every coverage row is `disposition_approved`. Schema or service work for an owner must not begin until that owner is `contract_approved`; S3 work additionally requires its complete approved product contract. The initial baseline and legacy-reference removal require every coverage row to be terminal.
+
+Phase 0 passes only when `unreviewed=0`, `disposition_missing=0`, the exact owner roster is complete and unique, ledger transitions and references validate, the governance and DAG/wave checks pass, the benchmark/pool/queue/fairness configuration validates, and the legacy reference remains clean, fixed at `8ed4ae2f`, boot-isolated, and black-box verified. Stop on any missing, extra, duplicate, unapproved, unhashed, mismatched, or invalid row. No target schema or source replacement begins before all Phase 0 gates pass.
+
+Startup must never call `create_all`, mutate the schema, repair data, translate old state, or activate compatibility paths. Do not add legacy imports, dual reads or writes, old-schema adapters, startup repair, or fallbacks for old APIs, Redis keys, Workspace layouts, Runtime protocols, or storage paths. The target uses explicitly separate persistence namespaces and fails at the owning boundary when target configuration or schema is invalid.
+
 ## Async lifecycle
 
 Represent one asynchronous operation with one lifecycle controller or transaction. Readiness, cancellation, disposal, reservation, and sentinel state remain in that owner unless they describe an independently owned object or settlement point. Do not split one operation into parallel lifecycle state machines.

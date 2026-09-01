@@ -1,11 +1,17 @@
 # Alembic AGENTS.md — Clawith Database Migration Guidelines
 
 > Auto-loads when editing anything under `backend/alembic/`.
-> Read this **before** creating or editing a migration. Complements [`backend/AGENTS.md`](file:///Users/alex/Documents/Code/dataelem/Clawith/backend/AGENTS.md) and [`docs/constitution.md`](file:///Users/alex/Documents/Code/dataelem/Clawith/docs/constitution.md).
+> Read this **before** creating or editing a migration. Complements [`backend/AGENTS.md`](../AGENTS.md) and [`docs/constitution.md`](../../docs/constitution.md).
 
 ---
 
-## 0. The Single Head Rule (最高拓扑不变量)
+## 0. Clean-break Baseline and Single-head Rule
+
+The target schema has one initial-baseline exception. Only after every first-release target model is frozen, all S0-S3 PostgreSQL gates pass, and every rewrite coverage row is terminal may the serialized baseline owner replace the legacy migration history with one target baseline generated from the single application metadata registry. The baseline targets an empty, explicitly named target database; it never upgrades, reads, repairs, or preserves an existing legacy database.
+
+The baseline may downgrade to an empty database only in disposable test and development environments. That destructive downgrade is not an operational rollback or data-preservation promise.
+
+After the target baseline is committed, it is immutable migration history. Every schema change is a forward migration from the current single head. Never regenerate the baseline, rewrite a released revision, add a second lineage, or introduce compatibility migrations for legacy tables, data, APIs, Redis keys, Workspace layouts, Runtime protocols, or storage paths.
 
 > **A new migration's `down_revision` MUST be the current single head — never an older revision, and never guessed from the filename.**
 
@@ -23,7 +29,7 @@ uv run alembic heads      # MUST print exactly ONE revision
 ## 1. Creating Migrations Safely
 
 ### 1.1 Preferred Method (Auto-fill `down_revision`)
-Let Alembic query the database and automatically determine the correct `down_revision`:
+Let Alembic load the current migration graph and determine `down_revision`:
 
 ```bash
 cd backend
@@ -38,14 +44,9 @@ cd backend
 uv run alembic heads      # Check that exactly ONE line is output
 ```
 
-### 1.3 Handling Multiple Heads (Branch Merge)
-If parallel git feature branches legitimately produce two heads, resolve it with an explicit **merge revision**:
+### 1.3 Preventing Multiple Heads
 
-```bash
-uv run alembic merge heads -m "merge_feature_branches"
-```
-
-> **CRITICAL**: Do NOT "fix" a fork by editing an already-released migration's `down_revision` — that rewrites history in production environments that have already applied it.
+Migration creation is serialized. Rebase the schema change onto the current head and create its revision from that head before it is shared. Do not create parallel heads or repair an avoidable fork by editing released history.
 
 ---
 
@@ -64,11 +65,25 @@ uv run alembic merge heads -m "merge_feature_branches"
 
 ---
 
-## 3. Idempotency & Safety Guards
+## 3. Schema Ownership and Safety
 
-- **Idempotence**: Guard new column/table additions against cases where the table already exists.
+- **Single metadata source**: `alembic/env.py` imports the application's one complete metadata registry. Do not construct another `MetaData`, declarative base, or partial migration-only model graph.
+- **Owner-private persistence**: Each module owns its ORM models, repositories, tables, constraints, and indexes. Cross-owner work uses typed public services and the shared `TransactionContext`; migrations must not create a second write path or transfer table ownership implicitly.
+- **No compatibility or repair DDL**: Do not make target DDL conditional on legacy objects, silently accept an unexpected target schema, repair drift, or add dual-schema bridges. A non-empty or invalid target database fails the owning migration gate.
+- **No startup DDL**: Application startup never calls `create_all`, applies Alembic, repairs data, or creates missing objects. Deployment applies migrations explicitly before readiness.
 - **Rollback Symmetry**: Every `upgrade()` migration MUST have a corresponding, functional `downgrade()` implementation for rollback capability.
 - **No Unindexed Large Table Locks**: Avoid adding unindexed foreign keys or columns blocking concurrent runtime queries on large product tables.
+
+Before baseline generation, S0-S3 are schema-registration test waves, not Alembic lineages:
+
+| Wave | Owners |
+| --- | --- |
+| S0 | `identity_tenant` |
+| S1 | `agent`, `credential`, `model`, `audit`, `run`, `permission`, `context` |
+| S2 | `workspace`, `tool`, `capability_market`, `session`, `a2a`, `group`, `trigger`, `heartbeat`, `channel` |
+| S3 | `auth`, `sso`, `organization`, `invitation`, `onboarding`, `okr`, `focus`, `notification`, `published_page`, `plaza`, `enterprise_settings`, `platform_administration`, `agentbay`, `directory`, `agent_template`, `observability`, `tenant_knowledge` |
+
+Each wave first requires every represented owner to be `contract_approved` in `rewrite/owner-contracts.json`. Its real PostgreSQL gate imports the complete registered metadata, creates and drops all tables, constraints, and indexes, rejects unresolved foreign keys and duplicate table ownership, and exercises the wave's positive and negative constraints. Do not generate the initial Alembic baseline until all waves pass, every `rewrite/coverage.json` row is terminal, and every required S3 decision is complete in `rewrite/product-contracts.json` and linked to its approved owner row.
 
 ---
 
@@ -77,6 +92,8 @@ uv run alembic merge heads -m "merge_feature_branches"
 - [ ] `uv run alembic heads` prints **exactly one** revision.
 - [ ] `down_revision` equals the head that existed *before* this change.
 - [ ] `upgrade()` and `downgrade()` are DDL-only (no inline `SELECT`→`UPDATE`/`INSERT` data loops).
+- [ ] `alembic/env.py` uses the one application metadata registry; no migration-only registry or partial model graph exists.
+- [ ] The migration contains no legacy detection, schema repair, compatibility path, startup DDL, or cross-owner private write.
 - [ ] Migration filename follows `v{Major}_{Minor}_{Patch}_f{Feature_Num}_{description}.py` convention (e.g., `v1_0_0_f060_tenant_id_backfill.py`).
 - [ ] Revision ID follows `f{Feature_Num}_{description}` convention (e.g., `f060_tenant_id_backfill`, <=32 chars).
 - [ ] Tested rollbacks locally: `uv run alembic downgrade -1` followed by `uv run alembic upgrade head`.
