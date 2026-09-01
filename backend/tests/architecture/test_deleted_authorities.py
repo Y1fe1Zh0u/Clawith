@@ -143,6 +143,11 @@ LEGACY_AUTH_PACKAGE_EXPORTS = {
         "email_verification_service",
     ),
 }
+LEGACY_AUTH_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_AUTH_IMPORT_IDENTITIES
+)
+DELETED_AUTH_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
 
@@ -564,6 +569,45 @@ def _assert_deleted_legacy_auth_package_exports(backend_root: Path) -> None:
                     )
 
 
+def _assert_tests_do_not_import_deleted_auth_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTH_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        imported_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_identities.append(node.module)
+                imported_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+
+        for imported_identity in imported_identities:
+            for deleted_identity in LEGACY_AUTH_DOTTED_IMPORT_IDENTITIES:
+                if imported_identity == deleted_identity or imported_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test imports deleted legacy Auth authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
     _assert_deleted_context_authority(BACKEND_ROOT)
 
@@ -830,6 +874,10 @@ def test_legacy_auth_package_exports_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_auth_package_exports(BACKEND_ROOT)
 
 
+def test_backend_tests_do_not_import_deleted_auth_authorities() -> None:
+    _assert_tests_do_not_import_deleted_auth_authorities(BACKEND_ROOT)
+
+
 @pytest.mark.parametrize(
     ("identity", "representation"),
     LEGACY_CREDENTIAL_REINTRODUCTIONS,
@@ -1092,3 +1140,33 @@ def test_reintroduced_legacy_auth_package_export_fails_the_guard(
         match="deleted legacy Auth package export",
     ):
         _assert_deleted_legacy_auth_package_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.api.auth\n",
+        "from app.api import auth\n",
+        "from app.services.auth_registry import auth_provider_registry\n",
+        "from app.services import registration_service\n",
+    ],
+    ids=[
+        "direct-module-import",
+        "package-submodule-import",
+        "service-symbol-import",
+        "services-package-import",
+    ],
+)
+def test_backend_test_import_of_deleted_auth_authority_fails_the_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_auth_dependency.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test imports deleted legacy Auth authority",
+    ):
+        _assert_tests_do_not_import_deleted_auth_authorities(tmp_path)
