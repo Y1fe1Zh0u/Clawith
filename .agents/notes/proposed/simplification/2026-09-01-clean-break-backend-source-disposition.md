@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, and old Auth authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, and old SSO authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -174,11 +174,31 @@ The old Auth authority is also removed as a separate category:
 
 These sources combined password login and registration, Account binding, tenant switching, JWT issuance, password change and reset, email verification, SSO callback/session orchestration, Provider construction, and cross-owner Identity/Tenant, Organization, Invitation, Onboarding, and notification mutations. Their tests asserted that retired orchestration and are deleted rather than adapted. The target Auth owner must receive fresh password, login, token, bind, reset, and verification tests after its approved contract is implemented.
 
-The independently owned IdentityProvider lookup and Google Workspace OAuth-state tests now live in `backend/tests/test_identity_provider_and_google_workspace_oauth.py`; generic system-email transport and broadcast-notification tests now live in `backend/tests/test_system_email_and_notifications.py`. The SSO browser-binding rejection and acceptance tests removed with the mixed Auth test file are restored under the SSO owner in `backend/tests/test_sso_session_browser_binding.py`. `backend/tests/test_sso_toggle.py` retains only platform and Tenant SSO policy tests; its old Auth-owned tenant-switch assertion and dependency on `tests.test_auth` are deleted. This deletion preserves the SSO API and service, SSO session security, IdentityProvider model and lookup, Google Workspace integration, Organization, Invitation, Onboarding, generic system-email transport, `core/security.py`, core middleware, permissions, errors and logging, mixed `schemas.py`, migrations, dependency declarations, Frontend, and the empty target `modules/auth` package. `core/security.py` remains because retained API, WebSocket, SSO, encryption, Sandbox, and provider boundaries still consume its bearer, JWT, authorization-dependency, and data-encryption helpers; it is not solely the old Auth authority.
+Generic system-email transport and broadcast-notification tests remain in `backend/tests/test_system_email_and_notifications.py`. The Auth deletion preserved the then-independent SSO and IdentityProvider authority so it could be removed in its own minimum commit. `core/security.py` remains because retained API, WebSocket, encryption, Sandbox, and provider boundaries still consume its bearer, JWT, authorization-dependency, and data-encryption helpers; it is not solely the old Auth or SSO authority.
 
-Retained SSO, Google Workspace, Feishu, WeCom, DingTalk, Organization, relationship, Plaza, Trigger, OKR, and cleanup-script sources still import one or more deleted Auth identities. They remain staged for their own owner/category commits. Those dangling imports do not authorize recreating the old Auth API, Provider registry, registration orchestrator, password-reset lifecycle, email-verification lifecycle, or package exports.
+Retained Google Workspace Organization sync, Feishu, WeCom, DingTalk, Organization, relationship, Plaza, Trigger, OKR, and cleanup-script sources still import one or more deleted Auth identities. They remain staged for their own owner/category commits. Those dangling imports do not authorize recreating the old Auth API, Provider registry, registration orchestrator, password-reset lifecycle, email-verification lifecycle, or package exports.
 
-`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path, deleted DAO or Auth package exports cannot return through static or dynamic re-exports, and ordinary Backend tests cannot import a deleted Auth identity. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, the overloaded old Agent aggregate, the old Identity/Tenant aggregate, or old Auth orchestration.
+The old SSO authority is also removed as a separate category:
+
+- `backend/app/api/sso.py`
+- `backend/app/api/google_workspace.py`
+- `backend/app/models/identity.py`
+- `backend/app/dao/identity_provider_dao.py`
+- `backend/app/services/sso_service.py`
+- `backend/app/services/sso_session_security.py`
+- `backend/app/services/identity_provider_lookup.py`
+- `backend/app/services/google_workspace_oauth.py`
+- the `identity_provider_dao` compatibility export from `backend/app/dao/__init__.py`
+- `backend/tests/test_identity_provider_and_google_workspace_oauth.py`
+- `backend/tests/test_sso_session_browser_binding.py`
+- `backend/tests/test_identity_id_mapping.py`
+- `backend/tests/test_sso_toggle.py`
+
+These sources combined SSO browser sessions and binding, IdentityProvider persistence and selection, login identity matching, tenant association, provider enablement, and Google Workspace OAuth state/callback handling. Their tests asserted the old owner, including SSO platform/Tenant toggles coupled to deleted Tenant routes, and are deleted rather than adapted. The target SSO owner must receive fresh persistence, provider-selection, browser-session, callback, binding, policy, and failure-path tests after its approved contract is implemented.
+
+This minimum deletion preserves Organization sync adapters and services, provider-specific Channel APIs, mixed IdentityProvider administration and SSO policy routes in `enterprise.py`, Invitation, Onboarding, generic email, `core/security.py`, mixed schemas, migrations, dependencies, Frontend, and the empty target `modules/sso` package. Those retained sources may still import the deleted IdentityProvider model or SSO services, and the Organization adapter may still import the deleted Google Workspace OAuth proxy constant. These dangling consumers are staged evidence for their own owner/category commits; they do not authorize restoring the old SSO API, model, DAO, services, Google Workspace OAuth entrypoint, or compatibility export.
+
+`backend/tests/architecture/test_deleted_authorities.py` makes every removed Python import identity absent as both a module file and a same-named package directory. Its negative fixtures prove that recreating either form fails the target guard. The generated Skill creator-files directory is independently guarded as a forbidden path; deleted DAO, Auth, or SSO exports cannot return through static or dynamic re-exports; and ordinary Backend tests cannot import a deleted Auth or SSO identity. Surviving legacy callers remain staged evidence for their own deletion category; they do not justify compatibility modules, fallback Context assembly, Experience projections, an old Model execution facade, Persistent Task persistence, OpenClaw/Gateway authority, old Agent Credential authority, the overloaded old Agent aggregate, the old Identity/Tenant aggregate, old Auth orchestration, or old SSO authority.
 
 ### Delete without porting
 

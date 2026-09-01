@@ -156,7 +156,27 @@ LEGACY_AUTH_DOTTED_IMPORT_IDENTITIES = tuple(
         ]
     )
 )
-DELETED_AUTH_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
+LEGACY_SSO_IMPORT_IDENTITIES = (
+    Path("app/api/sso"),
+    Path("app/api/google_workspace"),
+    Path("app/models/identity"),
+    Path("app/dao/identity_provider_dao"),
+    Path("app/services/sso_service"),
+    Path("app/services/sso_session_security"),
+    Path("app/services/identity_provider_lookup"),
+    Path("app/services/google_workspace_oauth"),
+)
+LEGACY_SSO_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_SSO_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_SSO_DAO_EXPORT = "identity_provider_dao"
+LEGACY_SSO_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_SSO_IMPORT_IDENTITIES
+)
+DELETED_AUTHORITY_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
 
@@ -587,7 +607,7 @@ def _assert_tests_do_not_import_deleted_auth_authorities(
 
     for source_path in sorted(tests_root.rglob("*.py")):
         relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTH_GUARD_TEST:
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
             continue
 
         tree = ast.parse(
@@ -613,6 +633,118 @@ def _assert_tests_do_not_import_deleted_auth_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test imports deleted legacy Auth authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_sso_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_SSO_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy SSO authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy SSO authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_sso_dao_export(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+        ):
+            raise DeletedAuthorityViolation(
+                "deleted legacy SSO DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+    for node in ast.walk(tree):
+        references_dynamic_hook = (
+            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+            )
+        )
+        if references_dynamic_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy SSO DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+        references_export = (
+            isinstance(node, ast.Name) and node.id == LEGACY_SSO_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == LEGACY_SSO_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Constant) and node.value == LEGACY_SSO_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == LEGACY_SSO_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == LEGACY_SSO_DAO_EXPORT
+                or node.asname == LEGACY_SSO_DAO_EXPORT
+            )
+        )
+        if references_export:
+            raise DeletedAuthorityViolation(
+                "deleted legacy SSO DAO package export was reintroduced: "
+                f"{LEGACY_SSO_DAO_EXPORT}"
+            )
+
+
+def _assert_tests_do_not_import_deleted_sso_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        imported_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_identities.append(node.module)
+                imported_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+
+        for imported_identity in imported_identities:
+            for deleted_identity in LEGACY_SSO_DOTTED_IMPORT_IDENTITIES:
+                if imported_identity == deleted_identity or imported_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test imports deleted legacy SSO authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -885,6 +1017,18 @@ def test_legacy_auth_package_exports_are_absent_from_target_tree() -> None:
 
 def test_backend_tests_do_not_import_deleted_auth_authorities() -> None:
     _assert_tests_do_not_import_deleted_auth_authorities(BACKEND_ROOT)
+
+
+def test_legacy_sso_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_sso_authorities(BACKEND_ROOT)
+
+
+def test_legacy_sso_dao_package_export_is_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_sso_dao_export(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_import_deleted_sso_authorities() -> None:
+    _assert_tests_do_not_import_deleted_sso_authorities(BACKEND_ROOT)
 
 
 @pytest.mark.parametrize(
@@ -1181,3 +1325,99 @@ def test_backend_test_import_of_deleted_auth_authority_fails_the_guard(
         match="test imports deleted legacy Auth authority",
     ):
         _assert_tests_do_not_import_deleted_auth_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_SSO_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_SSO_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_sso_import_identity_fails_the_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy SSO authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_sso_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.identity_provider_dao import identity_provider_dao\n",
+        "identity_provider_dao = object()\n",
+        '__all__ = ["identity_provider_dao"]\n',
+        "def __getattr__(name):\n    return object()\n",
+        "__getattr__ = lambda name: object()\n",
+        'globals()["identity_provider_dao"] = object()\n',
+    ],
+    ids=[
+        "direct-import",
+        "assignment-reexport",
+        "all-exposure",
+        "module-getattr",
+        "assigned-module-getattr",
+        "globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_sso_dao_package_export_fails_the_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy SSO DAO package export",
+    ):
+        _assert_deleted_legacy_sso_dao_export(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.api.sso\n",
+        "from app.api import google_workspace\n",
+        "from app.models.identity import IdentityProvider\n",
+        "from app.dao import identity_provider_dao\n",
+        "from app.services.sso_service import sso_service\n",
+        "from app.services import google_workspace_oauth\n",
+    ],
+    ids=[
+        "direct-api-import",
+        "api-package-import",
+        "model-import",
+        "dao-package-import",
+        "service-symbol-import",
+        "services-package-import",
+    ],
+)
+def test_backend_test_import_of_deleted_sso_authority_fails_the_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_sso_dependency.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test imports deleted legacy SSO authority",
+    ):
+        _assert_tests_do_not_import_deleted_sso_authorities(tmp_path)

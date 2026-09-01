@@ -7,7 +7,6 @@ from app.dao.chat_message_dao import chat_message_dao
 from app.dao.chat_session_dao import chat_session_dao
 from app.dao.focus_dao import focus_dao
 from app.dao.group_dao import group_dao
-from app.dao.identity_provider_dao import identity_provider_dao
 from app.dao.invitation_code_dao import invitation_code_dao
 from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
@@ -25,7 +24,6 @@ __all__ = [
     "chat_session_dao",
     "focus_dao",
     "group_dao",
-    "identity_provider_dao",
     "invitation_code_dao",
     "org_member_dao",
     "participant_dao",
