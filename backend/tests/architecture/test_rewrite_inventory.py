@@ -5,11 +5,13 @@ import importlib.util
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 _SCRIPT = Path(__file__).parents[2] / "scripts/rewrite_inventory.py"
+sys.path.insert(0, str(_SCRIPT.parent))
 _SPEC = importlib.util.spec_from_file_location("rewrite_inventory", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 rewrite_inventory = importlib.util.module_from_spec(_SPEC)
@@ -88,6 +90,43 @@ def _complete_row(row: dict[str, object], artifact: dict[str, str], *, dispositi
     row["consumer_evidence"] = [artifact]
     row["planned_gate"] = "tests/acceptance/test_owner.py"
     row["target_owner_id"] = None if disposition == "delete" else "agent"
+
+
+def _canonical_owner_manifest() -> dict[str, object]:
+    path = Path(__file__).parents[2] / "rewrite/owner-contracts.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    for owner in manifest["owners"]:
+        owner.update(
+            {
+                "state": "unreviewed",
+                "contract_artifact": None,
+                "contract_hash": None,
+                "evidence": [],
+            }
+        )
+    return manifest
+
+
+def _approve_owner(
+    owner_manifest: dict[str, object],
+    owner_id: str,
+    contract_artifact: Path,
+    evidence: Path,
+) -> str:
+    contract_hash = hashlib.sha256(contract_artifact.read_bytes()).hexdigest()
+    evidence_record = _artifact(evidence)
+    owners = owner_manifest["owners"]
+    assert isinstance(owners, list)
+    owner = next(row for row in owners if row["owner_id"] == owner_id)
+    owner.update(
+        {
+            "state": "contract_approved",
+            "contract_artifact": str(contract_artifact),
+            "contract_hash": contract_hash,
+            "evidence": [evidence_record],
+        }
+    )
+    return contract_hash
 
 
 def test_discover_finds_only_mounted_routes_and_lifespan_operations(tmp_path: Path) -> None:
@@ -227,7 +266,91 @@ def test_transition_enforces_predecessor_disposition_and_evidence(tmp_path: Path
         rewrite_inventory.transition(manifest_path, row["id"], "contract_approved", evidence)
 
 
-def test_contract_transition_requires_approved_matching_owner_hash(tmp_path: Path) -> None:
+def test_contract_transition_uses_the_canonical_owner_ledger(tmp_path: Path) -> None:
+    source = _fixture_source(tmp_path / "source")
+    manifest_path = tmp_path / "rewrite/coverage.json"
+    evidence = tmp_path / "evidence.txt"
+    contract = tmp_path / "agent-contract.md"
+    evidence.write_text("approved", encoding="utf-8")
+    contract.write_text("agent contract", encoding="utf-8")
+    manifest = rewrite_inventory.build_manifest(manifest_path, source)
+    row = manifest["entries"][0]
+    _complete_row(row, _artifact(evidence), disposition="rewrite")
+    row["owner_contract_id"] = "agent"
+    owner_manifest = _canonical_owner_manifest()
+    row["owner_contract_hash"] = _approve_owner(owner_manifest, "agent", contract, evidence)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (manifest_path.parent / "owner-contracts.json").write_text(json.dumps(owner_manifest), encoding="utf-8")
+
+    rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)
+    rewrite_inventory.transition(manifest_path, row["id"], "contract_approved", evidence)
+
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["entries"][0]["state"] == "contract_approved"
+
+
+@pytest.mark.parametrize(
+    ("defect", "message"),
+    [
+        ("wrong_top_level", "owner contract owners must be a list"),
+        ("missing", "owner contract manifest is missing owners: agent"),
+        ("duplicate", "duplicate owner in contract manifest: agent"),
+        ("unapproved", "owner contract is not approved: agent"),
+        ("owner_hash", "contract artifact hash mismatch for agent"),
+        ("coverage_hash", "owner contract hash does not match"),
+    ],
+)
+def test_contract_transition_rejects_invalid_canonical_owner_link(
+    tmp_path: Path,
+    defect: str,
+    message: str,
+) -> None:
+    source = _fixture_source(tmp_path / "source")
+    manifest_path = tmp_path / "rewrite/coverage.json"
+    evidence = tmp_path / "evidence.txt"
+    contract = tmp_path / "agent-contract.md"
+    evidence.write_text("approved", encoding="utf-8")
+    contract.write_text("agent contract", encoding="utf-8")
+    manifest = rewrite_inventory.build_manifest(manifest_path, source)
+    row = manifest["entries"][0]
+    _complete_row(row, _artifact(evidence), disposition="rewrite")
+    row["owner_contract_id"] = "agent"
+    owner_manifest = _canonical_owner_manifest()
+    contract_hash = hashlib.sha256(contract.read_bytes()).hexdigest()
+    row["owner_contract_hash"] = contract_hash
+
+    owners = owner_manifest["owners"]
+    assert isinstance(owners, list)
+    agent = next(owner for owner in owners if owner["owner_id"] == "agent")
+    if defect == "wrong_top_level":
+        owner_manifest = {"version": 1, "entries": owners}
+    elif defect == "missing":
+        owners.remove(agent)
+    elif defect == "duplicate":
+        owners.append(deepcopy(agent))
+    elif defect == "unapproved":
+        pass
+    else:
+        approved_hash = _approve_owner(owner_manifest, "agent", contract, evidence)
+        if defect == "owner_hash":
+            agent["contract_hash"] = "0" * 64
+        elif defect == "coverage_hash":
+            row["owner_contract_hash"] = "0" * 64
+        else:
+            raise AssertionError(f"unknown defect: {defect}")
+        assert approved_hash == contract_hash
+
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (manifest_path.parent / "owner-contracts.json").write_text(
+        json.dumps(owner_manifest),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(rewrite_inventory.InventoryError, match=message):
+        rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)
+        rewrite_inventory.transition(manifest_path, row["id"], "contract_approved", evidence)
+
+
+def test_disposition_transition_rejects_target_outside_canonical_roster(tmp_path: Path) -> None:
     source = _fixture_source(tmp_path / "source")
     manifest_path = tmp_path / "rewrite/coverage.json"
     evidence = tmp_path / "evidence.txt"
@@ -235,28 +358,15 @@ def test_contract_transition_requires_approved_matching_owner_hash(tmp_path: Pat
     manifest = rewrite_inventory.build_manifest(manifest_path, source)
     row = manifest["entries"][0]
     _complete_row(row, _artifact(evidence), disposition="rewrite")
-    row["owner_contract_id"] = "agent"
-    row["owner_contract_hash"] = "contract-hash"
+    row["target_owner_id"] = "definitely_not_an_owner"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     (manifest_path.parent / "owner-contracts.json").write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "owner_id": "agent",
-                        "state": "contract_approved",
-                        "contract_hash": "contract-hash",
-                    }
-                ]
-            }
-        ),
+        json.dumps(_canonical_owner_manifest()),
         encoding="utf-8",
     )
 
-    rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)
-    rewrite_inventory.transition(manifest_path, row["id"], "contract_approved", evidence)
-
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["entries"][0]["state"] == "contract_approved"
+    with pytest.raises(rewrite_inventory.InventoryError, match="not in the canonical roster"):
+        rewrite_inventory.transition(manifest_path, row["id"], "disposition_approved", evidence)
 
 
 def _init_reference(tmp_path: Path) -> tuple[Path, str, str]:

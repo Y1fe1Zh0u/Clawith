@@ -18,6 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from check_owner_contracts import ContractError as OwnerContractError
+from check_owner_contracts import validate_manifest as validate_owner_contract_manifest
+
 SCHEMA_VERSION = 1
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 KINDS = {"bootstrap", "connector", "http", "lifecycle", "websocket"}
@@ -548,6 +551,7 @@ def validate_manifest(
     disposition_missing = 0
     unreviewed = 0
     nonterminal = 0
+    canonical_owner_ids: set[str] | None = None
     for row in rows:
         state = row.get("state")
         if state not in STATES:
@@ -576,6 +580,13 @@ def validate_manifest(
             if state != "unreviewed":
                 raise InventoryError(f"{row['id']}: approved row is missing {', '.join(missing)}")
         disposition = row.get("disposition")
+        if disposition in REWRITE_DISPOSITIONS and row.get("target_owner_id"):
+            if canonical_owner_ids is None:
+                canonical_owner_ids = set(_validated_owner_contracts(manifest_path))
+            if row["target_owner_id"] not in canonical_owner_ids:
+                raise InventoryError(
+                    f"{row['id']}: target owner is not in the canonical roster: {row['target_owner_id']}"
+                )
         if state in {"contract_approved", "replacement_passed"} and disposition not in REWRITE_DISPOSITIONS:
             raise InventoryError(f"{row['id']}: {state} requires a rewrite disposition")
         if state == "deletion_approved" and disposition != "delete":
@@ -619,17 +630,24 @@ def _evidence_record(manifest_path: Path, evidence: Path) -> dict[str, str]:
     return {"path": display, "sha256": _sha256(resolved)}
 
 
+def _validated_owner_contracts(manifest_path: Path) -> dict[str, dict[str, Any]]:
+    owner_path = manifest_path.with_name("owner-contracts.json")
+    owner_manifest = _load_json(owner_path)
+    try:
+        return validate_owner_contract_manifest(owner_manifest, owner_path)
+    except OwnerContractError as exc:
+        raise InventoryError(f"owner contract manifest is invalid: {exc}") from exc
+
+
 def _approved_owner_contract(manifest_path: Path, row: dict[str, Any]) -> None:
     contract_id = row.get("owner_contract_id")
     contract_hash = row.get("owner_contract_hash")
     if not isinstance(contract_id, str) or not contract_id:
         raise InventoryError(f"{row['id']}: owner_contract_id is required")
-    owner_path = manifest_path.with_name("owner-contracts.json")
-    owner_manifest = _load_json(owner_path)
-    matches = [item for item in owner_manifest.get("entries", []) if item.get("owner_id") == contract_id]
-    if len(matches) != 1:
-        raise InventoryError(f"{row['id']}: owner contract must resolve exactly once: {contract_id}")
-    owner = matches[0]
+    owners = _validated_owner_contracts(manifest_path)
+    owner = owners.get(contract_id)
+    if owner is None:
+        raise InventoryError(f"{row['id']}: owner contract is missing: {contract_id}")
     if owner.get("state") != "contract_approved":
         raise InventoryError(f"{row['id']}: owner contract is not approved: {contract_id}")
     if row.get("target_owner_id") != contract_id:
