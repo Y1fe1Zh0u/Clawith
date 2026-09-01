@@ -195,6 +195,20 @@ LEGACY_ORGANIZATION_RELATIONSHIP_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_ORGANIZATION_RELATIONSHIP_IMPORT_IDENTITIES
 )
+LEGACY_INVITATION_IMPORT_IDENTITIES = (
+    Path("app/models/invitation_code"),
+    Path("app/dao/invitation_code_dao"),
+)
+LEGACY_INVITATION_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_INVITATION_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_INVITATION_DAO_EXPORT = "invitation_code_dao"
+LEGACY_INVITATION_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_INVITATION_IMPORT_IDENTITIES
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -898,6 +912,123 @@ def _assert_tests_do_not_import_deleted_organization_relationship_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test imports deleted legacy Organization/Relationship authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_invitation_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_INVITATION_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Invitation authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Invitation authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_deleted_legacy_invitation_dao_export(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+        ):
+            raise DeletedAuthorityViolation(
+                "deleted legacy Invitation DAO package export can be restored by a "
+                "module-level __getattr__ hook"
+            )
+
+    for node in ast.walk(tree):
+        references_dynamic_hook = (
+            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+            )
+        )
+        if references_dynamic_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Invitation DAO package export can be restored by a "
+                "module-level __getattr__ hook"
+            )
+
+        references_export = (
+            isinstance(node, ast.Name) and node.id == LEGACY_INVITATION_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Attribute)
+            and node.attr == LEGACY_INVITATION_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Constant)
+            and node.value == LEGACY_INVITATION_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.keyword)
+            and node.arg == LEGACY_INVITATION_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == LEGACY_INVITATION_DAO_EXPORT
+                or node.asname == LEGACY_INVITATION_DAO_EXPORT
+            )
+        )
+        if references_export:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Invitation DAO package export was reintroduced: "
+                f"{LEGACY_INVITATION_DAO_EXPORT}"
+            )
+
+
+def _assert_tests_do_not_import_deleted_invitation_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        imported_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_identities.append(node.module)
+                imported_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+
+        for imported_identity in imported_identities:
+            for deleted_identity in LEGACY_INVITATION_DOTTED_IMPORT_IDENTITIES:
+                if imported_identity == deleted_identity or imported_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test imports deleted legacy Invitation authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -1711,6 +1842,113 @@ def test_backend_test_import_of_deleted_organization_relationship_fails_guard(
         _assert_tests_do_not_import_deleted_organization_relationship_authorities(
             tmp_path
         )
+
+
+def test_legacy_invitation_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_invitation_authorities(BACKEND_ROOT)
+
+
+def test_legacy_invitation_dao_export_is_absent() -> None:
+    _assert_deleted_legacy_invitation_dao_export(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_import_deleted_invitation_authorities() -> None:
+    _assert_tests_do_not_import_deleted_invitation_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_INVITATION_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_INVITATION_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_invitation_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Invitation authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_invitation_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.invitation_code_dao import invitation_code_dao\n",
+        "invitation_code_dao = object()\n",
+        '__all__ = ["invitation_code_dao"]\n',
+        "def __getattr__(name):\n    return object()\n",
+        "__getattr__ = lambda name: object()\n",
+        'globals()["invitation_code_dao"] = object()\n',
+    ],
+    ids=[
+        "direct-import",
+        "assignment-reexport",
+        "all-exposure",
+        "module-getattr",
+        "assigned-module-getattr",
+        "globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_invitation_dao_export_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Invitation DAO package export",
+    ):
+        _assert_deleted_legacy_invitation_dao_export(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.invitation_code\n",
+        "from app.models.invitation_code import InvitationCode\n",
+        "from app.dao import invitation_code_dao\n",
+        "from app.dao.invitation_code_dao import InvitationCodeDAO\n",
+    ],
+    ids=[
+        "model-import",
+        "model-symbol-import",
+        "dao-package-import",
+        "dao-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_invitation_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_invitation.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test imports deleted legacy Invitation authority",
+    ):
+        _assert_tests_do_not_import_deleted_invitation_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
