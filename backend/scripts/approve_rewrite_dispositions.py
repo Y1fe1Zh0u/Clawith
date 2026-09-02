@@ -13,6 +13,7 @@ import ast
 import hashlib
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -23,7 +24,7 @@ REPO_ROOT = BACKEND_ROOT.parent
 DEFAULT_MANIFEST = BACKEND_ROOT / "rewrite/coverage.json"
 DEFAULT_EVIDENCE = BACKEND_ROOT / "rewrite/disposition-evidence/endpoint-lifecycle-dispositions.json"
 SOURCE_DISPOSITION_NOTE = ".agents/notes/proposed/simplification/2026-09-01-clean-break-backend-source-disposition.md"
-COVERAGE_MATRIX = ".omx/plans/backend-capability-coverage-matrix.md"
+COVERAGE_MATRIX = "backend/rewrite/backend-capability-coverage-matrix.md"
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,39 @@ def _sha256(path: Path) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _authority_record(path: str, *, repo_root: Path = REPO_ROOT) -> dict[str, str]:
+    relative = Path(path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"authority path must stay inside the repository: {path}")
+    authority = repo_root / relative
+    if not authority.is_file():
+        raise ValueError(f"authority path is not a file: {path}")
+    ignored = subprocess.run(
+        ["git", "-C", str(repo_root), "check-ignore", "--quiet", "--no-index", "--", path],
+        check=False,
+    )
+    if ignored.returncode == 0:
+        raise ValueError(f"authority path is ignored: {path}")
+    if ignored.returncode != 1:
+        raise ValueError(f"cannot determine whether authority path is ignored: {path}")
+    tracked = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", path],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if tracked.returncode != 0:
+        raise ValueError(f"authority path is not Git-tracked: {path}")
+    return {"path": path, "sha256": _sha256(authority)}
+
+
+def _authority_records() -> list[dict[str, str]]:
+    return [
+        _authority_record(SOURCE_DISPOSITION_NOTE),
+        _authority_record(COVERAGE_MATRIX),
+    ]
 
 
 def _module_and_symbol(row: dict[str, Any]) -> tuple[str, str]:
@@ -436,21 +470,54 @@ def build_evidence(manifest: dict[str, Any], owners: set[str]) -> dict[str, Any]
         )
     return {
         "schema_version": 1,
-        "authorities": [
-            {"path": SOURCE_DISPOSITION_NOTE, "sha256": _sha256(REPO_ROOT / SOURCE_DISPOSITION_NOTE)},
-            {"path": COVERAGE_MATRIX, "sha256": _sha256(REPO_ROOT / COVERAGE_MATRIX)},
-        ],
+        "authorities": _authority_records(),
         "owner_roster": sorted(owners),
         "method": "Backend handler AST locations plus deterministic Frontend fixed-route-segment scan.",
         "entries": records,
     }
 
 
+def refresh_evidence_authorities(
+    manifest: dict[str, Any],
+    owners: set[str],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    if evidence.get("schema_version") != 1:
+        raise ValueError("cannot refresh unsupported disposition evidence schema")
+    if evidence.get("owner_roster") != sorted(owners):
+        raise ValueError("cannot refresh disposition evidence with a drifted owner roster")
+    entries = evidence.get("entries")
+    if not isinstance(entries, list):
+        raise TypeError("cannot refresh disposition evidence without entries")
+    evidence_by_id = {
+        entry.get("id"): entry
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    }
+    manifest_ids = [row["id"] for row in manifest["entries"]]
+    if len(evidence_by_id) != len(entries) or set(evidence_by_id) != set(manifest_ids):
+        raise ValueError("cannot refresh disposition evidence with drifted coverage IDs")
+    for row in manifest["entries"]:
+        decision = classify(row)
+        recorded = evidence_by_id[row["id"]].get("decision")
+        if not isinstance(recorded, dict):
+            raise TypeError(f"cannot refresh disposition evidence without decision: {row['id']}")
+        if recorded.get("disposition") != decision.disposition or recorded.get("target_owner_id") != decision.owner:
+            raise ValueError(f"cannot refresh drifted disposition evidence decision: {row['id']}")
+    refreshed = dict(evidence)
+    refreshed["authorities"] = _authority_records()
+    return refreshed
+
+
 def approve(manifest_path: Path, evidence_path: Path) -> tuple[int, int]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     owner_manifest = json.loads((manifest_path.parent / "owner-contracts.json").read_text(encoding="utf-8"))
     owners = {owner["owner_id"] for owner in owner_manifest["owners"]}
-    evidence = build_evidence(manifest, owners)
+    if all(row.get("state") == "disposition_approved" for row in manifest["entries"]):
+        existing_evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence = refresh_evidence_authorities(manifest, owners, existing_evidence)
+    else:
+        evidence = build_evidence(manifest, owners)
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     evidence_record = {
@@ -469,7 +536,9 @@ def approve(manifest_path: Path, evidence_path: Path) -> tuple[int, int]:
             row["behavior_evidence"] = [evidence_record]
             row["consumer_evidence"] = [evidence_record]
             row["planned_gate"] = decision["planned_gate"]
-            row["transition_evidence"] = [{"from": "unreviewed", "to": "disposition_approved", **evidence_record}]
+            row["transition_evidence"] = [
+                {"from": "unreviewed", **evidence_record, "to": "disposition_approved"}
+            ]
             already_approved += 1
             continue
         if row["state"] != "unreviewed":

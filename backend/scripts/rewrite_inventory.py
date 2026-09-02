@@ -490,7 +490,57 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _validate_artifacts(manifest_path: Path, row: dict[str, Any]) -> None:
+def _validate_authority_document(manifest_path: Path, evidence_path: Path) -> None:
+    if evidence_path.name != "endpoint-lifecycle-dispositions.json":
+        return
+    try:
+        document = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InventoryError(f"cannot read disposition authority evidence {evidence_path}: {exc}") from exc
+    authorities = document.get("authorities") if isinstance(document, dict) else None
+    if not isinstance(authorities, list) or not authorities:
+        raise InventoryError("disposition evidence authorities must be a non-empty list")
+    repo_root = manifest_path.resolve().parent.parent.parent
+    for authority in authorities:
+        if not isinstance(authority, dict):
+            raise InventoryError("disposition evidence authority entries must be objects")
+        raw_path = authority.get("path")
+        expected = authority.get("sha256")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise InventoryError("disposition evidence authority requires a non-empty path")
+        relative = Path(raw_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise InventoryError(f"authority path must stay inside the repository: {raw_path}")
+        resolved = repo_root / relative
+        if not resolved.is_file():
+            raise InventoryError(f"authority path is not a file: {raw_path}")
+        ignored = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "--quiet", "--no-index", "--", raw_path],
+            check=False,
+        )
+        if ignored.returncode == 0:
+            raise InventoryError(f"authority path is ignored: {raw_path}")
+        if ignored.returncode != 1:
+            raise InventoryError(f"cannot determine whether authority path is ignored: {raw_path}")
+        tracked = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", raw_path],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if tracked.returncode != 0:
+            raise InventoryError(f"authority path is not Git-tracked: {raw_path}")
+        if not isinstance(expected, str) or len(expected) != 64:
+            raise InventoryError(f"authority hash is invalid: {raw_path}")
+        if _sha256(resolved) != expected:
+            raise InventoryError(f"authority hash changed: {raw_path}")
+
+
+def _validate_artifacts(
+    manifest_path: Path,
+    row: dict[str, Any],
+    validated_artifacts: set[Path],
+) -> None:
     for field in (
         "behavior_evidence",
         "consumer_evidence",
@@ -507,9 +557,14 @@ def _validate_artifacts(manifest_path: Path, row: dict[str, Any]) -> None:
             expected = artifact.get("sha256")
             if not isinstance(expected, str) or len(expected) != 64:
                 raise InventoryError(f"{row.get('id')}: {field} artifact hash is invalid")
-            actual = _sha256(_artifact_path(manifest_path, artifact))
+            artifact_path = _artifact_path(manifest_path, artifact)
+            actual = _sha256(artifact_path)
             if actual != expected:
                 raise InventoryError(f"{row.get('id')}: evidence hash changed for {artifact['path']}")
+            resolved = artifact_path.resolve()
+            if resolved not in validated_artifacts:
+                _validate_authority_document(manifest_path, resolved)
+                validated_artifacts.add(resolved)
 
 
 def _disposition_missing(row: dict[str, Any]) -> list[str]:
@@ -552,6 +607,7 @@ def validate_manifest(
     unreviewed = 0
     nonterminal = 0
     canonical_owner_ids: set[str] | None = None
+    validated_artifacts: set[Path] = set()
     for row in rows:
         state = row.get("state")
         if state not in STATES:
@@ -592,7 +648,7 @@ def validate_manifest(
         if state == "deletion_approved" and disposition != "delete":
             raise InventoryError(f"{row['id']}: deletion_approved requires delete disposition")
         if validate_artifact_hashes:
-            _validate_artifacts(manifest_path, row)
+            _validate_artifacts(manifest_path, row, validated_artifacts)
     return unreviewed, disposition_missing, nonterminal
 
 

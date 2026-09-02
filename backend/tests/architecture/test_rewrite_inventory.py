@@ -117,6 +117,45 @@ def _write_owner_contract_fixture(rewrite_dir: Path, owner_manifest: dict[str, o
     )
 
 
+def _authority_manifest(
+    tmp_path: Path,
+    *,
+    authority_path: str,
+    ignored_pattern: str | None = None,
+    track_authority: bool,
+    authority_hash: str | None = None,
+) -> Path:
+    repo_root = tmp_path / "repo"
+    source = _fixture_source(repo_root / "backend/source")
+    manifest_path = repo_root / "backend/rewrite/coverage.json"
+    authority = repo_root / authority_path
+    _write(authority, "approved authority\n")
+    evidence = repo_root / "backend/rewrite/disposition-evidence/endpoint-lifecycle-dispositions.json"
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(
+        json.dumps(
+            {
+                "authorities": [
+                    {
+                        "path": authority_path,
+                        "sha256": authority_hash or hashlib.sha256(authority.read_bytes()).hexdigest(),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = rewrite_inventory.build_manifest(manifest_path, source)
+    _complete_row(manifest["entries"][0], _artifact(evidence), disposition="delete")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_root), "init", "--quiet"], check=True)
+    if ignored_pattern is not None:
+        _write(repo_root / ".gitignore", ignored_pattern)
+    if track_authority:
+        subprocess.run(["git", "-C", str(repo_root), "add", "--", authority_path], check=True)
+    return manifest_path
+
+
 def _approve_owner(
     owner_manifest: dict[str, object],
     owner_id: str,
@@ -246,6 +285,77 @@ def test_evidence_hash_change_invalidates_manifest(tmp_path: Path) -> None:
     evidence.write_text("changed", encoding="utf-8")
 
     with pytest.raises(rewrite_inventory.InventoryError, match="evidence hash changed"):
+        rewrite_inventory.check_manifest(
+            manifest_path,
+            require_zero_unreviewed=False,
+            require_zero_disposition_missing=False,
+            require_all_terminal=False,
+        )
+
+
+def test_disposition_authority_requires_tracked_content_with_matching_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = _authority_manifest(
+        tmp_path,
+        authority_path="backend/rewrite/backend-capability-coverage-matrix.md",
+        track_authority=True,
+    )
+
+    rewrite_inventory.check_manifest(
+        manifest_path,
+        require_zero_unreviewed=False,
+        require_zero_disposition_missing=False,
+        require_all_terminal=False,
+    )
+    monkeypatch.chdir(manifest_path.parent.parent)
+    rewrite_inventory.check_manifest(
+        Path("rewrite/coverage.json"),
+        require_zero_unreviewed=False,
+        require_zero_disposition_missing=False,
+        require_all_terminal=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("authority_path", "ignored_pattern", "message"),
+    [
+        (".omx/plans/backend-capability-coverage-matrix.md", ".omx/\n", "authority path is ignored"),
+        ("docs/backend-capability-coverage-matrix.md", None, "authority path is not Git-tracked"),
+    ],
+)
+def test_disposition_authority_rejects_nonportable_paths(
+    tmp_path: Path,
+    authority_path: str,
+    ignored_pattern: str | None,
+    message: str,
+) -> None:
+    manifest_path = _authority_manifest(
+        tmp_path,
+        authority_path=authority_path,
+        ignored_pattern=ignored_pattern,
+        track_authority=False,
+    )
+
+    with pytest.raises(rewrite_inventory.InventoryError, match=message):
+        rewrite_inventory.check_manifest(
+            manifest_path,
+            require_zero_unreviewed=False,
+            require_zero_disposition_missing=False,
+            require_all_terminal=False,
+        )
+
+
+def test_disposition_authority_rejects_hash_drift(tmp_path: Path) -> None:
+    manifest_path = _authority_manifest(
+        tmp_path,
+        authority_path="backend/rewrite/backend-capability-coverage-matrix.md",
+        track_authority=True,
+        authority_hash="0" * 64,
+    )
+
+    with pytest.raises(rewrite_inventory.InventoryError, match="authority hash changed"):
         rewrite_inventory.check_manifest(
             manifest_path,
             require_zero_unreviewed=False,
