@@ -1,13 +1,13 @@
 """Runtime-specific approval execution tests."""
 
-from contextlib import asynccontextmanager
 import uuid
+from contextlib import asynccontextmanager
 
 import pytest
-
 from app.models.agent import Agent
-from app.models.audit import ApprovalRequest
 from app.models.user import User
+
+from app.models.audit import ApprovalRequest
 from app.services import autonomy_service as autonomy_module
 from app.services import group_file_service
 
@@ -257,7 +257,6 @@ async def test_runtime_approval_resolution_resumes_the_original_run(
 
     db = _DB()
     resumed = []
-    notifications = []
 
     class _RuntimeCommandIntake:
         def __init__(self, db_arg) -> None:
@@ -265,10 +264,6 @@ async def test_runtime_approval_resolution_resumes_the_original_run(
 
         async def resume_run(self, command):
             resumed.append(command)
-
-    async def send_notification(db_arg, **kwargs):
-        assert db_arg is db
-        notifications.append(kwargs)
 
     async def forbidden_direct_execution(*args, **kwargs):
         raise AssertionError(
@@ -278,10 +273,6 @@ async def test_runtime_approval_resolution_resumes_the_original_run(
     monkeypatch.setattr(
         "app.services.agent_runtime.adapter.RuntimeCommandIntake",
         _RuntimeCommandIntake,
-    )
-    monkeypatch.setattr(
-        "app.services.notification_service.send_notification",
-        send_notification,
     )
     monkeypatch.setattr(
         autonomy_module.AutonomyService,
@@ -307,6 +298,3 @@ async def test_runtime_approval_resolution_resumes_the_original_run(
     assert command.payload["payload"]["decision"] == expected_status
     assert command.actor_user_id == creator_id
     assert db.flush_count == 2
-    assert notifications[0]["body"] == (
-        "Result: Original Agent Run queued to resume"
-    )

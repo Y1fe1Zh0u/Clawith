@@ -1414,7 +1414,7 @@ def _assert_deleted_legacy_notification_authorities(backend_root: Path) -> None:
             )
 
 
-def _assert_tests_do_not_import_deleted_notification_authorities(
+def _assert_tests_do_not_reference_deleted_notification_authorities(
     backend_root: Path,
 ) -> None:
     tests_root = backend_root / "tests"
@@ -1430,25 +1430,27 @@ def _assert_tests_do_not_import_deleted_notification_authorities(
             source_path.read_text(encoding="utf-8"),
             filename=str(source_path),
         )
-        imported_identities: list[str] = []
+        referenced_identities: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imported_identities.extend(alias.name for alias in node.names)
+                referenced_identities.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
-                imported_identities.append(node.module)
-                imported_identities.extend(
+                referenced_identities.append(node.module)
+                referenced_identities.extend(
                     f"{node.module}.{alias.name}"
                     for alias in node.names
                     if alias.name != "*"
                 )
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                referenced_identities.append(node.value)
 
-        for imported_identity in imported_identities:
+        for referenced_identity in referenced_identities:
             for deleted_identity in LEGACY_NOTIFICATION_DOTTED_IMPORT_IDENTITIES:
-                if imported_identity == deleted_identity or imported_identity.startswith(
+                if referenced_identity == deleted_identity or referenced_identity.startswith(
                     f"{deleted_identity}."
                 ):
                     raise DeletedAuthorityViolation(
-                        "test imports deleted legacy Notification authority: "
+                        "test references deleted legacy Notification authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -2684,8 +2686,8 @@ def test_legacy_notification_import_identities_are_absent() -> None:
     _assert_deleted_legacy_notification_authorities(BACKEND_ROOT)
 
 
-def test_backend_tests_do_not_import_deleted_notification_authorities() -> None:
-    _assert_tests_do_not_import_deleted_notification_authorities(BACKEND_ROOT)
+def test_backend_tests_do_not_reference_deleted_notification_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_notification_authorities(BACKEND_ROOT)
 
 
 @pytest.mark.parametrize(
@@ -2751,9 +2753,56 @@ def test_backend_test_import_of_deleted_notification_authority_fails_guard(
 
     with pytest.raises(
         DeletedAuthorityViolation,
-        match="test imports deleted legacy Notification authority",
+        match="test references deleted legacy Notification authority",
     ):
-        _assert_tests_do_not_import_deleted_notification_authorities(tmp_path)
+        _assert_tests_do_not_reference_deleted_notification_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        (
+            'monkeypatch.setattr('
+            '"app.services.notification_service.send_notification", object())\n'
+        ),
+        'module = importlib.import_module("app.api.notification")\n',
+        'model_path = "app.models.notification.Notification"\n',
+    ],
+    ids=[
+        "monkeypatch-dotted-reference",
+        "dynamic-import-reference",
+        "model-dotted-reference",
+    ],
+)
+def test_backend_test_dynamic_reference_of_deleted_notification_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_notification_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Notification authority",
+    ):
+        _assert_tests_do_not_reference_deleted_notification_authorities(tmp_path)
+
+
+def test_unrelated_dynamic_test_reference_passes_notification_guard(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_system_email_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        (
+            'monkeypatch.setattr('
+            '"app.services.system_email_service.send_system_email", object())\n'
+        ),
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_notification_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:

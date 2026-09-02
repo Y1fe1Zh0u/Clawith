@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import smtplib
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -35,18 +34,6 @@ class SystemEmailConfig:
     smtp_password: str
     smtp_ssl: bool
     smtp_timeout_seconds: int
-
-
-@dataclass(slots=True)
-class BroadcastEmailRecipient:
-    """Prepared broadcast recipient payload."""
-
-    email: str
-    subject: str
-    body: str
-
-
-
 
 
 async def resolve_email_config_async(db=None, *, include_disabled: bool = False) -> SystemEmailConfig | None:
@@ -172,15 +159,6 @@ async def send_company_invitation_email(
     }
     subject, body = await render_email_template("company_invitation", variables, db=db)
     await send_system_email(to, subject, body, db=db)
-
-
-async def deliver_broadcast_emails(recipients: Iterable[BroadcastEmailRecipient]) -> None:
-    """Deliver broadcast emails while isolating per-recipient failures."""
-    for recipient in recipients:
-        try:
-            await send_system_email(recipient.email, recipient.subject, recipient.body)
-        except Exception as exc:
-            logger.warning("Failed to deliver broadcast email to %s: %s", recipient.email, exc)
 
 
 # ── Email Templates ──────────────────────────────────────────────────────────

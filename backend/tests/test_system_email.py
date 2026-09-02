@@ -1,7 +1,5 @@
 import contextlib
 
-import pytest
-
 from app.services import system_email_service
 
 
@@ -61,36 +59,3 @@ def test_send_system_email_uses_configured_timeout(monkeypatch):
 
     assert captured["timeout"] == 27
     assert captured["to"] == ["alice@example.com"]
-
-
-@pytest.mark.asyncio
-async def test_deliver_broadcast_emails_continues_after_single_failure(monkeypatch):
-    delivered = []
-
-    async def fake_send_system_email(email: str, subject: str, body: str) -> None:
-        if email == "bad@example.com":
-            raise RuntimeError("smtp down")
-        delivered.append((email, subject, body))
-
-    monkeypatch.setattr(
-        system_email_service,
-        "send_system_email",
-        fake_send_system_email,
-    )
-
-    await system_email_service.deliver_broadcast_emails(
-        [
-            system_email_service.BroadcastEmailRecipient(
-                email="bad@example.com",
-                subject="s1",
-                body="b1",
-            ),
-            system_email_service.BroadcastEmailRecipient(
-                email="good@example.com",
-                subject="s2",
-                body="b2",
-            ),
-        ]
-    )
-
-    assert delivered == [("good@example.com", "s2", "b2")]
