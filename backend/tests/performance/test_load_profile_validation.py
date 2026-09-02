@@ -46,7 +46,7 @@ def test_canonical_backend_50_profile_is_valid() -> None:
 def test_canonical_profile_declares_local_container_services() -> None:
     profile = _profile()
 
-    assert profile["environment"]["services"] == {
+    assert _nested_mapping(profile, "environment")["services"] == {
         "postgresql": "local_container",
         "redis": "local_container",
         "object_storage": "local_container",
