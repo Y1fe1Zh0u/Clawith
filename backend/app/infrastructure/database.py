@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from pydantic import SecretStr
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-from app.infrastructure.config import Settings, get_settings
+from app.infrastructure.config import Settings, get_settings, reveal_database_url
 
 
 class Base(DeclarativeBase):
@@ -36,14 +36,14 @@ class DatabaseResources:
 
 
 def _create_role_engine(
-    database_url: SecretStr,
+    database_url: URL,
     *,
     echo: bool,
     pool_size: int,
     max_overflow: int,
 ) -> AsyncEngine:
     return create_async_engine(
-        database_url.get_secret_value(),
+        database_url,
         echo=echo,
         pool_size=pool_size,
         max_overflow=max_overflow,
@@ -53,8 +53,9 @@ def _create_role_engine(
 async def create_database_resources(settings: Settings | None = None) -> DatabaseResources:
     """Create the application-owned control and execution pools."""
     database_settings = settings or get_settings()
+    database_url = reveal_database_url(database_settings.DATABASE_URL)
     control_engine = _create_role_engine(
-        database_settings.DATABASE_URL,
+        database_url,
         echo=database_settings.DEBUG,
         pool_size=database_settings.CONTROL_DATABASE_POOL_SIZE,
         max_overflow=database_settings.DATABASE_POOL_MAX_OVERFLOW,
@@ -62,7 +63,7 @@ async def create_database_resources(settings: Settings | None = None) -> Databas
     execution_engine: AsyncEngine | None = None
     try:
         execution_engine = _create_role_engine(
-            database_settings.DATABASE_URL,
+            database_url,
             echo=database_settings.DEBUG,
             pool_size=database_settings.EXECUTION_DATABASE_POOL_SIZE,
             max_overflow=database_settings.DATABASE_POOL_MAX_OVERFLOW,

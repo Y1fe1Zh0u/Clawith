@@ -36,6 +36,8 @@ Every Credential belongs to one Tenant. A row with neither optional owner is Ten
 
 Platform infrastructure Secrets, including database and Redis credentials, JWT signing material, the Credential encryption master key, and internal service authentication, remain in deployment Secret configuration. The first release has no database-managed platform-global Credential.
 
+The target database URL remains a `SecretStr` throughout Settings validation, representation, serialization, and application composition. `reveal_database_url` is the one typed reveal boundary: it converts the Secret into SQLAlchemy's password-masking `URL` value. Application engine construction and Alembic connection construction are the two authorized consumers of that value. Alembic stores only the masked rendering in its configuration diagnostics, and replaces connection, migration, and disposal failures with bounded non-Secret errors. Validation may inspect the same typed URL but never includes the input or a chained parser error in its diagnostic. The earlier commit directive that limited `get_secret_value` to application engine construction was too narrow; Alembic is an equally necessary database connection owner, while direct Secret revelation outside `reveal_database_url` remains unauthorized.
+
 ### Capability-owned references
 
 Credential stores authentication material, not Tool, Model, Channel, SSO, or browser business behavior. The owning product table stores non-Secret configuration and references `credential_id` directly:
@@ -118,6 +120,7 @@ Fallback makes corruption, key mismatch, and unencrypted legacy data indistingui
 - Secret rotation affects later use without rewriting Run facts; revocation fails closed and cancels dependent non-terminal Runs.
 - Credential payload uses authenticated encryption with explicit payload and key versions, has no plaintext fallback, and remains losslessly readable across supported target upgrades.
 - Deployment infrastructure Secrets remain outside the database, and the first release adds no platform-global Credential, generic Connection, generic Credential Grant, KMS integration, approval workflow, Scope engine, or Credential usage-history subsystem.
+- Database Settings representations, dumps, validation errors, Alembic configuration diagnostics, and Alembic failures do not expose the database password; application and Alembic engines receive the same typed SQLAlchemy URL through `reveal_database_url`.
 
 ## Risks and open questions
 

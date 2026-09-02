@@ -59,6 +59,7 @@ def _validate_alembic_imports(source: str) -> None:
     imports = _app_imports(source)
     required = {
         "app.infrastructure.config.get_settings",
+        "app.infrastructure.config.reveal_database_url",
         "app.infrastructure.database.Base",
     }
     if imports != required:
@@ -201,6 +202,28 @@ def test_alembic_environment_imports_only_target_infrastructure() -> None:
     _validate_alembic_imports(ALEMBIC_ENV.read_text(encoding="utf-8"))
 
 
+def test_alembic_connection_failure_never_exposes_database_password() -> None:
+    password = "alembic-failure-secret"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = (
+        f"postgresql+asyncpg://clawith:{password}@127.0.0.1:1/clawith_target"
+    )
+
+    completed = subprocess.run(
+        ["uv", "run", "alembic", "current"],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    diagnostic = f"{completed.stdout}\n{completed.stderr}"
+    assert completed.returncode != 0
+    assert "Alembic migration failed while connecting" in diagnostic
+    assert password not in diagnostic
+
+
 @pytest.mark.parametrize(
     "legacy_import",
     [
@@ -211,6 +234,7 @@ def test_alembic_environment_imports_only_target_infrastructure() -> None:
 )
 def test_alembic_boundary_rejects_legacy_application_imports(legacy_import: str) -> None:
     source = f"""from app.infrastructure.config import get_settings
+from app.infrastructure.config import reveal_database_url
 from app.infrastructure.database import Base
 {legacy_import}
 target_metadata = Base.metadata
@@ -222,6 +246,7 @@ target_metadata = Base.metadata
 
 def test_alembic_boundary_rejects_a_non_target_metadata_assignment() -> None:
     source = """from app.infrastructure.config import get_settings
+from app.infrastructure.config import reveal_database_url
 from app.infrastructure.database import Base
 target_metadata = object()
 """

@@ -7,13 +7,14 @@ from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
 
 from app import application
 from app.infrastructure import config, database
-from app.infrastructure.config import Settings
+from app.infrastructure.config import Settings, reveal_database_url
 from app.infrastructure.database import Base, DatabaseResources
 from app.main import app as asgi_app
 
@@ -166,7 +167,10 @@ def test_database_url_is_masked_in_settings_representations_and_dumps(password: 
         settings.model_dump_json(),
     )
     assert all(password not in rendered for rendered in rendered_settings)
-    assert settings.DATABASE_URL.get_secret_value() == database_url
+    revealed_url = reveal_database_url(settings.DATABASE_URL)
+    assert isinstance(revealed_url, URL)
+    assert str(revealed_url) == database_url.replace(password, "***")
+    assert revealed_url == make_url(database_url)
 
 
 def test_target_configuration_uses_role_isolated_20_connection_pools() -> None:
@@ -204,13 +208,20 @@ async def test_database_resources_create_and_dispose_both_role_pools(
     engine_calls: list[tuple[str, bool, int, int]] = []
 
     def create_engine(
-        database_url: str,
+        database_url: URL,
         *,
         echo: bool,
         pool_size: int,
         max_overflow: int,
     ) -> AsyncEngine:
-        engine_calls.append((database_url, echo, pool_size, max_overflow))
+        engine_calls.append(
+            (
+                database_url.render_as_string(hide_password=False),
+                echo,
+                pool_size,
+                max_overflow,
+            )
+        )
         engine = FakeEngine()
         engines.append(engine)
         return cast(AsyncEngine, engine)
@@ -255,7 +266,7 @@ async def test_database_resources_dispose_control_pool_when_execution_creation_f
     calls = 0
 
     def create_engine(
-        _database_url: SecretStr,
+        _database_url: URL,
         *,
         echo: bool,
         pool_size: int,

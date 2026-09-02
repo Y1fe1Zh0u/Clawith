@@ -5,12 +5,17 @@ from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 VERSION_PATH = BACKEND_ROOT / "VERSION"
 ENV_FILE_PATH = BACKEND_ROOT / ".env"
+
+
+def reveal_database_url(value: SecretStr) -> URL:
+    """Reveal a database secret only into SQLAlchemy's password-masking URL type."""
+    return make_url(value.get_secret_value())
 
 
 def _read_version() -> str:
@@ -38,19 +43,21 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL")
     @classmethod
     def _complete_async_postgres_url(cls, value: SecretStr) -> SecretStr:
-        secret_value = value.get_secret_value()
         try:
-            url = make_url(secret_value)
-        except ArgumentError as exc:
-            raise ValueError("DATABASE_URL must be a complete SQLAlchemy URL") from exc
+            url = reveal_database_url(value)
+        except ArgumentError:
+            raise ValueError("DATABASE_URL must be a complete SQLAlchemy URL") from None
 
-        required_parts = {
-            "username": url.username,
-            "password": url.password,
-            "host": url.host,
-            "port": url.port,
-            "database": url.database,
-        }
+        try:
+            required_parts = {
+                "username": url.username,
+                "password": url.password,
+                "host": url.host,
+                "port": url.port,
+                "database": url.database,
+            }
+        except ValueError:
+            raise ValueError("DATABASE_URL contains an invalid port") from None
         missing = [name for name, part in required_parts.items() if part in (None, "")]
         invalid_port = url.port is not None and not 1 <= url.port <= 65535
         if url.drivername != "postgresql+asyncpg" or missing or invalid_port:
