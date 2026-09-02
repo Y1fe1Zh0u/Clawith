@@ -1233,6 +1233,19 @@ def _assert_deleted_legacy_notification_authorities(backend_root: Path) -> None:
 def _assert_tests_do_not_reference_deleted_notification_authorities(
     backend_root: Path,
 ) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Notification",
+        deleted_identities=LEGACY_NOTIFICATION_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_tests_do_not_reference_deleted_authorities(
+    backend_root: Path,
+    *,
+    authority: str,
+    deleted_identities: tuple[str, ...],
+) -> None:
     tests_root = backend_root / "tests"
     if not tests_root.is_dir():
         return
@@ -1261,12 +1274,12 @@ def _assert_tests_do_not_reference_deleted_notification_authorities(
                 referenced_identities.append(node.value)
 
         for referenced_identity in referenced_identities:
-            for deleted_identity in LEGACY_NOTIFICATION_DOTTED_IMPORT_IDENTITIES:
+            for deleted_identity in deleted_identities:
                 if referenced_identity == deleted_identity or referenced_identity.startswith(
                     f"{deleted_identity}."
                 ):
                     raise DeletedAuthorityViolation(
-                        "test references deleted legacy Notification authority: "
+                        f"test references deleted legacy {authority} authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -1290,42 +1303,11 @@ def _assert_deleted_legacy_published_page_authorities(backend_root: Path) -> Non
 def _assert_tests_do_not_reference_deleted_published_page_authorities(
     backend_root: Path,
 ) -> None:
-    tests_root = backend_root / "tests"
-    if not tests_root.is_dir():
-        return
-
-    for source_path in sorted(tests_root.rglob("*.py")):
-        relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
-            continue
-
-        tree = ast.parse(
-            source_path.read_text(encoding="utf-8"),
-            filename=str(source_path),
-        )
-        referenced_identities: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                referenced_identities.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                referenced_identities.append(node.module)
-                referenced_identities.extend(
-                    f"{node.module}.{alias.name}"
-                    for alias in node.names
-                    if alias.name != "*"
-                )
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                referenced_identities.append(node.value)
-
-        for referenced_identity in referenced_identities:
-            for deleted_identity in LEGACY_PUBLISHED_PAGE_DOTTED_IMPORT_IDENTITIES:
-                if referenced_identity == deleted_identity or referenced_identity.startswith(
-                    f"{deleted_identity}."
-                ):
-                    raise DeletedAuthorityViolation(
-                        "test references deleted legacy Published Page authority: "
-                        f"{relative_path} -> {deleted_identity}"
-                    )
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Published Page",
+        deleted_identities=LEGACY_PUBLISHED_PAGE_DOTTED_IMPORT_IDENTITIES,
+    )
 
 
 def _assert_deleted_legacy_plaza_authorities(backend_root: Path) -> None:
@@ -1347,42 +1329,11 @@ def _assert_deleted_legacy_plaza_authorities(backend_root: Path) -> None:
 def _assert_tests_do_not_reference_deleted_plaza_authorities(
     backend_root: Path,
 ) -> None:
-    tests_root = backend_root / "tests"
-    if not tests_root.is_dir():
-        return
-
-    for source_path in sorted(tests_root.rglob("*.py")):
-        relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
-            continue
-
-        tree = ast.parse(
-            source_path.read_text(encoding="utf-8"),
-            filename=str(source_path),
-        )
-        referenced_identities: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                referenced_identities.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                referenced_identities.append(node.module)
-                referenced_identities.extend(
-                    f"{node.module}.{alias.name}"
-                    for alias in node.names
-                    if alias.name != "*"
-                )
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                referenced_identities.append(node.value)
-
-        for referenced_identity in referenced_identities:
-            for deleted_identity in LEGACY_PLAZA_DOTTED_IMPORT_IDENTITIES:
-                if referenced_identity == deleted_identity or referenced_identity.startswith(
-                    f"{deleted_identity}."
-                ):
-                    raise DeletedAuthorityViolation(
-                        "test references deleted legacy Plaza authority: "
-                        f"{relative_path} -> {deleted_identity}"
-                    )
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Plaza",
+        deleted_identities=LEGACY_PLAZA_DOTTED_IMPORT_IDENTITIES,
+    )
 
 
 def _assert_deleted_legacy_agent_template_authorities(backend_root: Path) -> None:
@@ -1412,42 +1363,11 @@ def _assert_deleted_legacy_agent_template_dao_export(backend_root: Path) -> None
 def _assert_tests_do_not_reference_deleted_agent_template_authorities(
     backend_root: Path,
 ) -> None:
-    tests_root = backend_root / "tests"
-    if not tests_root.is_dir():
-        return
-
-    for source_path in sorted(tests_root.rglob("*.py")):
-        relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
-            continue
-
-        tree = ast.parse(
-            source_path.read_text(encoding="utf-8"),
-            filename=str(source_path),
-        )
-        referenced_identities: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                referenced_identities.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                referenced_identities.append(node.module)
-                referenced_identities.extend(
-                    f"{node.module}.{alias.name}"
-                    for alias in node.names
-                    if alias.name != "*"
-                )
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                referenced_identities.append(node.value)
-
-        for referenced_identity in referenced_identities:
-            for deleted_identity in LEGACY_AGENT_TEMPLATE_DOTTED_IMPORT_IDENTITIES:
-                if referenced_identity == deleted_identity or referenced_identity.startswith(
-                    f"{deleted_identity}."
-                ):
-                    raise DeletedAuthorityViolation(
-                        "test references deleted legacy Agent Template authority: "
-                        f"{relative_path} -> {deleted_identity}"
-                    )
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Agent Template",
+        deleted_identities=LEGACY_AGENT_TEMPLATE_DOTTED_IMPORT_IDENTITIES,
+    )
 
 
 def _assert_deleted_legacy_agentbay_authorities(backend_root: Path) -> None:
@@ -1469,42 +1389,11 @@ def _assert_deleted_legacy_agentbay_authorities(backend_root: Path) -> None:
 def _assert_tests_do_not_reference_deleted_agentbay_authorities(
     backend_root: Path,
 ) -> None:
-    tests_root = backend_root / "tests"
-    if not tests_root.is_dir():
-        return
-
-    for source_path in sorted(tests_root.rglob("*.py")):
-        relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
-            continue
-
-        tree = ast.parse(
-            source_path.read_text(encoding="utf-8"),
-            filename=str(source_path),
-        )
-        referenced_identities: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                referenced_identities.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                referenced_identities.append(node.module)
-                referenced_identities.extend(
-                    f"{node.module}.{alias.name}"
-                    for alias in node.names
-                    if alias.name != "*"
-                )
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                referenced_identities.append(node.value)
-
-        for referenced_identity in referenced_identities:
-            for deleted_identity in LEGACY_AGENTBAY_DOTTED_IMPORT_IDENTITIES:
-                if referenced_identity == deleted_identity or referenced_identity.startswith(
-                    f"{deleted_identity}."
-                ):
-                    raise DeletedAuthorityViolation(
-                        "test references deleted legacy AgentBay authority: "
-                        f"{relative_path} -> {deleted_identity}"
-                    )
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="AgentBay",
+        deleted_identities=LEGACY_AGENTBAY_DOTTED_IMPORT_IDENTITIES,
+    )
 
 
 def _assert_deleted_legacy_tenant_knowledge_publication_authority(
@@ -1546,42 +1435,11 @@ def _assert_deleted_legacy_autonomy_approval_authority(
 def _assert_tests_do_not_reference_deleted_autonomy_approval_authority(
     backend_root: Path,
 ) -> None:
-    tests_root = backend_root / "tests"
-    if not tests_root.is_dir():
-        return
-
-    for source_path in sorted(tests_root.rglob("*.py")):
-        relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
-            continue
-
-        tree = ast.parse(
-            source_path.read_text(encoding="utf-8"),
-            filename=str(source_path),
-        )
-        referenced_identities: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                referenced_identities.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                referenced_identities.append(node.module)
-                referenced_identities.extend(
-                    f"{node.module}.{alias.name}"
-                    for alias in node.names
-                    if alias.name != "*"
-                )
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                referenced_identities.append(node.value)
-
-        for referenced_identity in referenced_identities:
-            for deleted_identity in LEGACY_AUTONOMY_APPROVAL_DOTTED_IMPORT_IDENTITIES:
-                if referenced_identity == deleted_identity or referenced_identity.startswith(
-                    f"{deleted_identity}."
-                ):
-                    raise DeletedAuthorityViolation(
-                        "test references deleted legacy Autonomy/Approval authority: "
-                        f"{relative_path} -> {deleted_identity}"
-                    )
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Autonomy/Approval",
+        deleted_identities=LEGACY_AUTONOMY_APPROVAL_DOTTED_IMPORT_IDENTITIES,
+    )
 
 
 def _assignment_names(target: ast.expr) -> set[str]:
