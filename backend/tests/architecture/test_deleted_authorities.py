@@ -425,23 +425,124 @@ class DeletedAuthorityViolation(RuntimeError):
     """A deleted Backend authority is present in the target tree."""
 
 
+def _is_globals_call(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "globals"
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _is_dynamic_export_hook_name(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+
+
+def _is_globals_hook_target(node: ast.expr) -> bool:
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return any(_is_globals_hook_target(element) for element in node.elts)
+    if isinstance(node, ast.Starred):
+        return _is_globals_hook_target(node.value)
+    return (
+        isinstance(node, ast.Subscript)
+        and _is_globals_call(node.value)
+        and _is_dynamic_export_hook_name(node.slice)
+    )
+
+
+class _ModuleScopeDynamicExportHookVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.installs_hook = False
+
+    def _visit_function_signature(
+        self,
+        *,
+        decorators: list[ast.expr],
+        arguments: ast.arguments,
+    ) -> None:
+        for decorator in decorators:
+            self.visit(decorator)
+        for default in (*arguments.defaults, *arguments.kw_defaults):
+            if default is not None:
+                self.visit(default)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function_signature(
+            decorators=node.decorator_list,
+            arguments=node.args,
+        )
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function_signature(
+            decorators=node.decorator_list,
+            arguments=node.args,
+        )
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._visit_function_signature(decorators=[], arguments=node.args)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if any(_is_globals_hook_target(target) for target in node.targets):
+            self.installs_hook = True
+            return
+        self.visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if _is_globals_hook_target(node.target):
+            self.installs_hook = True
+            return
+        if node.value is not None:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        if _is_globals_hook_target(node.target):
+            self.installs_hook = True
+            return
+        self.visit(node.value)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        calls_globals_setitem = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "__setitem__"
+            and _is_globals_call(node.func.value)
+            and bool(node.args)
+            and _is_dynamic_export_hook_name(node.args[0])
+        )
+        calls_setattr = (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and _is_dynamic_export_hook_name(node.args[1])
+        )
+        if calls_globals_setitem or calls_setattr:
+            self.installs_hook = True
+            return
+        self.generic_visit(node)
+
+
 def _assert_dao_package_exports_are_static(backend_root: Path) -> None:
     package_init = backend_root / DAO_PACKAGE_INIT
     if not package_init.is_file():
         return
 
     source = package_init.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(package_init))
     symbols = symtable.symtable(source, str(package_init), "exec")
     try:
         dynamic_hook = symbols.lookup(DYNAMIC_MODULE_EXPORT_HOOK)
     except KeyError:
-        return
+        binds_dynamic_hook = False
+    else:
+        binds_dynamic_hook = (
+            dynamic_hook.is_assigned()
+            or dynamic_hook.is_imported()
+            or dynamic_hook.is_namespace()
+        )
 
-    if (
-        dynamic_hook.is_assigned()
-        or dynamic_hook.is_imported()
-        or dynamic_hook.is_namespace()
-    ):
+    dynamic_installer = _ModuleScopeDynamicExportHookVisitor()
+    dynamic_installer.visit(tree)
+    if binds_dynamic_hook or dynamic_installer.installs_hook:
         raise DeletedAuthorityViolation(
             "app.dao package exports must be static; module-level __getattr__ is "
             "forbidden"
@@ -1836,13 +1937,25 @@ def test_dao_package_exports_are_static() -> None:
         "def __getattr__(name):\n    return object()\n",
         "async def __getattr__(name):\n    return object()\n",
         "__getattr__ = lambda name: object()\n",
+        "if True:\n    __getattr__: object = object()\n",
         "from app.hooks import resolve as __getattr__\n",
+        'globals()["__getattr__"] = lambda name: object()\n',
+        'globals()["__getattr__"], marker = object(), object()\n',
+        'globals()["__getattr__"]: object = object()\n',
+        'globals().__setitem__("__getattr__", lambda name: object())\n',
+        'setattr(module, "__getattr__", lambda name: object())\n',
     ],
     ids=[
         "function-hook",
         "async-function-hook",
         "assigned-hook",
+        "annotated-assigned-hook",
         "imported-hook",
+        "globals-subscript-hook",
+        "globals-unpacked-subscript-hook",
+        "globals-annotated-subscript-hook",
+        "globals-setitem-hook",
+        "setattr-hook",
     ],
 )
 def test_dynamic_dao_package_export_hook_fails_guard(
@@ -1865,9 +1978,19 @@ def test_dynamic_dao_package_export_hook_fails_guard(
     [
         'hook_name = "__getattr__"\n',
         "def helper():\n    def __getattr__(name):\n        return object()\n",
+        "def helper():\n    __getattr__ = object()\n    return __getattr__\n",
         "def helper(module):\n    return module.__getattr__\n",
+        "class Helper:\n    def __getattr__(self, name):\n        return object()\n",
+        "helper.__getattr__ = object()\n",
     ],
-    ids=["inert-string", "nested-function", "attribute-reference"],
+    ids=[
+        "inert-string",
+        "nested-function",
+        "local-binding",
+        "attribute-reference",
+        "class-hook",
+        "unrelated-attribute-assignment",
+    ],
 )
 def test_non_package_hook_reference_passes_static_dao_export_guard(
     tmp_path: Path,

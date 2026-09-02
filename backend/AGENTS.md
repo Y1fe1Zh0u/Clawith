@@ -128,7 +128,7 @@ Tests for registration, cancellation, shutdown, and cleanup must observe the own
 
 API handlers are transport adapters. They parse and validate request data, establish the authenticated and authorized caller, pass explicit inputs to the owning service or command-intake boundary, and map the result to the transport response. Do not put business orchestration, ORM queries, Runtime node calls, checkpoint mutation, or private lifecycle control into an API handler.
 
-`app.dao` package exports are static. Do not define or assign a module-level `__getattr__` in `app/dao/__init__.py`; deleted DAO exports must remain enforceable by ordinary source inspection rather than a dynamic package hook.
+`app.dao` package exports are static. Do not define, bind, or install a module-level `__getattr__` in `app/dao/__init__.py`, including through `globals()` mutation or module-scope `setattr`; deleted DAO exports must remain enforceable by ordinary source inspection rather than a dynamic package hook.
 
 Design shared service contracts for all current consumers. Keep transport-, UI-, channel-, and provider-specific behavior in the owning adapter or consumer. Do not widen a public service for one internal caller; keep single-consumer capabilities private until a real shared contract exists.
 
