@@ -17,7 +17,7 @@ Each current source area receives one disposition:
 - `delete`: the capability or compatibility behavior is absent from the accepted target and is not ported.
 - `rewrite`: the product capability remains, but its current authority, persistence, API, or lifecycle is replaced.
 - `reuse`: a bounded provider, transport, conversion, storage, or pure helper implementation may move behind a new owner after its imports and behavior are verified.
-- `defer`: the product capability and its later contract, implementation, and test obligations remain in scope for the complete Backend rewrite, but they do not block the foundational Agent Runtime slice. Deferral does not preserve old source: after Phase 0 freezes its evidence and disposition and the category removal boundary is approved, G002 may delete the old authority before the target contract or implementation exists. That deletion does not cancel the capability, authorize target contract choices, or create compatibility.
+- `defer`: the product capability and its later contract, implementation, and test obligations remain in scope for the complete Backend rewrite, but they do not block the foundational Agent Runtime slice. Deferral does not preserve old source: Phase 0's 401/401 `disposition_approved` coverage rows collectively authorize G002 to delete the classified old authorities before their target contracts or implementations exist. That deletion does not cancel the capability, authorize target contract choices, or create compatibility.
 
 No current ORM model, API response, internal service contract, migration, or test is automatically compatible with the target. Reuse is code-level implementation reuse, never authority reuse.
 
@@ -461,7 +461,7 @@ These currently exposed features are not prerequisites for the foundational Runn
 - OKR objectives, key results, alignment, progress, daily collection, member/company reports, and the OKR Agent product integration.
 - Agent templates, onboarding, directory presentation, activity/usage observability, notifications, public pages, Plaza, enterprise settings, platform administration, email configuration, and AgentBay control.
 
-`defer` preserves the product capability and its later contract, implementation, and test obligations, not the old implementation. Old source may remain temporarily only as staged evidence while its G002 category removal boundary is unresolved. Once Phase 0 evidence and disposition are frozen and that boundary is approved, G002 may delete the old authority before replacement implementation. This sequencing does not cancel the capability, select its target persistence or API contract, or create compatibility between old and new identities.
+`defer` preserves the product capability and its later contract, implementation, and test obligations, not the old implementation. Phase 0's 401/401 `disposition_approved` coverage rows collectively authorize G002 to delete the classified old authorities before replacement implementation. Per-category commits are reviewable execution slices of that collective disposition approval; they are not new approval states, boundaries, or ledgers. This sequencing does not cancel the capability, select its target persistence or API contract, or create compatibility between old and new identities.
 
 ### Migration, composition, and dependency disposition
 
@@ -491,7 +491,7 @@ Provider adapters, Channel protocol handling, Sandbox isolation, storage operati
 
 ### Keep every current product table until its frontend is rewritten
 
-This would force new core modules to reference old User, Agent, permission, Task, Credential, and Workspace identities. Source for a deferred capability may remain temporarily only while its G002 removal boundary is unresolved; deferral does not require an old table to survive until the Frontend or replacement is ready. The final Backend has one target schema and no cross-schema compatibility contract.
+This would force new core modules to reference old User, Agent, permission, Task, Credential, and Workspace identities. Phase 0's collective disposition approval permits G002 to delete source for a deferred capability before the Frontend or replacement is ready; deferral does not require an old table to survive until then. The final Backend has one target schema and no cross-schema compatibility contract.
 
 ## Acceptance criteria
 
@@ -503,7 +503,7 @@ This would force new core modules to reference old User, Agent, permission, Task
 - The foundational rewrite starts from new module owners and one new schema baseline rather than modifying old Runtime authority in place.
 - Sandbox, storage, conversion, Provider, MCP, external Tool, Channel, realtime, and infrastructure code is reusable only after removing imports and assumptions owned by deleted contracts.
 - Every currently mounted product capability is either included in a rewrite slice or explicitly deferred; deferral preserves its later owner-contract, implementation, and test obligations even when G002 deletes the old authority first.
-- After Phase 0 evidence and disposition are frozen, old APIs, models, tests, configuration, and dependencies are deleted together when their category removal boundary is approved; replacement implementation is not a prerequisite, and deletion does not authorize target contract choices or compatibility.
+- Phase 0's 401/401 `disposition_approved` rows collectively authorize deletion of the classified old APIs, models, tests, configuration, and dependencies; per-category commits only slice that authorized execution for review, replacement implementation is not a prerequisite, and deletion does not authorize target contract choices or compatibility.
 - No compatibility adapter, dual write, fallback read, startup repair, or legacy data migration connects the current Backend to the target.
 - Implementation planning sequences owner prerequisites before consumers and verifies each cutover through the target contract rather than old test expectations.
 
