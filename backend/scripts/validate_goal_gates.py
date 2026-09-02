@@ -12,8 +12,10 @@ record runtime state, or replay mutating commands.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 EXPECTED_GOALS = tuple(f"G{number:03d}" for number in range(10))
@@ -41,10 +43,21 @@ EXPECTED_E2E_LEVELS = {
     "G008": "complete_backend",
     "G009": "complete_backend",
 }
-EXPECTED_APPROVALS = {
-    "G003": ["run", "context"],
-    "G004": ["session", "a2a", "group", "trigger", "heartbeat", "channel"],
+EXPECTED_SCHEMA_OWNERS = {
+    "G003": ["identity_tenant", "credential", "model", "agent", "permission", "audit", "run", "context"],
+    "G004": [
+        "workspace",
+        "tool",
+        "capability_market",
+        "session",
+        "a2a",
+        "group",
+        "trigger",
+        "heartbeat",
+        "channel",
+    ],
 }
+EXPECTED_APPROVALS = EXPECTED_SCHEMA_OWNERS
 EXPECTED_IMPLEMENTATION_OWNERS = {
     "G000": [],
     "G001": [],
@@ -61,8 +74,27 @@ EXPECTED_MUTATIONS = {
     "G000": [],
     "G001": [],
     "G002": [],
-    "G003": ["approve-run-contract-only", "approve-context-contract-only"],
-    "G004": ["approve-product-input-contracts-only"],
+    "G003": [
+        "approve-identity-tenant-contract-only",
+        "approve-credential-contract-only",
+        "approve-model-contract-only",
+        "approve-agent-contract-only",
+        "approve-permission-contract-only",
+        "approve-audit-contract-only",
+        "approve-run-contract-only",
+        "approve-context-contract-only",
+    ],
+    "G004": [
+        "approve-workspace-contract-only",
+        "approve-tool-contract-only",
+        "approve-capability-market-contract-only",
+        "approve-session-contract-only",
+        "approve-a2a-contract-only",
+        "approve-group-contract-only",
+        "approve-trigger-contract-only",
+        "approve-heartbeat-contract-only",
+        "approve-channel-contract-only",
+    ],
     "G005": [],
     "G006": [],
     "G007": ["approve-s3-owner-contract", "transition-coverage-row"],
@@ -72,11 +104,17 @@ EXPECTED_MUTATIONS = {
 EXPECTED_VALIDATION_ARTIFACTS = {
     "G000": ["backend/rewrite/goal-gates.json"],
     "G001": [
-        "backend/artifacts/rewrite/G001/phase-0-ledgers.txt",
+        "backend/artifacts/rewrite/G001/coverage-disposition.json",
+        "backend/artifacts/rewrite/G001/governance.txt",
+        "backend/artifacts/rewrite/G001/owner-dag-wave-roster.json",
+        "backend/artifacts/rewrite/G001/product-roster-linkage.json",
+        "backend/artifacts/rewrite/G001/strict-load-profile.txt",
         "backend/artifacts/rewrite/G001/legacy-reference.json",
     ],
     "G002": [
-        "backend/artifacts/rewrite/G002/architecture-static.txt",
+        "backend/artifacts/rewrite/G002/architecture.txt",
+        "backend/artifacts/rewrite/G002/ruff.txt",
+        "backend/artifacts/rewrite/G002/pyright.txt",
         "backend/artifacts/rewrite/G002/pytest-collection.txt",
     ],
     "G003": [
@@ -105,10 +143,63 @@ EXPECTED_VALIDATION_ARTIFACTS = {
         "backend/artifacts/rewrite/G008/fresh-e2e-after-reference-removal.txt",
     ],
     "G009": [
-        "backend/artifacts/rewrite/G009/complete-backend.txt",
+        "backend/artifacts/rewrite/G009/complete-backend-pytest.txt",
+        "backend/artifacts/rewrite/G009/complete-backend-ruff.txt",
+        "backend/artifacts/rewrite/G009/complete-backend-pyright.txt",
         "backend/artifacts/rewrite/G009/deployment-recovery.txt",
         "backend/artifacts/performance/final.json",
     ],
+}
+EXPECTED_VALIDATION_COMMANDS = {
+    "G000": {
+        "goal-gate-contract": "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json",
+    },
+    "G001": {
+        "coverage-disposition-state": "uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json --require-zero-unreviewed --require-zero-disposition-missing",
+        "governance": "uv run --extra dev pytest tests/architecture/test_governance.py tests/architecture/test_module_boundaries.py",
+        "owner-dag-and-wave-roster": "uv run python scripts/check_owner_contracts.py check --manifest rewrite/owner-contracts.json",
+        "product-roster-and-linkage": "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json --check-product-roster-and-linkage",
+        "strict-load-profile": "uv run python scripts/validate_load_profile.py tests/performance/profiles/backend_50.json",
+        "immutable-reference": "uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json",
+    },
+    "G002": {
+        "architecture": "uv run --extra dev pytest tests/architecture",
+        "ruff": "uv run --extra dev ruff check app tests",
+        "pyright": "uv run --extra dev pyright app",
+        "full-test-collection-disposition": "uv run --extra dev pytest --collect-only",
+    },
+    "G003": {
+        "foundation-contract-prerequisites": "uv run python scripts/check_owner_contracts.py check --manifest rewrite/owner-contracts.json --require-approved-owner run --require-approved-owner context --require-approved-wave S0 --require-approved-wave S1",
+        "foundation-schema-and-integration": "uv run --extra dev pytest tests/database/test_schema_wave_S0.py tests/database/test_schema_wave_S1.py tests/modules/identity_tenant tests/modules/credential tests/modules/model/test_configuration.py tests/modules/agent tests/modules/permission tests/modules/audit",
+    },
+    "G004": {
+        "product-input-contract-prerequisites": "uv run python scripts/check_owner_contracts.py check --manifest rewrite/owner-contracts.json --require-approved-owner session --require-approved-owner a2a --require-approved-owner group --require-approved-owner trigger --require-approved-owner heartbeat --require-approved-owner channel --require-approved-wave S2",
+        "execution-dependency-integration": "uv run --extra dev pytest tests/database/test_schema_wave_S2.py tests/modules/workspace tests/modules/tool tests/modules/capability_market tests/modules/model/test_execution.py tests/modules/model/test_continuation.py",
+    },
+    "G005": {
+        "core-runtime-real-entry": "uv run --extra dev pytest tests/runtime tests/e2e/test_runtime_product_owner_fixture.py tests/performance/test_execution_scheduler_fairness.py",
+        "core-runtime-load": "uv run python tests/performance/run_backend_load.py --profile tests/performance/profiles/backend_50.json --scenario core --out artifacts/performance/core.json",
+    },
+    "G006": {
+        "product-input-real-entry": "uv run --extra dev pytest tests/modules/session tests/modules/a2a tests/modules/group tests/modules/trigger tests/modules/heartbeat tests/modules/channel tests/e2e/test_direct_session.py tests/e2e/test_product_inputs.py",
+        "mixed-product-input-load": "uv run python tests/performance/run_backend_load.py --profile tests/performance/profiles/backend_50.json --scenario mixed --out artifacts/performance/mixed.json",
+    },
+    "G007": {
+        "all-implemented-module-e2e": "uv run --extra dev pytest tests/e2e",
+        "coverage-terminal-progress": "uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json",
+    },
+    "G008": {
+        "fresh-environment-e2e-before-reference-removal": "uv run --extra dev pytest tests/database/test_fresh_baseline.py tests/e2e",
+        "terminal-coverage-before-reference-removal": "uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json --require-all-terminal",
+        "fresh-environment-e2e-after-reference-removal": "uv run --extra dev pytest tests/database/test_fresh_baseline.py tests/e2e",
+    },
+    "G009": {
+        "complete-backend-pytest": "uv run --extra dev pytest",
+        "complete-backend-ruff": "uv run --extra dev ruff check .",
+        "complete-backend-pyright": "uv run --extra dev pyright app",
+        "deployment-and-recovery": "uv run --extra dev pytest tests/deployment/test_single_runner_topology.py tests/deployment/test_readiness.py tests/recovery/test_target_snapshot_restore.py tests/recovery/test_fix_forward.py",
+        "final-load": "uv run python tests/performance/run_backend_load.py --profile tests/performance/profiles/backend_50.json --scenario final --out artifacts/performance/final.json",
+    },
 }
 EXPECTED_REQUIRED_PATHS = {
     "G000": [
@@ -195,8 +286,36 @@ EXPECTED_HOSTILE_FAIRNESS = {
         "whole_run_limit",
     ],
 }
-MUTATING_TOKENS = (" build ", " approve ", " transition ", " release-reference ")
 REPLAY_POLICY = "verify_receipt_before_execute"
+APPROVAL_COMMAND = (
+    "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json "
+    "--owner {owner} --contract-artifact <path> --evidence <path>"
+)
+EXPECTED_MUTATION_COMMANDS = {
+    "G003": {
+        f"approve-{owner.replace('_', '-')}-contract-only": APPROVAL_COMMAND.format(owner=owner)
+        for owner in EXPECTED_SCHEMA_OWNERS["G003"]
+    },
+    "G004": {
+        f"approve-{owner.replace('_', '-')}-contract-only": APPROVAL_COMMAND.format(owner=owner)
+        for owner in EXPECTED_SCHEMA_OWNERS["G004"]
+    },
+    "G007": {
+        "approve-s3-owner-contract": APPROVAL_COMMAND.format(owner="<owner>"),
+        "transition-coverage-row": "uv run python scripts/rewrite_inventory.py transition --manifest rewrite/coverage.json --id <id> --to <state> --evidence <path>",
+    },
+    "G008": {
+        "release-legacy-reference": "uv run python scripts/rewrite_inventory.py release-reference --manifest rewrite/coverage.json --require-all-terminal --worktree <legacy-path>",
+    },
+}
+EXPECTED_RELEASE_MUTATION = {
+    "id": "release-legacy-reference",
+    "command": EXPECTED_MUTATION_COMMANDS["G008"]["release-legacy-reference"],
+    "receipt": "backend/artifacts/rewrite/G008/receipts/legacy-reference-removal.json",
+    "replay_policy": REPLAY_POLICY,
+    "requires_artifact": "backend/artifacts/rewrite/G008/fresh-e2e-before-reference-removal.txt",
+    "followed_by_artifact": "backend/artifacts/rewrite/G008/fresh-e2e-after-reference-removal.txt",
+}
 
 
 class GateContractError(ValueError):
@@ -221,9 +340,26 @@ def _list(value: Any, label: str) -> list[Any]:
     return value
 
 
-def _is_mutating(command: str) -> bool:
-    normalized = f" {command.strip()} "
-    return any(token in normalized for token in MUTATING_TOKENS)
+def _load_sibling_script(name: str) -> ModuleType:
+    path = Path(__file__).with_name(name)
+    spec = importlib.util.spec_from_file_location(f"_goal_gate_{path.stem}", path)
+    if spec is None or spec.loader is None:
+        raise GateContractError(f"cannot load phase-0 checker: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_product_roster_and_linkage(manifest_path: Path) -> None:
+    owner_checker = _load_sibling_script("check_owner_contracts.py")
+    product_checker = _load_sibling_script("check_product_contracts.py")
+    owner_path = manifest_path.with_name("owner-contracts.json")
+    product_path = manifest_path.with_name("product-contracts.json")
+    try:
+        product_checker.validate_roster(json.loads(product_path.read_text(encoding="utf-8")))
+        owner_checker.validate_manifest(json.loads(owner_path.read_text(encoding="utf-8")), owner_path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise GateContractError(f"product roster or linkage is invalid: {exc}") from exc
 
 
 def _validate_policy(manifest: dict[str, Any]) -> list[str]:
@@ -270,6 +406,11 @@ def _validate_goal(goal: dict[str, Any], index: int, levels: list[str]) -> None:
     expected_approvals = EXPECTED_APPROVALS.get(goal_id, [])
     if goal.get("contract_approval_owners") != expected_approvals:
         raise GateContractError(f"contract approvals mismatch for {goal_id}")
+    if goal_id in EXPECTED_SCHEMA_OWNERS:
+        if goal.get("schema_owners") != EXPECTED_SCHEMA_OWNERS[goal_id]:
+            raise GateContractError(f"schema owners mismatch for {goal_id}")
+    elif "schema_owners" in goal:
+        raise GateContractError(f"schema owners are not allowed for {goal_id}")
     if goal.get("implementation_owners") != EXPECTED_IMPLEMENTATION_OWNERS[goal_id]:
         raise GateContractError(f"implementation owners mismatch for {goal_id}")
     if goal_id == "G005" and goal.get("hostile_fairness_test") != EXPECTED_HOSTILE_FAIRNESS:
@@ -278,6 +419,11 @@ def _validate_goal(goal: dict[str, Any], index: int, levels: list[str]) -> None:
     validations = _list(goal.get("validations"), f"validations for {goal_id}")
     if not validations:
         raise GateContractError(f"at least one validation is required for {goal_id}")
+    validation_id_roster = [
+        validation.get("id") if isinstance(validation, dict) else None for validation in validations
+    ]
+    if validation_id_roster != list(EXPECTED_VALIDATION_COMMANDS[goal_id]):
+        raise GateContractError(f"validation roster mismatch for {goal_id}")
     validation_ids: set[str] = set()
     for validation in validations:
         if not isinstance(validation, dict):
@@ -290,8 +436,8 @@ def _validate_goal(goal: dict[str, Any], index: int, levels: list[str]) -> None:
         validation_ids.add(validation_id)
         if not isinstance(command, str) or not command:
             raise GateContractError(f"validation command is required for {goal_id}")
-        if _is_mutating(command):
-            raise GateContractError(f"mutating command in validations for {goal_id}: {validation_id}")
+        if command != EXPECTED_VALIDATION_COMMANDS[goal_id][validation_id]:
+            raise GateContractError(f"validation command mismatch for {goal_id}: {validation_id}")
         if not isinstance(artifacts, list) or not artifacts or not all(isinstance(path, str) and path for path in artifacts):
             raise GateContractError(f"validation artifacts are required for {goal_id}: {validation_id}")
     artifact_paths = [path for validation in validations for path in validation["artifacts"]]
@@ -303,6 +449,8 @@ def _validate_goal(goal: dict[str, Any], index: int, levels: list[str]) -> None:
     if mutation_id_roster != EXPECTED_MUTATIONS[goal_id]:
         raise GateContractError(f"mutations mismatch for {goal_id}")
     mutation_ids: set[str] = set()
+    if goal_id == "G008" and mutations != [EXPECTED_RELEASE_MUTATION]:
+        raise GateContractError("release mutation mismatch for G008")
     for mutation in mutations:
         if not isinstance(mutation, dict):
             raise GateContractError(f"mutation entry must be an object for {goal_id}")
@@ -311,12 +459,25 @@ def _validate_goal(goal: dict[str, Any], index: int, levels: list[str]) -> None:
         if not isinstance(mutation_id, str) or not mutation_id or mutation_id in mutation_ids:
             raise GateContractError(f"mutation ids must be unique non-empty strings for {goal_id}")
         mutation_ids.add(mutation_id)
-        if not isinstance(command, str) or not _is_mutating(command):
-            raise GateContractError(f"mutation command is required for {goal_id}: {mutation_id}")
+        expected_commands = EXPECTED_MUTATION_COMMANDS.get(goal_id, {})
+        if not isinstance(command, str) or command != expected_commands.get(mutation_id):
+            raise GateContractError(f"mutation command mismatch for {goal_id}: {mutation_id}")
         if not isinstance(mutation.get("receipt"), str) or not mutation["receipt"]:
             raise GateContractError(f"mutation receipt is required for {goal_id}: {mutation_id}")
         if mutation.get("replay_policy") != REPLAY_POLICY:
             raise GateContractError(f"mutation receipt guard mismatch for {goal_id}: {mutation_id}")
+    if goal_id == "G008":
+        artifacts_by_validation = {
+            validation["id"]: validation["artifacts"][0] for validation in validations
+        }
+        if EXPECTED_RELEASE_MUTATION["requires_artifact"] != artifacts_by_validation[
+            "fresh-environment-e2e-before-reference-removal"
+        ]:
+            raise GateContractError("release precondition artifact is not produced by the before-removal validation")
+        if EXPECTED_RELEASE_MUTATION["followed_by_artifact"] != artifacts_by_validation[
+            "fresh-environment-e2e-after-reference-removal"
+        ]:
+            raise GateContractError("release follow-up artifact is not produced by the after-removal validation")
 
 
 def validate_manifest(path: Path) -> None:
@@ -339,6 +500,7 @@ def validate_manifest(path: Path) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path("rewrite/goal-gates.json"))
+    parser.add_argument("--check-product-roster-and-linkage", action="store_true")
     return parser
 
 
@@ -346,10 +508,13 @@ def main() -> int:
     args = _parser().parse_args()
     try:
         validate_manifest(args.manifest)
+        if args.check_product_roster_and_linkage:
+            check_product_roster_and_linkage(args.manifest)
     except GateContractError as exc:
         print(f"goal-gate validation failed: {exc}")
         return 1
-    print("goal-gate validation passed: G000-G009 cumulative contract is valid")
+    suffix = " and product roster/linkage are valid" if args.check_product_roster_and_linkage else " is valid"
+    print(f"goal-gate validation passed: G000-G009 cumulative contract{suffix}")
     return 0
 
 

@@ -16,6 +16,18 @@ goal_gates = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(goal_gates)
 
 EXPECTED_GOALS = [f"G{number:03d}" for number in range(10)]
+G003_SCHEMA_OWNERS = ["identity_tenant", "credential", "model", "agent", "permission", "audit", "run", "context"]
+G004_SCHEMA_OWNERS = [
+    "workspace",
+    "tool",
+    "capability_market",
+    "session",
+    "a2a",
+    "group",
+    "trigger",
+    "heartbeat",
+    "channel",
+]
 
 
 def _manifest() -> dict:
@@ -30,6 +42,10 @@ def _write_manifest(tmp_path: Path, manifest: dict) -> Path:
 
 def test_canonical_manifest_passes_validation() -> None:
     goal_gates.validate_manifest(MANIFEST_PATH)
+
+
+def test_phase_zero_product_roster_and_linkage_pass_current_ledgers() -> None:
+    goal_gates.check_product_roster_and_linkage(MANIFEST_PATH)
 
 
 def test_validator_rejects_goal_roster_or_order_drift(tmp_path: Path) -> None:
@@ -48,7 +64,7 @@ def test_validator_rejects_missing_cumulative_carry_forward(tmp_path: Path) -> N
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
-def test_validator_rejects_mutation_in_validation_commands(tmp_path: Path) -> None:
+def test_validator_rejects_unknown_validation_entry(tmp_path: Path) -> None:
     manifest = _manifest()
     manifest["goals"][3]["validations"].append(
         {
@@ -58,7 +74,7 @@ def test_validator_rejects_mutation_in_validation_commands(tmp_path: Path) -> No
         }
     )
 
-    with pytest.raises(goal_gates.GateContractError, match="mutating command in validations for G003"):
+    with pytest.raises(goal_gates.GateContractError, match="validation roster mismatch for G003"):
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
@@ -122,6 +138,40 @@ def test_validator_requires_contract_only_approvals_before_g003_and_g004(tmp_pat
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
+def test_validator_requires_complete_schema_wave_rosters(tmp_path: Path) -> None:
+    manifest = _manifest()
+    assert manifest["goals"][3]["schema_owners"] == G003_SCHEMA_OWNERS
+    assert manifest["goals"][4]["schema_owners"] == G004_SCHEMA_OWNERS
+
+    manifest["goals"][3]["schema_owners"].remove("run")
+    with pytest.raises(goal_gates.GateContractError, match="schema owners mismatch for G003"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
+def test_validator_requires_schema_owner_contract_approvals(tmp_path: Path) -> None:
+    manifest = _manifest()
+    assert manifest["goals"][3]["contract_approval_owners"] == G003_SCHEMA_OWNERS
+    assert manifest["goals"][4]["contract_approval_owners"] == G004_SCHEMA_OWNERS
+
+    manifest["goals"][4]["contract_approval_owners"].remove("workspace")
+    with pytest.raises(goal_gates.GateContractError, match="contract approvals mismatch for G004"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
+def test_validator_requires_one_receipted_approval_per_schema_owner(tmp_path: Path) -> None:
+    manifest = _manifest()
+    for goal_index, expected_owners in ((3, G003_SCHEMA_OWNERS), (4, G004_SCHEMA_OWNERS)):
+        mutations = manifest["goals"][goal_index]["mutations"]
+        owners = [mutation["command"].split("--owner ", 1)[1].split(" ", 1)[0] for mutation in mutations]
+        assert owners == expected_owners
+        assert all(mutation["receipt"] for mutation in mutations)
+        assert all(mutation["replay_policy"] == "verify_receipt_before_execute" for mutation in mutations)
+
+    manifest["goals"][3]["mutations"].pop()
+    with pytest.raises(goal_gates.GateContractError, match="mutations mismatch for G003"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
 def test_validator_keeps_early_contract_approvals_out_of_implementation_rosters(tmp_path: Path) -> None:
     manifest = _manifest()
     manifest["goals"][3]["implementation_owners"].append("run")
@@ -135,6 +185,95 @@ def test_validator_keeps_g001_validation_only(tmp_path: Path) -> None:
     manifest["goals"][1]["mutations"].append(copy.deepcopy(manifest["goals"][3]["mutations"][0]))
 
     with pytest.raises(goal_gates.GateContractError, match="mutations mismatch for G001"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
+def test_g001_requires_each_phase_zero_fact_check() -> None:
+    validation_ids = [validation["id"] for validation in _manifest()["goals"][1]["validations"]]
+
+    assert validation_ids == [
+        "coverage-disposition-state",
+        "governance",
+        "owner-dag-and-wave-roster",
+        "product-roster-and-linkage",
+        "strict-load-profile",
+        "immutable-reference",
+    ]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json && touch /tmp/gate",
+        "uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json; true",
+        "uv run python scripts/unknown.py",
+        "uv run alembic upgrade head",
+        "uv run python scripts/rewrite_inventory.py bind-reference --manifest rewrite/coverage.json",
+        "uv run python scripts/rewrite_inventory.py build --manifest rewrite/coverage.json",
+        "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json",
+        "uv run python scripts/rewrite_inventory.py transition --manifest rewrite/coverage.json",
+        "uv run python scripts/rewrite_inventory.py release-reference --manifest rewrite/coverage.json",
+        "uv  run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json",
+        "touch backend/artifacts/rewrite/G001/coverage-disposition.json",
+    ],
+)
+def test_validator_accepts_only_the_exact_closed_validation_commands(tmp_path: Path, command: str) -> None:
+    manifest = _manifest()
+    manifest["goals"][1]["validations"][0]["command"] = command
+
+    with pytest.raises(goal_gates.GateContractError, match="validation command mismatch for G001"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
+def test_canonical_validation_commands_have_no_shell_operators_or_placeholders() -> None:
+    commands = [
+        validation["command"]
+        for goal in _manifest()["goals"]
+        for validation in goal["validations"]
+    ]
+
+    assert all(not any(operator in command for operator in ("&&", "||", ";", "\n", ">", "<", "|")) for command in commands)
+
+
+def test_g008_release_requires_exact_receipt_and_before_after_artifacts(tmp_path: Path) -> None:
+    manifest = _manifest()
+    release = manifest["goals"][8]["mutations"][0]
+    assert release == {
+        "id": "release-legacy-reference",
+        "command": "uv run python scripts/rewrite_inventory.py release-reference --manifest rewrite/coverage.json --require-all-terminal --worktree <legacy-path>",
+        "receipt": "backend/artifacts/rewrite/G008/receipts/legacy-reference-removal.json",
+        "replay_policy": "verify_receipt_before_execute",
+        "requires_artifact": "backend/artifacts/rewrite/G008/fresh-e2e-before-reference-removal.txt",
+        "followed_by_artifact": "backend/artifacts/rewrite/G008/fresh-e2e-after-reference-removal.txt",
+    }
+
+    release.pop("requires_artifact")
+    with pytest.raises(goal_gates.GateContractError, match="release mutation mismatch for G008"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
+@pytest.mark.parametrize(
+    ("field", "artifact"),
+    [
+        ("requires_artifact", "backend/artifacts/rewrite/G008/fresh-e2e-after-reference-removal.txt"),
+        ("followed_by_artifact", "backend/artifacts/rewrite/G008/fresh-e2e-before-reference-removal.txt"),
+        ("requires_artifact", "backend/artifacts/rewrite/G008/missing.txt"),
+    ],
+)
+def test_validator_rejects_reference_removal_order_drift(tmp_path: Path, field: str, artifact: str) -> None:
+    manifest = _manifest()
+    manifest["goals"][8]["mutations"][0][field] = artifact
+
+    with pytest.raises(goal_gates.GateContractError, match="release mutation mismatch for G008"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
+def test_validator_rejects_after_removal_validation_before_precondition(tmp_path: Path) -> None:
+    manifest = _manifest()
+    validations = manifest["goals"][8]["validations"]
+    validations[0], validations[2] = validations[2], validations[0]
+
+    with pytest.raises(goal_gates.GateContractError, match="validation roster mismatch for G008"):
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
