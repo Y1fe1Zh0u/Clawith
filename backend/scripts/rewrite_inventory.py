@@ -796,7 +796,14 @@ def _isolated_environment(manifest: dict[str, Any], black_box: dict[str, Any]) -
     environment = {**os.environ, "CLAWITH_PERSISTENCE_NAMESPACE": namespace}
     for application_name, reference_name in reference_sources.items():
         target_name = target_sources.get(application_name)
-        if not all(isinstance(value, str) and value for value in (application_name, reference_name, target_name)):
+        if (
+            not isinstance(application_name, str)
+            or not application_name
+            or not isinstance(reference_name, str)
+            or not reference_name
+            or not isinstance(target_name, str)
+            or not target_name
+        ):
             raise InventoryError("black-box environment mappings require non-empty string names")
         reference_value = os.environ.get(reference_name)
         target_value = os.environ.get(target_name)
