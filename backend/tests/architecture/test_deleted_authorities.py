@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import symtable
 from pathlib import Path
 
 import pytest
@@ -424,6 +425,64 @@ class DeletedAuthorityViolation(RuntimeError):
     """A deleted Backend authority is present in the target tree."""
 
 
+def _assert_dao_package_exports_are_static(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    source = package_init.read_text(encoding="utf-8")
+    symbols = symtable.symtable(source, str(package_init), "exec")
+    try:
+        dynamic_hook = symbols.lookup(DYNAMIC_MODULE_EXPORT_HOOK)
+    except KeyError:
+        return
+
+    if (
+        dynamic_hook.is_assigned()
+        or dynamic_hook.is_imported()
+        or dynamic_hook.is_namespace()
+    ):
+        raise DeletedAuthorityViolation(
+            "app.dao package exports must be static; module-level __getattr__ is "
+            "forbidden"
+        )
+
+
+def _assert_deleted_dao_package_exports(
+    backend_root: Path,
+    *,
+    authority: str,
+    exports: tuple[str, ...],
+) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for node in ast.walk(tree):
+        for export in exports:
+            references_export = (
+                isinstance(node, ast.Name) and node.id == export
+            ) or (
+                isinstance(node, ast.Attribute) and node.attr == export
+            ) or (
+                isinstance(node, ast.Constant) and node.value == export
+            ) or (
+                isinstance(node, ast.keyword) and node.arg == export
+            ) or (
+                isinstance(node, ast.alias)
+                and (
+                    node.name.split(".")[-1] == export
+                    or node.asname == export
+                )
+            )
+            if references_export:
+                raise DeletedAuthorityViolation(
+                    f"deleted legacy {authority} DAO package export was "
+                    f"reintroduced: {export}"
+                )
+
+
 def _assert_deleted_context_authority(backend_root: Path) -> None:
     module = backend_root / CONTEXT_MODULE
     package = backend_root / CONTEXT_PACKAGE
@@ -543,65 +602,11 @@ def _assert_deleted_legacy_credential_authorities(backend_root: Path) -> None:
 
 
 def _assert_deleted_legacy_credential_dao_export(backend_root: Path) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Credential DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Credential DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-        references_export = (
-            isinstance(node, ast.Name) and node.id == LEGACY_CREDENTIAL_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Attribute)
-            and node.attr == LEGACY_CREDENTIAL_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Constant)
-            and node.value == LEGACY_CREDENTIAL_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.keyword)
-            and node.arg == LEGACY_CREDENTIAL_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == LEGACY_CREDENTIAL_DAO_EXPORT
-                or node.asname == LEGACY_CREDENTIAL_DAO_EXPORT
-            )
-        )
-        if references_export:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Credential DAO package export was reintroduced: "
-                f"{LEGACY_CREDENTIAL_DAO_EXPORT}"
-            )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Credential",
+        exports=(LEGACY_CREDENTIAL_DAO_EXPORT,),
+    )
 
 
 def _assert_deleted_legacy_agent_authorities(backend_root: Path) -> None:
@@ -619,63 +624,11 @@ def _assert_deleted_legacy_agent_authorities(backend_root: Path) -> None:
 
 
 def _assert_deleted_legacy_agent_dao_exports(backend_root: Path) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Agent DAO package exports can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Agent DAO package exports can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-        for export in LEGACY_AGENT_DAO_EXPORTS:
-            references_export = (
-                isinstance(node, ast.Name) and node.id == export
-            ) or (
-                isinstance(node, ast.Attribute) and node.attr == export
-            ) or (
-                isinstance(node, ast.Constant) and node.value == export
-            ) or (
-                isinstance(node, ast.keyword) and node.arg == export
-            ) or (
-                isinstance(node, ast.alias)
-                and (
-                    node.name.split(".")[-1] == export
-                    or node.asname == export
-                )
-            )
-            if references_export:
-                raise DeletedAuthorityViolation(
-                    "deleted legacy Agent DAO package export was reintroduced: "
-                    f"{export}"
-                )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Agent",
+        exports=LEGACY_AGENT_DAO_EXPORTS,
+    )
 
 
 def _assert_deleted_legacy_identity_tenant_authorities(backend_root: Path) -> None:
@@ -697,63 +650,11 @@ def _assert_deleted_legacy_identity_tenant_authorities(backend_root: Path) -> No
 def _assert_deleted_legacy_identity_tenant_dao_exports(
     backend_root: Path,
 ) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Identity/Tenant DAO package exports can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Identity/Tenant DAO package exports can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-        for export in LEGACY_IDENTITY_TENANT_DAO_EXPORTS:
-            references_export = (
-                isinstance(node, ast.Name) and node.id == export
-            ) or (
-                isinstance(node, ast.Attribute) and node.attr == export
-            ) or (
-                isinstance(node, ast.Constant) and node.value == export
-            ) or (
-                isinstance(node, ast.keyword) and node.arg == export
-            ) or (
-                isinstance(node, ast.alias)
-                and (
-                    node.name.split(".")[-1] == export
-                    or node.asname == export
-                )
-            )
-            if references_export:
-                raise DeletedAuthorityViolation(
-                    "deleted legacy Identity/Tenant DAO package export was "
-                    f"reintroduced: {export}"
-                )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Identity/Tenant",
+        exports=LEGACY_IDENTITY_TENANT_DAO_EXPORTS,
+    )
 
 
 def _assert_deleted_legacy_auth_authorities(backend_root: Path) -> None:
@@ -891,62 +792,11 @@ def _assert_deleted_legacy_sso_authorities(backend_root: Path) -> None:
 
 
 def _assert_deleted_legacy_sso_dao_export(backend_root: Path) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy SSO DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy SSO DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-        references_export = (
-            isinstance(node, ast.Name) and node.id == LEGACY_SSO_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == LEGACY_SSO_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Constant) and node.value == LEGACY_SSO_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == LEGACY_SSO_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == LEGACY_SSO_DAO_EXPORT
-                or node.asname == LEGACY_SSO_DAO_EXPORT
-            )
-        )
-        if references_export:
-            raise DeletedAuthorityViolation(
-                "deleted legacy SSO DAO package export was reintroduced: "
-                f"{LEGACY_SSO_DAO_EXPORT}"
-            )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="SSO",
+        exports=(LEGACY_SSO_DAO_EXPORT,),
+    )
 
 
 def _assert_tests_do_not_import_deleted_sso_authorities(
@@ -1009,68 +859,11 @@ def _assert_deleted_legacy_organization_relationship_authorities(
 def _assert_deleted_legacy_organization_relationship_dao_export(
     backend_root: Path,
 ) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Organization/Relationship DAO package export can be "
-                "restored by a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Organization/Relationship DAO package export can be "
-                "restored by a module-level __getattr__ hook"
-            )
-
-        references_export = (
-            isinstance(node, ast.Name)
-            and node.id == LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Attribute)
-            and node.attr == LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Constant)
-            and node.value == LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.keyword)
-            and node.arg == LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1]
-                == LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT
-                or node.asname == LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT
-            )
-        )
-        if references_export:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Organization/Relationship DAO package export was "
-                "reintroduced: "
-                f"{LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT}"
-            )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Organization/Relationship",
+        exports=(LEGACY_ORGANIZATION_RELATIONSHIP_DAO_EXPORT,),
+    )
 
 
 def _assert_tests_do_not_import_deleted_organization_relationship_authorities(
@@ -1131,65 +924,11 @@ def _assert_deleted_legacy_invitation_authorities(backend_root: Path) -> None:
 
 
 def _assert_deleted_legacy_invitation_dao_export(backend_root: Path) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Invitation DAO package export can be restored by a "
-                "module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Invitation DAO package export can be restored by a "
-                "module-level __getattr__ hook"
-            )
-
-        references_export = (
-            isinstance(node, ast.Name) and node.id == LEGACY_INVITATION_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Attribute)
-            and node.attr == LEGACY_INVITATION_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Constant)
-            and node.value == LEGACY_INVITATION_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.keyword)
-            and node.arg == LEGACY_INVITATION_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == LEGACY_INVITATION_DAO_EXPORT
-                or node.asname == LEGACY_INVITATION_DAO_EXPORT
-            )
-        )
-        if references_export:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Invitation DAO package export was reintroduced: "
-                f"{LEGACY_INVITATION_DAO_EXPORT}"
-            )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Invitation",
+        exports=(LEGACY_INVITATION_DAO_EXPORT,),
+    )
 
 
 def _assert_tests_do_not_import_deleted_invitation_authorities(
@@ -1429,62 +1168,11 @@ def _assert_deleted_legacy_focus_authorities(backend_root: Path) -> None:
 
 
 def _assert_deleted_legacy_focus_dao_export(backend_root: Path) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Focus DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Focus DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-        references_export = (
-            isinstance(node, ast.Name) and node.id == LEGACY_FOCUS_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == LEGACY_FOCUS_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Constant) and node.value == LEGACY_FOCUS_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == LEGACY_FOCUS_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == LEGACY_FOCUS_DAO_EXPORT
-                or node.asname == LEGACY_FOCUS_DAO_EXPORT
-            )
-        )
-        if references_export:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Focus DAO package export was reintroduced: "
-                f"{LEGACY_FOCUS_DAO_EXPORT}"
-            )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Focus",
+        exports=(LEGACY_FOCUS_DAO_EXPORT,),
+    )
 
 
 def _assert_tests_do_not_import_deleted_focus_authorities(
@@ -1714,65 +1402,11 @@ def _assert_deleted_legacy_agent_template_authorities(backend_root: Path) -> Non
 
 
 def _assert_deleted_legacy_agent_template_dao_export(backend_root: Path) -> None:
-    package_init = backend_root / DAO_PACKAGE_INIT
-    if not package_init.is_file():
-        return
-
-    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
-    for statement in tree.body:
-        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
-            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
-        ):
-            raise DeletedAuthorityViolation(
-                "deleted legacy Agent Template DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-    for node in ast.walk(tree):
-        references_dynamic_hook = (
-            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
-                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
-            )
-        )
-        if references_dynamic_hook:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Agent Template DAO package export can be restored by "
-                "a module-level __getattr__ hook"
-            )
-
-        references_export = (
-            isinstance(node, ast.Name) and node.id == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Attribute)
-            and node.attr == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.Constant)
-            and node.value == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.keyword)
-            and node.arg == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
-        ) or (
-            isinstance(node, ast.alias)
-            and (
-                node.name.split(".")[-1] == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
-                or node.asname == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
-            )
-        )
-        if references_export:
-            raise DeletedAuthorityViolation(
-                "deleted legacy Agent Template DAO package export was reintroduced: "
-                f"{LEGACY_AGENT_TEMPLATE_DAO_EXPORT}"
-            )
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Agent Template",
+        exports=(LEGACY_AGENT_TEMPLATE_DAO_EXPORT,),
+    )
 
 
 def _assert_tests_do_not_reference_deleted_agent_template_authorities(
@@ -2334,6 +1968,60 @@ def test_legacy_credential_authorities_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_credential_authorities(BACKEND_ROOT)
 
 
+def test_dao_package_exports_are_static() -> None:
+    _assert_dao_package_exports_are_static(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "def __getattr__(name):\n    return object()\n",
+        "async def __getattr__(name):\n    return object()\n",
+        "__getattr__ = lambda name: object()\n",
+        "from app.hooks import resolve as __getattr__\n",
+    ],
+    ids=[
+        "function-hook",
+        "async-function-hook",
+        "assigned-hook",
+        "imported-hook",
+    ],
+)
+def test_dynamic_dao_package_export_hook_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="app.dao package exports must be static",
+    ):
+        _assert_dao_package_exports_are_static(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        'hook_name = "__getattr__"\n',
+        "def helper():\n    def __getattr__(name):\n        return object()\n",
+        "def helper(module):\n    return module.__getattr__\n",
+    ],
+    ids=["inert-string", "nested-function", "attribute-reference"],
+)
+def test_non_package_hook_reference_passes_static_dao_export_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    _assert_dao_package_exports_are_static(tmp_path)
+
+
 def test_legacy_credential_dao_package_export_is_absent_from_target_tree() -> None:
     _assert_deleted_legacy_credential_dao_export(BACKEND_ROOT)
 
@@ -2413,8 +2101,6 @@ def test_reintroduced_legacy_credential_import_identity_fails_the_guard(
         "from app.dao.agent_credential_dao import agent_credential_dao as restored\n",
         "agent_credential_dao = object()\n",
         '__all__ = ["agent_credential_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
-        "__getattr__ = lambda name: object()\n",
         'globals()["agent_credential_dao"] = object()\n',
     ],
     ids=[
@@ -2422,8 +2108,6 @@ def test_reintroduced_legacy_credential_import_identity_fails_the_guard(
         "aliased-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
-        "assigned-module-getattr",
         "globals-restoration",
     ],
 )
@@ -2477,8 +2161,6 @@ def test_reintroduced_legacy_agent_import_identity_fails_the_guard(
         "from app.dao.agent_access_dao import agent_access_dao as restored\n",
         "agent_dao = object()\n",
         '__all__ = ["agent_access_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
-        "__getattr__ = lambda name: object()\n",
         'globals()["agent_dao"] = object()\n',
     ],
     ids=[
@@ -2486,8 +2168,6 @@ def test_reintroduced_legacy_agent_import_identity_fails_the_guard(
         "aliased-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
-        "assigned-module-getattr",
         "globals-restoration",
     ],
 )
@@ -2544,8 +2224,6 @@ def test_reintroduced_legacy_identity_tenant_import_identity_fails_the_guard(
         "from app.dao.user_dao import user_dao as restored\n",
         "tenant_dao = object()\n",
         '__all__ = ["identity_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
-        "__getattr__ = lambda name: object()\n",
         'globals()["user_dao"] = object()\n',
     ],
     ids=[
@@ -2553,8 +2231,6 @@ def test_reintroduced_legacy_identity_tenant_import_identity_fails_the_guard(
         "aliased-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
-        "assigned-module-getattr",
         "globals-restoration",
     ],
 )
@@ -2708,16 +2384,12 @@ def test_reintroduced_legacy_sso_import_identity_fails_the_guard(
         "from app.dao.identity_provider_dao import identity_provider_dao\n",
         "identity_provider_dao = object()\n",
         '__all__ = ["identity_provider_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
-        "__getattr__ = lambda name: object()\n",
         'globals()["identity_provider_dao"] = object()\n',
     ],
     ids=[
         "direct-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
-        "assigned-module-getattr",
         "globals-restoration",
     ],
 )
@@ -2823,16 +2495,12 @@ def test_reintroduced_legacy_organization_relationship_identity_fails_guard(
         "from app.dao.org_member_dao import org_member_dao\n",
         "org_member_dao = object()\n",
         '__all__ = ["org_member_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
-        "__getattr__ = lambda name: object()\n",
         'globals()["org_member_dao"] = object()\n',
     ],
     ids=[
         "direct-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
-        "assigned-module-getattr",
         "globals-restoration",
     ],
 )
@@ -2938,16 +2606,12 @@ def test_reintroduced_legacy_invitation_identity_fails_guard(
         "from app.dao.invitation_code_dao import invitation_code_dao\n",
         "invitation_code_dao = object()\n",
         '__all__ = ["invitation_code_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
-        "__getattr__ = lambda name: object()\n",
         'globals()["invitation_code_dao"] = object()\n',
     ],
     ids=[
         "direct-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
-        "assigned-module-getattr",
         "globals-restoration",
     ],
 )
@@ -3235,13 +2899,11 @@ def test_reintroduced_legacy_focus_identity_fails_guard(
         "from app.dao.focus_dao import focus_dao\n",
         "focus_dao = object()\n",
         '__all__ = ["focus_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
     ],
     ids=[
         "direct-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
     ],
 )
 def test_reintroduced_legacy_focus_dao_export_fails_guard(
@@ -3687,13 +3349,11 @@ def test_reintroduced_legacy_agent_template_identity_fails_guard(
         "from app.dao.agent_template_dao import agent_template_dao\n",
         "agent_template_dao = object()\n",
         '__all__ = ["agent_template_dao"]\n',
-        "def __getattr__(name):\n    return object()\n",
     ],
     ids=[
         "direct-import",
         "assignment-reexport",
         "all-exposure",
-        "module-getattr",
     ],
 )
 def test_reintroduced_legacy_agent_template_dao_export_fails_guard(

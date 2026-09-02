@@ -38,6 +38,8 @@ The target branch no longer contains the legacy Agent execution authority. The r
 
 `backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including quota, Schedule, startup repair, storage compatibility, product adapters, migrations, and dependencies, remain pending.
 
+The `app.dao` package export boundary is intentionally static: `app/dao/__init__.py` may use explicit imports, assignments, and `__all__`, but it may not define or assign a module-level `__getattr__`. One shared guard enforces that package policy, while the category guards independently reject their exact deleted DAO export names. Nested helper names and inert string references are outside the package-export boundary and do not fail the dynamic-hook guard.
+
 The target branch also no longer contains the old Context authority:
 
 - `backend/app/services/agent_context.py`
@@ -221,7 +223,7 @@ The Phase 0 disposition is approved for deleting this legacy aggregate. The targ
 
 The Organization/Relationship category deliberately excludes Enterprise Info persistence and API ownership, Invitation codes, mixed routes in `enterprise.py`, the Directory API and service, Participant and Group, OKR, Onboarding, Channel, templates, migrations, dependency declarations, Frontend, and the empty target `modules/organization`, `modules/permission`, and `modules/directory` packages. Retained Enterprise, Directory, OKR, Onboarding, Permission-core, Channel, script, seed, and bootstrap sources still import one or more deleted Organization/Relationship identities. Those dangling imports are staged evidence for later owner/category commits and are not repaired here; they do not authorize a compatibility module, DAO export, implicit relationship lookup, or relationship Workspace regeneration.
 
-The deleted-authority guard now covers every removed Organization/Relationship module and same-named package representation, static or dynamic restoration of the `org_member_dao` package export, and ordinary Backend test imports of any deleted identity. After contract review and approval, `identity_tenant`, Auth/Account, Organization, Permission, Directory, and Workspace must write their own boundary tests rather than importing or renaming these legacy tests.
+The deleted-authority guard now covers every removed Organization/Relationship module and same-named package representation, restoration of the exact `org_member_dao` package export under the static `app.dao` policy, and ordinary Backend test imports of any deleted identity. After contract review and approval, `identity_tenant`, Auth/Account, Organization, Permission, Directory, and Workspace must write their own boundary tests rather than importing or renaming these legacy tests.
 
 The legacy Invitation persistence authority is removed as its own minimum category:
 
@@ -235,7 +237,7 @@ No dedicated Backend test currently protects the old InvitationCode persistence,
 
 This minimum deletion preserves the mixed Invitation routes in `backend/app/api/enterprise.py` and `backend/app/api/admin.py`, `backend/seed.py`, `backend/app/scripts/bootstrap_db.py`, Onboarding, generic and System Email, mixed schemas, migrations, dependency declarations, Frontend, and the empty target `modules/invitation` package. Their surviving imports of `app.models.invitation_code` are deliberate staged evidence for later owner/category commits and are not repaired here. They do not authorize restoring the old model, DAO, DAO export, table contract, or compatibility shim.
 
-The deleted-authority guard covers both removed Invitation import identities as module and same-named package forms, static or dynamic restoration of the `invitation_code_dao` package export, and ordinary Backend test imports. Fresh target Invitation tests must exercise the new owner contract rather than rename the retained System Email preflight test or restore an old fixture.
+The deleted-authority guard covers both removed Invitation import identities as module and same-named package forms, restoration of the exact `invitation_code_dao` package export under the static `app.dao` policy, and ordinary Backend test imports. Fresh target Invitation tests must exercise the new owner contract rather than rename the retained System Email preflight test or restore an old fixture.
 
 The legacy Onboarding authority is removed as its own minimum category:
 
@@ -280,7 +282,7 @@ Focus remains a later S3 product owner, but its owner and product contracts rema
 
 This minimum deletion preserves OKR and its Focus wording, activity and observability, schedules and Triggers, retained file APIs and storage tests that mention `focus.md`, mixed schemas, migrations, dependencies, Frontend, and the empty target `modules/focus` package. Their surviving imports of the deleted Focus service or model are deliberate staged evidence for later owner/category commits and are not repaired here; they do not authorize restoring the old model, DAO, DAO export, API, service, file-migration path, or compatibility shim.
 
-The deleted-authority guard makes all four old Focus import identities absent as modules and same-named packages, prevents static or dynamic restoration of the `focus_dao` package export, and rejects ordinary Backend-test imports. Fresh S3 Focus tests must exercise the approved target owner rather than preserve the legacy database/file hybrid.
+The deleted-authority guard makes all four old Focus import identities absent as modules and same-named packages, prevents restoration of the exact `focus_dao` package export under the static `app.dao` policy, and rejects ordinary Backend-test imports. Fresh S3 Focus tests must exercise the approved target owner rather than preserve the legacy database/file hybrid.
 
 The legacy Notification authority is removed as its own minimum category:
 
@@ -356,7 +358,7 @@ No dedicated Backend test imported or exercised the old Agent Template DAO or se
 
 This minimum deletion preserves `backend/app/api/advanced.py`, `backend/seed.py`, `backend/app/scripts/bootstrap_db.py`, `backend/app/scripts/migrate_legacy_heartbeat_template.py` and its Heartbeat-migration test, `backend/agent_template/`, `backend/agent_templates/`, mixed schemas, the legacy Alembic chain including Agent Template column revisions, dependencies, Frontend, and the empty target `modules/agent_template` package. These staged consumers and inventory assets do not authorize restoring the deleted ORM fact, DAO, DAO package export, seeder, database-seeding behavior, old CRUD behavior, or a compatibility shim. Their dangling imports and obsolete calls remain evidence for later minimum owner or bootstrap-source disposition commits and are not repaired here.
 
-The deleted-authority guard makes both removed Agent Template import identities absent as modules and same-named packages, prevents static or dynamic restoration of the `agent_template_dao` package export, and rejects ordinary Backend-test imports and dotted dynamic references. Fresh S3 Agent Template tests must exercise the approved owner contract rather than recreate the old DAO or seeder fixtures.
+The deleted-authority guard makes both removed Agent Template import identities absent as modules and same-named packages, prevents restoration of the exact `agent_template_dao` package export under the static `app.dao` policy, and rejects ordinary Backend-test imports and dotted dynamic references. Fresh S3 Agent Template tests must exercise the approved owner contract rather than recreate the old DAO or seeder fixtures.
 
 The legacy AgentBay authority is removed as its own minimum category:
 
