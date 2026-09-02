@@ -305,6 +305,20 @@ LEGACY_PLAZA_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_PLAZA_IMPORT_IDENTITIES
 )
+LEGACY_AGENT_TEMPLATE_IMPORT_IDENTITIES = (
+    Path("app/dao/agent_template_dao"),
+    Path("app/services/template_seeder"),
+)
+LEGACY_AGENT_TEMPLATE_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_AGENT_TEMPLATE_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_AGENT_TEMPLATE_DAO_EXPORT = "agent_template_dao"
+LEGACY_AGENT_TEMPLATE_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_AGENT_TEMPLATE_IMPORT_IDENTITIES
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -1591,6 +1605,125 @@ def _assert_tests_do_not_reference_deleted_plaza_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test references deleted legacy Plaza authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_agent_template_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_AGENT_TEMPLATE_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Agent Template authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Agent Template authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_deleted_legacy_agent_template_dao_export(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        return
+
+    tree = ast.parse(package_init.read_text(encoding="utf-8"), filename=str(package_init))
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            statement.name == DYNAMIC_MODULE_EXPORT_HOOK
+        ):
+            raise DeletedAuthorityViolation(
+                "deleted legacy Agent Template DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+    for node in ast.walk(tree):
+        references_dynamic_hook = (
+            isinstance(node, ast.Name) and node.id == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.Constant) and node.value == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.keyword) and node.arg == DYNAMIC_MODULE_EXPORT_HOOK
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == DYNAMIC_MODULE_EXPORT_HOOK
+                or node.asname == DYNAMIC_MODULE_EXPORT_HOOK
+            )
+        )
+        if references_dynamic_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Agent Template DAO package export can be restored by "
+                "a module-level __getattr__ hook"
+            )
+
+        references_export = (
+            isinstance(node, ast.Name) and node.id == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Attribute)
+            and node.attr == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.Constant)
+            and node.value == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.keyword)
+            and node.arg == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
+        ) or (
+            isinstance(node, ast.alias)
+            and (
+                node.name.split(".")[-1] == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
+                or node.asname == LEGACY_AGENT_TEMPLATE_DAO_EXPORT
+            )
+        )
+        if references_export:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Agent Template DAO package export was reintroduced: "
+                f"{LEGACY_AGENT_TEMPLATE_DAO_EXPORT}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_agent_template_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        referenced_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                referenced_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                referenced_identities.append(node.module)
+                referenced_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                referenced_identities.append(node.value)
+
+        for referenced_identity in referenced_identities:
+            for deleted_identity in LEGACY_AGENT_TEMPLATE_DOTTED_IMPORT_IDENTITIES:
+                if referenced_identity == deleted_identity or referenced_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test references deleted legacy Agent Template authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -3156,6 +3289,146 @@ def test_unrelated_dynamic_test_reference_passes_plaza_guard(tmp_path: Path) -> 
     )
 
     _assert_tests_do_not_reference_deleted_plaza_authorities(tmp_path)
+
+
+def test_legacy_agent_template_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_agent_template_authorities(BACKEND_ROOT)
+
+
+def test_legacy_agent_template_dao_export_is_absent() -> None:
+    _assert_deleted_legacy_agent_template_dao_export(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_agent_template_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_agent_template_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_AGENT_TEMPLATE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_AGENT_TEMPLATE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_agent_template_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Agent Template authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_agent_template_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.agent_template_dao import agent_template_dao\n",
+        "agent_template_dao = object()\n",
+        '__all__ = ["agent_template_dao"]\n',
+        "def __getattr__(name):\n    return object()\n",
+    ],
+    ids=[
+        "direct-import",
+        "assignment-reexport",
+        "all-exposure",
+        "module-getattr",
+    ],
+)
+def test_reintroduced_legacy_agent_template_dao_export_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Agent Template DAO package export",
+    ):
+        _assert_deleted_legacy_agent_template_dao_export(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.dao.agent_template_dao\n",
+        "from app.dao import agent_template_dao\n",
+        "from app.dao.agent_template_dao import AgentTemplateDAO\n",
+        "import app.services.template_seeder\n",
+        "from app.services import template_seeder\n",
+        "from app.services.template_seeder import seed_agent_templates\n",
+    ],
+    ids=[
+        "dao-import",
+        "dao-package-import",
+        "dao-symbol-import",
+        "service-import",
+        "service-package-import",
+        "service-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_agent_template_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_agent_template.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Agent Template authority",
+    ):
+        _assert_tests_do_not_reference_deleted_agent_template_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        'module = importlib.import_module("app.services.template_seeder")\n',
+        'dao_path = "app.dao.agent_template_dao.AgentTemplateDAO"\n',
+    ],
+    ids=["dynamic-service-import-reference", "dao-dotted-reference"],
+)
+def test_backend_test_dynamic_reference_of_deleted_agent_template_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_agent_template_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Agent Template authority",
+    ):
+        _assert_tests_do_not_reference_deleted_agent_template_authorities(tmp_path)
+
+
+def test_unrelated_dynamic_test_reference_passes_agent_template_guard(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_unrelated_template_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        'module = importlib.import_module("app.services.text_extractor")\n',
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_agent_template_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
