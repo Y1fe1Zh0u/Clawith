@@ -319,6 +319,20 @@ LEGACY_AGENT_TEMPLATE_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_AGENT_TEMPLATE_IMPORT_IDENTITIES
 )
+LEGACY_AGENTBAY_IMPORT_IDENTITIES = (
+    Path("app/api/agentbay_control"),
+    Path("app/services/agentbay_client"),
+    Path("app/services/agentbay_live"),
+)
+LEGACY_AGENTBAY_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_AGENTBAY_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_AGENTBAY_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_AGENTBAY_IMPORT_IDENTITIES
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -1724,6 +1738,63 @@ def _assert_tests_do_not_reference_deleted_agent_template_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test references deleted legacy Agent Template authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_agentbay_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_AGENTBAY_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy AgentBay authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy AgentBay authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_agentbay_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        referenced_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                referenced_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                referenced_identities.append(node.module)
+                referenced_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                referenced_identities.append(node.value)
+
+        for referenced_identity in referenced_identities:
+            for deleted_identity in LEGACY_AGENTBAY_DOTTED_IMPORT_IDENTITIES:
+                if referenced_identity == deleted_identity or referenced_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test references deleted legacy AgentBay authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -3429,6 +3500,115 @@ def test_unrelated_dynamic_test_reference_passes_agent_template_guard(
     )
 
     _assert_tests_do_not_reference_deleted_agent_template_authorities(tmp_path)
+
+
+def test_legacy_agentbay_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_agentbay_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_agentbay_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_agentbay_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_AGENTBAY_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_AGENTBAY_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_agentbay_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy AgentBay authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_agentbay_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.api.agentbay_control\n",
+        "from app.api.agentbay_control import control_lock\n",
+        "import app.services.agentbay_client\n",
+        "from app.services.agentbay_client import AgentBayClient\n",
+        "import app.services.agentbay_live\n",
+        "from app.services.agentbay_live import detect_agentbay_env\n",
+    ],
+    ids=[
+        "control-import",
+        "control-symbol-import",
+        "client-import",
+        "client-symbol-import",
+        "live-import",
+        "live-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_agentbay_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_agentbay.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy AgentBay authority",
+    ):
+        _assert_tests_do_not_reference_deleted_agentbay_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        'module = importlib.import_module("app.api.agentbay_control")\n',
+        'client_path = "app.services.agentbay_client.AgentBayClient"\n',
+        'monkeypatch.setattr("app.services.agentbay_live.detect_agentbay_env", fake)\n',
+    ],
+    ids=[
+        "dynamic-control-import-reference",
+        "client-dotted-reference",
+        "live-monkeypatch-reference",
+    ],
+)
+def test_backend_test_dynamic_reference_of_deleted_agentbay_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_agentbay_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy AgentBay authority",
+    ):
+        _assert_tests_do_not_reference_deleted_agentbay_authorities(tmp_path)
+
+
+def test_unrelated_dynamic_test_reference_passes_agentbay_guard(tmp_path: Path) -> None:
+    test_path = tmp_path / "tests/test_unrelated_agentbay_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        'module = importlib.import_module("app.services.vision_inject")\n',
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_agentbay_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
