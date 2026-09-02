@@ -3,9 +3,10 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy.engine import URL, make_url
@@ -41,6 +42,17 @@ class FakeDatabaseResources:
         self.close_calls += 1
 
 
+class RouteWithPath(Protocol):
+    path: str
+
+
+class SettingsFactory(Protocol):
+    def __call__(self, **values: object) -> Settings: ...
+
+
+settings_factory = cast(SettingsFactory, Settings)
+
+
 def _settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "APP_VERSION": "test-version",
@@ -71,7 +83,8 @@ def test_main_exposes_only_the_minimal_health_route(monkeypatch: pytest.MonkeyPa
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "version": asgi_app.version}
-    assert {route.path for route in asgi_app.routes if route.path.startswith("/api/")} == {
+    route_paths = [cast(RouteWithPath, route).path for route in asgi_app.routes]
+    assert {path for path in route_paths if path.startswith("/api/")} == {
         "/api/health"
     }
     assert resources.close_calls == 1
@@ -93,7 +106,7 @@ def test_create_app_owns_database_resources_for_its_complete_lifespan(
 
     assert resources.close_calls == 0
     with TestClient(app) as client:
-        assert client.app.state.database is resources
+        assert cast(FastAPI, client.app).state.database is resources
         assert client.get("/api/health").json() == {
             "status": "ok",
             "version": "test-version",
@@ -182,12 +195,12 @@ def test_target_configuration_uses_role_isolated_20_connection_pools() -> None:
 
 
 def test_target_configuration_rejects_unknown_dotenv_fields(tmp_path: Path) -> None:
-    assert Settings.model_config["env_file"] == config.ENV_FILE_PATH
+    assert Settings.model_config.get("env_file") == config.ENV_FILE_PATH
     env_file = tmp_path / ".env"
     env_file.write_text("UNKNOWN_TARGET_SETTING=unowned\n", encoding="utf-8")
 
     with pytest.raises(ValidationError, match="UNKNOWN_TARGET_SETTING"):
-        Settings(_env_file=env_file, APP_VERSION="test-version")
+        settings_factory(_env_file=env_file, APP_VERSION="test-version")
 
 
 def test_target_configuration_does_not_silently_replace_a_missing_version(
@@ -197,7 +210,7 @@ def test_target_configuration_does_not_silently_replace_a_missing_version(
     monkeypatch.setattr(config, "VERSION_PATH", tmp_path / "missing-version")
 
     with pytest.raises(FileNotFoundError):
-        Settings(_env_file=None)
+        settings_factory(_env_file=None)
 
 
 @pytest.mark.asyncio
