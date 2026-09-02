@@ -538,29 +538,6 @@ class FeishuService:
                     return uid
             return None
 
-    async def send_approval_card(self, app_id: str, app_secret: str,
-                                  creator_open_id: str, agent_name: str,
-                                  action_type: str, details: str, approval_id: str) -> dict:
-        """Send an interactive approval card to the agent creator via Feishu."""
-        import json
-        card_content = json.dumps({
-            "type": "template",
-            "data": {
-                "template_id": "",  # Use custom card
-                "template_variable": {
-                    "agent_name": agent_name,
-                    "action_type": action_type,
-                    "details": details,
-                    "approval_id": approval_id,
-                }
-            }
-        })
-        # Simplified — in production, use Feishu interactive card JSON
-        text_content = json.dumps({
-            "text": f"🔴 [{agent_name}] 请求审批\n操作: {action_type}\n详情: {details}\n\n请在 Clawith 平台审批。"
-        })
-        return await self.send_message(app_id, app_secret, creator_open_id, "text", text_content)
-
     async def download_message_resource(self, app_id: str, app_secret: str,
                                          message_id: str, file_key: str,
                                          resource_type: str = "file") -> bytes:

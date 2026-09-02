@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 import pytest
+import yaml
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 CONTEXT_MODULE = Path("app/services/agent_context.py")
@@ -353,36 +354,63 @@ LEGACY_AUTONOMY_APPROVAL_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES
 )
-LEGACY_AUTONOMY_APPROVAL_FORBIDDEN_SYMBOLS = {
+LEGACY_AUTONOMY_APPROVAL_FORBIDDEN_FACTS = {
     Path("app/models/audit.py"): frozenset(
-        {"ApprovalRequest", "approval_requests", "approval_status_enum"}
+        {
+            "class:ApprovalRequest",
+            "table:approval_requests",
+            "enum:approval_status_enum",
+        }
     ),
     Path("app/api/enterprise.py"): frozenset(
         {
-            "ApprovalRequest",
-            "ApprovalRequestOut",
-            "ApprovalAction",
-            "autonomy_service",
-            "list_approvals",
-            "resolve_approval",
-            "/approvals",
-            "/approvals/{approval_id}/resolve",
-            "pending_approvals",
+            "import:ApprovalRequest",
+            "import:ApprovalRequestOut",
+            "import:ApprovalAction",
+            "import:autonomy_service",
+            "reference:ApprovalRequest",
+            "reference:ApprovalRequestOut",
+            "reference:ApprovalAction",
+            "reference:autonomy_service",
+            "function:list_approvals",
+            "function:resolve_approval",
+            "route:GET:/approvals",
+            "route:POST:/approvals/{approval_id}/resolve",
+            "assigned:pending_approvals",
+            "key:pending_approvals",
         }
     ),
     Path("app/api/advanced.py"): frozenset(
         {
-            "default_autonomy_policy",
-            "approvals",
-            "total_approvals",
-            "pending_approvals",
+            "class-field:TemplateCreate:default_autonomy_policy",
+            "class-field:TemplateOut:default_autonomy_policy",
+            "field:default_autonomy_policy",
+            "key:default_autonomy_policy",
+            "key:total_approvals",
+            "key:pending_approvals",
         }
     ),
     Path("app/dao/agent_metrics_dao.py"): frozenset(
-        {"ApprovalRequest", "total_approvals", "pending_approvals"}
+        {
+            "import:ApprovalRequest",
+            "reference:ApprovalRequest",
+            "assigned:total_approvals",
+            "assigned:pending_approvals",
+            "key:total_approvals",
+            "key:pending_approvals",
+        }
     ),
     Path("app/schemas/schemas.py"): frozenset(
-        {"ApprovalRequestOut", "ApprovalAction", "autonomy_policy"}
+        {
+            "class:ApprovalRequestOut",
+            "class:ApprovalAction",
+            "class-field:AgentCreate:autonomy_policy",
+            "class-field:AgentOut:autonomy_policy",
+            "class-field:AgentUpdate:autonomy_policy",
+        }
+    ),
+    Path("app/services/feishu_service.py"): frozenset(
+        {"function:send_approval_card"}
     ),
 }
 AGENT_TEMPLATE_METADATA_ROOT = Path("agent_templates")
@@ -1922,27 +1950,111 @@ def _assert_tests_do_not_reference_deleted_autonomy_approval_authority(
                     )
 
 
-def _source_symbols(tree: ast.AST) -> set[str]:
-    symbols: set[str] = set()
+def _assignment_names(target: ast.expr) -> set[str]:
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, ast.Attribute):
+        return {target.attr}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return {
+            name
+            for element in target.elts
+            for name in _assignment_names(element)
+        }
+    return set()
+
+
+def _string_value(node: ast.expr | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _source_contract_facts(tree: ast.Module) -> set[str]:
+    facts: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            symbols.add(node.id)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                facts.add(f"import:{alias.asname or alias.name.split('.')[-1]}")
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                facts.add(f"import:{alias.asname or alias.name}")
+        elif isinstance(node, ast.ClassDef):
+            facts.add(f"class:{node.name}")
+            for statement in node.body:
+                targets: list[ast.expr] = []
+                value: ast.expr | None = None
+                if isinstance(statement, ast.Assign):
+                    targets.extend(statement.targets)
+                    value = statement.value
+                elif isinstance(statement, ast.AnnAssign):
+                    targets.append(statement.target)
+                    value = statement.value
+                for target in targets:
+                    for name in _assignment_names(target):
+                        facts.add(f"class-field:{node.name}:{name}")
+                        if name == "__tablename__":
+                            table_name = _string_value(value)
+                            if table_name:
+                                facts.add(f"table:{table_name}")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            facts.add(f"function:{node.name}")
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call) or not decorator.args:
+                    continue
+                if not isinstance(decorator.func, ast.Attribute):
+                    continue
+                if not (
+                    isinstance(decorator.func.value, ast.Name)
+                    and decorator.func.value.id == "router"
+                ):
+                    continue
+                route = _string_value(decorator.args[0])
+                if route and decorator.func.attr in {"get", "post"}:
+                    facts.add(f"route:{decorator.func.attr.upper()}:{route}")
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                for name in _assignment_names(target):
+                    facts.add(f"assigned:{name}")
+        elif isinstance(node, ast.AnnAssign):
+            for name in _assignment_names(node.target):
+                facts.add(f"assigned:{name}")
         elif isinstance(node, ast.Attribute):
-            symbols.add(node.attr)
-        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            symbols.add(node.name)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            symbols.add(node.value)
-        elif isinstance(node, ast.keyword) and node.arg:
-            symbols.add(node.arg)
-    return symbols
+            facts.add(f"field:{node.attr}")
+            facts.add(f"reference:{node.attr}")
+        elif isinstance(node, ast.Name):
+            facts.add(f"reference:{node.id}")
+        elif isinstance(node, ast.Dict):
+            for key in node.keys:
+                key_name = _string_value(key)
+                if key_name:
+                    facts.add(f"key:{key_name}")
+        elif isinstance(node, ast.Subscript):
+            key_name = _string_value(node.slice)
+            if key_name:
+                facts.add(f"key:{key_name}")
+        elif isinstance(node, ast.Call):
+            function_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else None
+            )
+            if function_name == "Enum":
+                for keyword in node.keywords:
+                    if keyword.arg == "name":
+                        enum_name = _string_value(keyword.value)
+                        if enum_name:
+                            facts.add(f"enum:{enum_name}")
+    return facts
 
 
-def _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(
+def _assert_mixed_owners_do_not_restore_autonomy_approval_facts(
     backend_root: Path,
 ) -> None:
-    for relative_path, forbidden_symbols in (
-        LEGACY_AUTONOMY_APPROVAL_FORBIDDEN_SYMBOLS.items()
+    for relative_path, forbidden_facts in (
+        LEGACY_AUTONOMY_APPROVAL_FORBIDDEN_FACTS.items()
     ):
         source_path = backend_root / relative_path
         if not source_path.is_file():
@@ -1951,11 +2063,11 @@ def _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(
             source_path.read_text(encoding="utf-8"),
             filename=str(source_path),
         )
-        restored_symbols = sorted(forbidden_symbols & _source_symbols(tree))
-        if restored_symbols:
+        restored_facts = sorted(forbidden_facts & _source_contract_facts(tree))
+        if restored_facts:
             raise DeletedAuthorityViolation(
-                "mixed retained owner restores legacy Autonomy/Approval symbols: "
-                f"{relative_path} -> {', '.join(restored_symbols)}"
+                "mixed retained owner restores legacy Autonomy/Approval facts: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
             )
 
 
@@ -1966,12 +2078,22 @@ def _assert_agent_templates_do_not_restore_autonomy_policy(
     if not metadata_root.is_dir():
         return
     for metadata_path in sorted(metadata_root.rglob("meta.yaml")):
-        for line in metadata_path.read_text(encoding="utf-8").splitlines():
-            if line.strip().split(":", maxsplit=1)[0] == LEGACY_TEMPLATE_AUTONOMY_FIELD:
-                raise DeletedAuthorityViolation(
-                    "Agent Template restores legacy Autonomy policy field: "
-                    f"{metadata_path.relative_to(backend_root)}"
-                )
+        relative_path = metadata_path.relative_to(backend_root)
+        try:
+            metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise DeletedAuthorityViolation(
+                f"Agent Template metadata is invalid YAML: {relative_path}"
+            ) from exc
+        if not isinstance(metadata, dict):
+            raise DeletedAuthorityViolation(
+                f"Agent Template metadata must be a top-level mapping: {relative_path}"
+            )
+        if LEGACY_TEMPLATE_AUTONOMY_FIELD in metadata:
+            raise DeletedAuthorityViolation(
+                "Agent Template restores legacy Autonomy policy field: "
+                f"{relative_path}"
+            )
 
 
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
@@ -3814,7 +3936,7 @@ def test_backend_tests_do_not_reference_deleted_autonomy_approval_authority() ->
 
 
 def test_mixed_owners_do_not_restore_autonomy_approval_symbols() -> None:
-    _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(BACKEND_ROOT)
+    _assert_mixed_owners_do_not_restore_autonomy_approval_facts(BACKEND_ROOT)
 
 
 def test_agent_templates_do_not_restore_autonomy_policy() -> None:
@@ -3901,37 +4023,78 @@ def test_unrelated_feishu_approval_reference_passes_autonomy_guard(
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "test_source", "restored_symbol"),
+    ("relative_path", "test_source"),
     [
-        (Path("app/models/audit.py"), "class ApprovalRequest: ...\n", "ApprovalRequest"),
+        (Path("app/models/audit.py"), "class ApprovalRequest: ...\n"),
+        (
+            Path("app/models/audit.py"),
+            'class Legacy:\n    __tablename__ = "approval_requests"\n',
+        ),
+        (
+            Path("app/models/audit.py"),
+            'status = Enum("pending", name="approval_status_enum")\n',
+        ),
         (
             Path("app/api/enterprise.py"),
-            'route = "/approvals/{approval_id}/resolve"\n',
-            "/approvals/{approval_id}/resolve",
+            (
+                '@router.get("/approvals", response_model=ApprovalRequestOut)\n'
+                "async def list_approvals(): ...\n"
+            ),
+        ),
+        (
+            Path("app/api/enterprise.py"),
+            (
+                '@router.post("/approvals/{approval_id}/resolve")\n'
+                "async def resolve_approval(): ...\n"
+            ),
         ),
         (
             Path("app/api/advanced.py"),
-            'payload = {"approvals": {}}\n',
-            "approvals",
+            "class TemplateCreate:\n    default_autonomy_policy: dict = {}\n",
+        ),
+        (
+            Path("app/api/advanced.py"),
+            'payload = {"total_approvals": 1, "pending_approvals": 1}\n',
         ),
         (
             Path("app/dao/agent_metrics_dao.py"),
-            'result = {"pending_approvals": 0}\n',
-            "pending_approvals",
+            "from app.models.audit import ApprovalRequest\n",
         ),
         (
+            Path("app/dao/agent_metrics_dao.py"),
+            "total_approvals, pending_approvals = (1, 1)\n",
+        ),
+        (Path("app/schemas/schemas.py"), "class ApprovalRequestOut: ...\n"),
+        (Path("app/schemas/schemas.py"), "class ApprovalAction: ...\n"),
+        (
             Path("app/schemas/schemas.py"),
-            "autonomy_policy: dict | None = None\n",
-            "autonomy_policy",
+            "class AgentCreate:\n    autonomy_policy: dict | None = None\n",
+        ),
+        (
+            Path("app/services/feishu_service.py"),
+            "class FeishuService:\n    async def send_approval_card(self): ...\n",
         ),
     ],
-    ids=["model", "enterprise-api", "advanced-api", "metrics-dao", "schemas"],
+    ids=[
+        "model-class",
+        "model-table",
+        "model-enum",
+        "enterprise-list-route-response",
+        "enterprise-resolve-route",
+        "advanced-template-field",
+        "advanced-metric-keys",
+        "metrics-model-import",
+        "metrics-assignments",
+        "approval-response-schema",
+        "approval-action-schema",
+        "agent-autonomy-field",
+        "feishu-runtime-card-method",
+    ],
 )
-def test_restored_mixed_owner_autonomy_approval_symbol_fails_guard(
+def test_restored_mixed_owner_autonomy_approval_fact_fails_guard(
     tmp_path: Path,
     relative_path: Path,
     test_source: str,
-    restored_symbol: str,
 ) -> None:
     source_path = tmp_path / relative_path
     source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3939,39 +4102,76 @@ def test_restored_mixed_owner_autonomy_approval_symbol_fails_guard(
 
     with pytest.raises(
         DeletedAuthorityViolation,
-        match=(
-            "mixed retained owner restores legacy Autonomy/Approval symbols: "
-            f"{relative_path} -> {restored_symbol}"
-        ),
+        match="mixed retained owner restores legacy Autonomy/Approval facts",
     ):
-        _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(tmp_path)
+        _assert_mixed_owners_do_not_restore_autonomy_approval_facts(tmp_path)
 
 
 def test_unrelated_mixed_owner_symbols_pass_autonomy_approval_guard(
     tmp_path: Path,
 ) -> None:
     safe_sources = {
-        Path("app/models/audit.py"): "class AuditLog: ...\n",
-        Path("app/api/enterprise.py"): 'route = "/audit-logs"\n',
-        Path("app/api/advanced.py"): 'payload = {"activity": {}}\n',
+        Path("app/models/audit.py"): (
+            'class AuditLog: ...\nnote = "ApprovalRequest is retired"\n'
+        ),
+        Path("app/api/enterprise.py"): (
+            'approvals = []\ntext = "/approvals is unavailable"\n'
+        ),
+        Path("app/api/advanced.py"): (
+            'approvals = []\npayload = {"approvals": "unavailable"}\n'
+        ),
         Path("app/dao/agent_metrics_dao.py"): 'result = {"recent_actions": 0}\n',
         Path("app/schemas/schemas.py"): "class AuditLogOut: ...\n",
+        Path("app/services/feishu_service.py"): (
+            "class FeishuService:\n"
+            "    async def create_approval_instance(self): ...\n"
+            "    async def query_approval_instances(self): ...\n"
+            "    async def get_approval_instance(self): ...\n"
+        ),
     }
     for relative_path, source in safe_sources.items():
         source_path = tmp_path / relative_path
         source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_text(source, encoding="utf-8")
 
-    _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(tmp_path)
+    _assert_mixed_owners_do_not_restore_autonomy_approval_facts(tmp_path)
 
 
+def test_native_feishu_approval_instance_methods_pass_autonomy_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "app/services/feishu_service.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        (
+            "class FeishuService:\n"
+            "    async def create_approval_instance(self): ...\n"
+            "    async def query_approval_instances(self): ...\n"
+            "    async def get_approval_instance(self): ...\n"
+        ),
+        encoding="utf-8",
+    )
+
+    _assert_mixed_owners_do_not_restore_autonomy_approval_facts(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "policy_key",
+    [
+        "default_autonomy_policy",
+        "'default_autonomy_policy'",
+        '"default_autonomy_policy"',
+    ],
+    ids=["plain-key", "single-quoted-key", "double-quoted-key"],
+)
 def test_restored_agent_template_autonomy_policy_fails_guard(
     tmp_path: Path,
+    policy_key: str,
 ) -> None:
     metadata_path = tmp_path / "agent_templates/restored/meta.yaml"
     metadata_path.parent.mkdir(parents=True)
     metadata_path.write_text(
-        'name: restored\ndefault_autonomy_policy:\n  read_files: "L1"\n',
+        f'name: restored\n{policy_key}:\n  read_files: "L1"\n',
         encoding="utf-8",
     )
 
@@ -3988,8 +4188,33 @@ def test_agent_template_without_autonomy_policy_passes_guard(
     metadata_path = tmp_path / "agent_templates/safe/meta.yaml"
     metadata_path.parent.mkdir(parents=True)
     metadata_path.write_text(
-        "name: safe\ndefault_skills: []\n",
+        (
+            "name: safe\n"
+            "description: default_autonomy_policy is retired\n"
+            "default_skills: []\n"
+        ),
         encoding="utf-8",
     )
 
     _assert_agent_templates_do_not_restore_autonomy_policy(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("metadata_source", "expected_error"),
+    [
+        ("name: [unterminated\n", "Agent Template metadata is invalid YAML"),
+        ("- name: list-entry\n", "Agent Template metadata must be a top-level mapping"),
+    ],
+    ids=["invalid-yaml", "non-mapping-yaml"],
+)
+def test_invalid_agent_template_metadata_fails_closed(
+    tmp_path: Path,
+    metadata_source: str,
+    expected_error: str,
+) -> None:
+    metadata_path = tmp_path / "agent_templates/invalid/meta.yaml"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(metadata_source, encoding="utf-8")
+
+    with pytest.raises(DeletedAuthorityViolation, match=expected_error):
+        _assert_agent_templates_do_not_restore_autonomy_policy(tmp_path)
