@@ -112,9 +112,11 @@ EXPECTED_VALIDATION_ARTIFACTS = {
 }
 EXPECTED_REQUIRED_PATHS = {
     "G000": [
-        ".omx/plans/prd-clean-break-backend-rewrite.md",
-        ".omx/plans/test-spec-clean-break-backend-rewrite.md",
-        ".omx/plans/phase-verification-clean-break-backend.md",
+        ".agents/notes/proposed/architecture/2026-08-28-target-agent-execution-architecture.md",
+        ".agents/notes/proposed/architecture/2026-08-27-agent-runner-lifecycle-and-history.md",
+        ".agents/notes/proposed/architecture/2026-08-28-capacity-performance-and-responsiveness.md",
+        ".agents/notes/proposed/architecture/2026-08-28-product-input-main-run-and-output-boundaries.md",
+        ".agents/notes/proposed/testing/2026-09-02-cumulative-goal-checkpoints.md",
         "backend/rewrite/goal-gates.json",
     ],
     "G001": [
@@ -258,6 +260,11 @@ def _validate_goal(goal: dict[str, Any], index: int, levels: list[str]) -> None:
         if current_level in levels and levels.index(current_level) < levels.index(expected_level):
             raise GateContractError(f"E2E level regresses at {goal_id}")
         raise GateContractError(f"E2E level mismatch for {goal_id}")
+    required_paths = goal.get("required_paths")
+    if isinstance(required_paths, list) and any(
+        isinstance(path, str) and path.startswith(".omx/") for path in required_paths
+    ):
+        raise GateContractError(f"ignored .omx path cannot be canonical evidence for {goal_id}")
     if goal.get("required_paths") != EXPECTED_REQUIRED_PATHS[goal_id]:
         raise GateContractError(f"required paths mismatch for {goal_id}")
     expected_approvals = EXPECTED_APPROVALS.get(goal_id, [])

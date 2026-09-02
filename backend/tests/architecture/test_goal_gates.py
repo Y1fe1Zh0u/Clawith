@@ -86,6 +86,14 @@ def test_validator_rejects_missing_required_fixture_path(tmp_path: Path) -> None
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
+def test_validator_rejects_ignored_omx_as_canonical_evidence(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["goals"][0]["required_paths"][0] = ".omx/plans/prd-clean-break-backend-rewrite.md"
+
+    with pytest.raises(goal_gates.GateContractError, match="ignored .omx path cannot be canonical evidence"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+
 def test_validator_rejects_required_artifact_path_drift(tmp_path: Path) -> None:
     manifest = _manifest()
     manifest["goals"][8]["validations"][0]["artifacts"] = ["backend/artifacts/rewrite/G008/unspecified.txt"]
