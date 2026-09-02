@@ -2,7 +2,7 @@
 
 These backend-specific rules apply to `backend/**` and supplement the repository-wide [conventions](../AGENTS.md#2-conventions).
 
-The Backend is a Python 3.11+ FastAPI application built on SQLAlchemy's asynchronous APIs, PostgreSQL, Redis, and LangGraph with PostgreSQL checkpoints. It contains the Agent Runtime, product APIs, persistence, background execution, and external integrations.
+The target Backend is a Python 3.11+ FastAPI application built on SQLAlchemy's asynchronous APIs, PostgreSQL, and Redis. It contains the Agent Runtime, product APIs, persistence, background execution, and external integrations.
 
 Project metadata and dependency declarations are defined in `pyproject.toml`; `uv.lock` records the resolved dependency graph.
 
