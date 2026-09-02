@@ -265,6 +265,20 @@ LEGACY_FOCUS_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_FOCUS_IMPORT_IDENTITIES
 )
+LEGACY_NOTIFICATION_IMPORT_IDENTITIES = (
+    Path("app/models/notification"),
+    Path("app/api/notification"),
+    Path("app/services/notification_service"),
+)
+LEGACY_NOTIFICATION_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_NOTIFICATION_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_NOTIFICATION_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_NOTIFICATION_IMPORT_IDENTITIES
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -1380,6 +1394,61 @@ def _assert_tests_do_not_import_deleted_focus_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test imports deleted legacy Focus authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_notification_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_NOTIFICATION_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Notification authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Notification authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_tests_do_not_import_deleted_notification_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        imported_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_identities.append(node.module)
+                imported_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+
+        for imported_identity in imported_identities:
+            for deleted_identity in LEGACY_NOTIFICATION_DOTTED_IMPORT_IDENTITIES:
+                if imported_identity == deleted_identity or imported_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test imports deleted legacy Notification authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -2609,6 +2678,82 @@ def test_backend_test_import_of_deleted_focus_authority_fails_guard(
         match="test imports deleted legacy Focus authority",
     ):
         _assert_tests_do_not_import_deleted_focus_authorities(tmp_path)
+
+
+def test_legacy_notification_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_notification_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_import_deleted_notification_authorities() -> None:
+    _assert_tests_do_not_import_deleted_notification_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_NOTIFICATION_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_NOTIFICATION_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_notification_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Notification authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_notification_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.notification\n",
+        "from app.models import notification\n",
+        "from app.models.notification import Notification\n",
+        "import app.api.notification\n",
+        "from app.api import notification\n",
+        "from app.api.notification import router\n",
+        "import app.services.notification_service\n",
+        "from app.services import notification_service\n",
+        "from app.services.notification_service import send_notification\n",
+    ],
+    ids=[
+        "model-import",
+        "model-package-import",
+        "model-symbol-import",
+        "api-import",
+        "api-package-import",
+        "api-symbol-import",
+        "service-import",
+        "service-package-import",
+        "service-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_notification_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_notification.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test imports deleted legacy Notification authority",
+    ):
+        _assert_tests_do_not_import_deleted_notification_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:

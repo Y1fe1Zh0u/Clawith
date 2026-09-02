@@ -174,7 +174,7 @@ The old Auth authority is also removed as a separate category:
 
 These sources combined password login and registration, Account binding, tenant switching, JWT issuance, password change and reset, email verification, SSO callback/session orchestration, Provider construction, and cross-owner Identity/Tenant, Organization, Invitation, Onboarding, and notification mutations. Their tests asserted that retired orchestration and are deleted rather than adapted. The target Auth owner must receive fresh password, login, token, bind, reset, and verification tests after its approved contract is implemented.
 
-Generic system-email transport and broadcast-notification tests remain in `backend/tests/test_system_email_and_notifications.py`. The Auth deletion preserved the then-independent SSO and IdentityProvider authority so it could be removed in its own minimum commit. `core/security.py` remains because retained API, WebSocket, encryption, Sandbox, and provider boundaries still consume its bearer, JWT, authorization-dependency, and data-encryption helpers; it is not solely the old Auth or SSO authority.
+Generic system-email transport tests remained after the Auth deletion and now live independently in `backend/tests/test_system_email.py`; the later Notification deletion removed only broadcast-notification assertions. The Auth deletion preserved the then-independent SSO and IdentityProvider authority so it could be removed in its own minimum commit. `core/security.py` remains because retained API, WebSocket, encryption, Sandbox, and provider boundaries still consume its bearer, JWT, authorization-dependency, and data-encryption helpers; it is not solely the old Auth or SSO authority.
 
 Retained Google Workspace Organization sync, Feishu, WeCom, DingTalk, Organization, relationship, Plaza, Trigger, OKR, and cleanup-script sources still import one or more deleted Auth identities. They remain staged for their own owner/category commits. Those dangling imports do not authorize recreating the old Auth API, Provider registry, registration orchestrator, password-reset lifecycle, email-verification lifecycle, or package exports.
 
@@ -281,6 +281,23 @@ Focus remains a later S3 product owner, but its owner and product contracts rema
 This minimum deletion preserves OKR and its Focus wording, activity and observability, schedules and Triggers, retained file APIs and storage tests that mention `focus.md`, mixed schemas, migrations, dependencies, Frontend, and the empty target `modules/focus` package. Their surviving imports of the deleted Focus service or model are deliberate staged evidence for later owner/category commits and are not repaired here; they do not authorize restoring the old model, DAO, DAO export, API, service, file-migration path, or compatibility shim.
 
 The deleted-authority guard makes all four old Focus import identities absent as modules and same-named packages, prevents static or dynamic restoration of the `focus_dao` package export, and rejects ordinary Backend-test imports. Fresh S3 Focus tests must exercise the approved target owner rather than preserve the legacy database/file hybrid.
+
+The legacy Notification authority is removed as its own minimum category:
+
+- `backend/app/models/notification.py`
+- `backend/app/api/notification.py`
+- `backend/app/services/notification_service.py`
+- the Notification broadcast assertions removed from the former mixed `backend/tests/test_system_email_and_notifications.py`
+
+These sources made one `Notification` table and service the shared authority for human and Agent inbox persistence, unread counts, read state, Tenant broadcast fan-out, approval/autonomy notices, Plaza mentions and comments, Heartbeat draining, and OKR oneshot-failure reporting. The HTTP layer also coupled in-app broadcast persistence to generic System Email delivery. Those legacy persistence and delivery contracts are deleted rather than adapted.
+
+Notification remains an S3 product owner, but its owner and product contracts remain unreviewed. After both contracts are reviewed and approved, the target `notification` owner must receive fresh persistence, Tenant and recipient scope, unread/read lifecycle, bounded listing, authorization, post-commit publication, and delivery-outcome tests. Approval-driven behavior is not restored through Notification: the clean-break target removes the old Approval Request and L1/L2/L3 autonomy contract.
+
+Generic System Email transport remains independently owned in `backend/app/services/system_email_service.py`, with its SMTP timeout and per-recipient failure-containment tests preserved in `backend/tests/test_system_email.py`. Chat messages and Channel delivery, group realtime publication, activity and observability, enterprise notification-bar settings, mixed Platform/Enterprise routes, schemas, migrations, dependencies, Frontend, and the empty target `modules/notification` package also remain staged.
+
+Heartbeat, Plaza, OKR, Autonomy, bootstrap, cleanup-script, and other retained consumers still import the deleted Notification model or service. Those dangling imports are deliberate source-disposition evidence for their later owner/category commits and are not repaired here; they do not authorize restoring the table, API, service, inbox, broadcast, approval-notice path, or a compatibility shim.
+
+The deleted-authority guard makes all three legacy Notification import identities absent as modules and same-named packages and rejects ordinary Backend-test imports. Fresh S3 tests must exercise the approved Notification owner and its explicit consumers rather than rename the removed broadcast assertions or preserve old approval persistence.
 
 The legacy Tenant Knowledge publication adapter is removed as a separate minimum category:
 
