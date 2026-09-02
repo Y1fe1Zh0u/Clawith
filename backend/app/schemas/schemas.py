@@ -235,8 +235,6 @@ class AgentCreate(BaseModel):
     tenant_id: uuid.UUID | None = None
     # Template
     template_id: uuid.UUID | None = None
-    # Autonomy
-    autonomy_policy: dict | None = None
     # Token limits
     max_tokens_per_day: int | None = None
     max_tokens_per_month: int | None = None
@@ -256,7 +254,6 @@ class AgentOut(BaseModel):
     creator_username: str | None = None  # Populated by API layer; not in ORM model directly
     primary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
-    autonomy_policy: dict
     tokens_used_today: int
     tokens_used_month: int
     tokens_used_total: int = 0
@@ -308,7 +305,6 @@ class AgentUpdate(BaseModel):
     bio: str | None = None
     welcome_message: str | None = None
     avatar_url: str | None = None
-    autonomy_policy: dict | None = None
     primary_model_id: uuid.UUID | None = None
     fallback_model_id: uuid.UUID | None = None
     context_window_size: int | None = Field(default=None, ge=1, le=500)
@@ -515,26 +511,6 @@ def _redact_channel_secrets(value: object) -> object:
     if isinstance(value, list):
         return [_redact_channel_secrets(item) for item in value]
     return value
-
-
-# ─── Approval ───────────────────────────────────────────
-
-class ApprovalRequestOut(BaseModel):
-    id: uuid.UUID
-    agent_id: uuid.UUID
-    agent_name: str | None = None
-    action_type: str
-    details: dict
-    status: str
-    created_at: datetime
-    resolved_at: datetime | None = None
-    resolved_by: uuid.UUID | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class ApprovalAction(BaseModel):
-    action: str  # "approve" | "reject"
 
 
 # ─── Enterprise Info ────────────────────────────────────

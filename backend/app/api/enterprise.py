@@ -1,4 +1,4 @@
-"""Enterprise management API routes: LLM pool, enterprise info, approvals, audit logs."""
+"""Enterprise management API routes: LLM pool, enterprise info, and audit logs."""
 
 import uuid
 import logging
@@ -22,13 +22,11 @@ from app.models.user import User
 from app.services.org_sync_adapter import derive_member_department_paths
 from app.models.agent import Agent
 from app.models.llm import LLMModel
-from app.models.audit import AuditLog, ApprovalRequest, EnterpriseInfo
+from app.models.audit import AuditLog, EnterpriseInfo
 from app.schemas.schemas import (
-    ApprovalAction, ApprovalRequestOut, AuditLogOut, EnterpriseInfoOut,
-    EnterpriseInfoUpdate, LLMModelCreate, LLMModelOut, LLMModelUpdate,
-    IdentityProviderOut, UserInviteRequest
+    AuditLogOut, EnterpriseInfoOut, EnterpriseInfoUpdate, LLMModelCreate,
+    LLMModelOut, LLMModelUpdate, IdentityProviderOut, UserInviteRequest
 )
-from app.services.autonomy_service import autonomy_service
 from app.services.enterprise_sync import enterprise_sync_service
 from app.services.llm import get_provider_manifest, get_model_api_key, create_llm_client, LLMMessage
 from app.services.platform_service import platform_service
@@ -621,66 +619,6 @@ async def update_enterprise_info(
     return EnterpriseInfoOut.model_validate(info)
 
 
-# ─── Approvals ──────────────────────────────────────────
-
-@router.get("/approvals", response_model=list[ApprovalRequestOut])
-async def list_approvals(
-    tenant_id: str | None = None,
-    status_filter: str | None = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """List approval requests scoped to a tenant."""
-    query = select(ApprovalRequest)
-    # Scope by tenant: only show approvals for agents belonging to this tenant
-    tid = tenant_id or (str(current_user.tenant_id) if current_user.tenant_id else None)
-    if tid:
-        tenant_agent_ids = select(Agent.id).where(Agent.tenant_id == tid)
-        query = query.where(ApprovalRequest.agent_id.in_(tenant_agent_ids))
-    # Non-admins further restricted to their own agents
-    if current_user.role != "platform_admin":
-        query = query.where(ApprovalRequest.agent_id.in_(
-            select(Agent.id).where(Agent.creator_id == current_user.id)
-        ))
-    if status_filter:
-        query = query.where(ApprovalRequest.status == status_filter)
-    query = query.order_by(ApprovalRequest.created_at.desc())
-
-    result = await db.execute(query)
-    approvals = result.scalars().all()
-
-    # Batch-load agent names
-    agent_ids_set = {a.agent_id for a in approvals}
-    agent_names: dict[uuid.UUID, str] = {}
-    if agent_ids_set:
-        agents_r = await db.execute(select(Agent.id, Agent.name).where(Agent.id.in_(agent_ids_set)))
-        agent_names = {row.id: row.name for row in agents_r.all()}
-
-    out = []
-    for a in approvals:
-        d = ApprovalRequestOut.model_validate(a)
-        d.agent_name = agent_names.get(a.agent_id)
-        out.append(d)
-    return out
-
-
-@router.post("/approvals/{approval_id}/resolve", response_model=ApprovalRequestOut)
-async def resolve_approval(
-    approval_id: uuid.UUID,
-    data: ApprovalAction,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Approve or reject a pending approval request."""
-    try:
-        approval = await autonomy_service.resolve_approval(
-            db, approval_id, current_user, data.action
-        )
-        return ApprovalRequestOut.model_validate(approval)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 # ─── Audit Logs ─────────────────────────────────────────
 
 @router.get("/audit-logs", response_model=list[AuditLogOut])
@@ -723,30 +661,19 @@ async def get_enterprise_stats(
     # Base queries
     agent_q = select(func.count(Agent.id))
     user_q = select(func.count(User.id)).where(User.is_active == True)
-    approval_q = select(func.count(ApprovalRequest.id))
-
     if tid:
         agent_q = agent_q.where(Agent.tenant_id == tid)
         user_q = user_q.where(User.tenant_id == tid)
-        # For approvals, we only see requests for agents in this tenant
-        approval_q = approval_q.where(ApprovalRequest.agent_id.in_(
-            select(Agent.id).where(Agent.tenant_id == tid)
-        ))
 
     total_agents = await db.execute(agent_q)
     running_agents = await db.execute(
         agent_q.where(Agent.status == "running")
     )
     total_users = await db.execute(user_q)
-    pending_approvals = await db.execute(
-        approval_q.where(ApprovalRequest.status == "pending")
-    )
-
     return {
         "total_agents": total_agents.scalar() or 0,
         "running_agents": running_agents.scalar() or 0,
         "total_users": total_users.scalar() or 0,
-        "pending_approvals": pending_approvals.scalar() or 0,
     }
 
 

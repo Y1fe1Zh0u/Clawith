@@ -341,6 +341,52 @@ LEGACY_TENANT_KNOWLEDGE_PUBLICATION_REINTRODUCTIONS = [
     for identity in LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
+    Path("app/services/autonomy_service"),
+)
+LEGACY_AUTONOMY_APPROVAL_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_AUTONOMY_APPROVAL_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES
+)
+LEGACY_AUTONOMY_APPROVAL_FORBIDDEN_SYMBOLS = {
+    Path("app/models/audit.py"): frozenset(
+        {"ApprovalRequest", "approval_requests", "approval_status_enum"}
+    ),
+    Path("app/api/enterprise.py"): frozenset(
+        {
+            "ApprovalRequest",
+            "ApprovalRequestOut",
+            "ApprovalAction",
+            "autonomy_service",
+            "list_approvals",
+            "resolve_approval",
+            "/approvals",
+            "/approvals/{approval_id}/resolve",
+            "pending_approvals",
+        }
+    ),
+    Path("app/api/advanced.py"): frozenset(
+        {
+            "default_autonomy_policy",
+            "approvals",
+            "total_approvals",
+            "pending_approvals",
+        }
+    ),
+    Path("app/dao/agent_metrics_dao.py"): frozenset(
+        {"ApprovalRequest", "total_approvals", "pending_approvals"}
+    ),
+    Path("app/schemas/schemas.py"): frozenset(
+        {"ApprovalRequestOut", "ApprovalAction", "autonomy_policy"}
+    ),
+}
+AGENT_TEMPLATE_METADATA_ROOT = Path("agent_templates")
+LEGACY_TEMPLATE_AUTONOMY_FIELD = "default_autonomy_policy"
 DELETED_AUTHORITY_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
@@ -1815,6 +1861,117 @@ def _assert_deleted_legacy_tenant_knowledge_publication_authority(
                 "deleted legacy Tenant Knowledge publication authority package was "
                 f"reintroduced: {identity}"
             )
+
+
+def _assert_deleted_legacy_autonomy_approval_authority(
+    backend_root: Path,
+) -> None:
+    for identity in LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Autonomy/Approval authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Autonomy/Approval authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_autonomy_approval_authority(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        referenced_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                referenced_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                referenced_identities.append(node.module)
+                referenced_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                referenced_identities.append(node.value)
+
+        for referenced_identity in referenced_identities:
+            for deleted_identity in LEGACY_AUTONOMY_APPROVAL_DOTTED_IMPORT_IDENTITIES:
+                if referenced_identity == deleted_identity or referenced_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test references deleted legacy Autonomy/Approval authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _source_symbols(tree: ast.AST) -> set[str]:
+    symbols: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            symbols.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            symbols.add(node.attr)
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.add(node.name)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            symbols.add(node.value)
+        elif isinstance(node, ast.keyword) and node.arg:
+            symbols.add(node.arg)
+    return symbols
+
+
+def _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(
+    backend_root: Path,
+) -> None:
+    for relative_path, forbidden_symbols in (
+        LEGACY_AUTONOMY_APPROVAL_FORBIDDEN_SYMBOLS.items()
+    ):
+        source_path = backend_root / relative_path
+        if not source_path.is_file():
+            continue
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_symbols = sorted(forbidden_symbols & _source_symbols(tree))
+        if restored_symbols:
+            raise DeletedAuthorityViolation(
+                "mixed retained owner restores legacy Autonomy/Approval symbols: "
+                f"{relative_path} -> {', '.join(restored_symbols)}"
+            )
+
+
+def _assert_agent_templates_do_not_restore_autonomy_policy(
+    backend_root: Path,
+) -> None:
+    metadata_root = backend_root / AGENT_TEMPLATE_METADATA_ROOT
+    if not metadata_root.is_dir():
+        return
+    for metadata_path in sorted(metadata_root.rglob("meta.yaml")):
+        for line in metadata_path.read_text(encoding="utf-8").splitlines():
+            if line.strip().split(":", maxsplit=1)[0] == LEGACY_TEMPLATE_AUTONOMY_FIELD:
+                raise DeletedAuthorityViolation(
+                    "Agent Template restores legacy Autonomy policy field: "
+                    f"{metadata_path.relative_to(backend_root)}"
+                )
 
 
 def test_legacy_context_import_identity_is_absent_from_target_tree() -> None:
@@ -3646,3 +3803,193 @@ def test_reintroduced_legacy_tenant_knowledge_publication_identity_fails_guard(
         ),
     ):
         _assert_deleted_legacy_tenant_knowledge_publication_authority(tmp_path)
+
+
+def test_legacy_autonomy_approval_authority_is_absent() -> None:
+    _assert_deleted_legacy_autonomy_approval_authority(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_autonomy_approval_authority() -> None:
+    _assert_tests_do_not_reference_deleted_autonomy_approval_authority(BACKEND_ROOT)
+
+
+def test_mixed_owners_do_not_restore_autonomy_approval_symbols() -> None:
+    _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(BACKEND_ROOT)
+
+
+def test_agent_templates_do_not_restore_autonomy_policy() -> None:
+    _assert_agent_templates_do_not_restore_autonomy_policy(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_AUTONOMY_APPROVAL_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_AUTONOMY_APPROVAL_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_autonomy_approval_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Autonomy/Approval authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_autonomy_approval_authority(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.services.autonomy_service\n",
+        "from app.services import autonomy_service\n",
+        "from app.services.autonomy_service import AutonomyService\n",
+        'module = importlib.import_module("app.services.autonomy_service")\n',
+        (
+            'monkeypatch.setattr("app.services.autonomy_service.autonomy_service", '
+            "object())\n"
+        ),
+    ],
+    ids=[
+        "service-import",
+        "service-package-import",
+        "service-symbol-import",
+        "dynamic-service-import",
+        "monkeypatch-dotted-reference",
+    ],
+)
+def test_backend_test_reference_of_deleted_autonomy_approval_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_autonomy_approval.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Autonomy/Approval authority",
+    ):
+        _assert_tests_do_not_reference_deleted_autonomy_approval_authority(tmp_path)
+
+
+def test_unrelated_feishu_approval_reference_passes_autonomy_guard(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_feishu_approval_transport.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "from app.services.feishu_service import feishu_service\n",
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_autonomy_approval_authority(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "test_source", "restored_symbol"),
+    [
+        (Path("app/models/audit.py"), "class ApprovalRequest: ...\n", "ApprovalRequest"),
+        (
+            Path("app/api/enterprise.py"),
+            'route = "/approvals/{approval_id}/resolve"\n',
+            "/approvals/{approval_id}/resolve",
+        ),
+        (
+            Path("app/api/advanced.py"),
+            'payload = {"approvals": {}}\n',
+            "approvals",
+        ),
+        (
+            Path("app/dao/agent_metrics_dao.py"),
+            'result = {"pending_approvals": 0}\n',
+            "pending_approvals",
+        ),
+        (
+            Path("app/schemas/schemas.py"),
+            "autonomy_policy: dict | None = None\n",
+            "autonomy_policy",
+        ),
+    ],
+    ids=["model", "enterprise-api", "advanced-api", "metrics-dao", "schemas"],
+)
+def test_restored_mixed_owner_autonomy_approval_symbol_fails_guard(
+    tmp_path: Path,
+    relative_path: Path,
+    test_source: str,
+    restored_symbol: str,
+) -> None:
+    source_path = tmp_path / relative_path
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "mixed retained owner restores legacy Autonomy/Approval symbols: "
+            f"{relative_path} -> {restored_symbol}"
+        ),
+    ):
+        _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(tmp_path)
+
+
+def test_unrelated_mixed_owner_symbols_pass_autonomy_approval_guard(
+    tmp_path: Path,
+) -> None:
+    safe_sources = {
+        Path("app/models/audit.py"): "class AuditLog: ...\n",
+        Path("app/api/enterprise.py"): 'route = "/audit-logs"\n',
+        Path("app/api/advanced.py"): 'payload = {"activity": {}}\n',
+        Path("app/dao/agent_metrics_dao.py"): 'result = {"recent_actions": 0}\n',
+        Path("app/schemas/schemas.py"): "class AuditLogOut: ...\n",
+    }
+    for relative_path, source in safe_sources.items():
+        source_path = tmp_path / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source, encoding="utf-8")
+
+    _assert_mixed_owners_do_not_restore_autonomy_approval_symbols(tmp_path)
+
+
+def test_restored_agent_template_autonomy_policy_fails_guard(
+    tmp_path: Path,
+) -> None:
+    metadata_path = tmp_path / "agent_templates/restored/meta.yaml"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        'name: restored\ndefault_autonomy_policy:\n  read_files: "L1"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="Agent Template restores legacy Autonomy policy field",
+    ):
+        _assert_agent_templates_do_not_restore_autonomy_policy(tmp_path)
+
+
+def test_agent_template_without_autonomy_policy_passes_guard(
+    tmp_path: Path,
+) -> None:
+    metadata_path = tmp_path / "agent_templates/safe/meta.yaml"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        "name: safe\ndefault_skills: []\n",
+        encoding="utf-8",
+    )
+
+    _assert_agent_templates_do_not_restore_autonomy_policy(tmp_path)

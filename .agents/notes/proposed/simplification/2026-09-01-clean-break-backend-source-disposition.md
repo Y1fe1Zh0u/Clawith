@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, legacy Invitation, Onboarding, Directory, Focus, Notification, Published Page, Plaza, legacy Agent Template, AgentBay, and Tenant Knowledge publication authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, legacy Invitation, Onboarding, Directory, Focus, Notification, Published Page, Plaza, legacy Agent Template, AgentBay, Tenant Knowledge publication, and old Autonomy/Approval authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -36,7 +36,7 @@ The target branch no longer contains the legacy Agent execution authority. The r
 - `backend/tests/test_setup_langgraph_checkpoints.py`
 - the dedicated old-authority tests `test_runtime_schema.py`, `test_session_context_service.py`, `test_tool_exchange.py`, `test_tool_execution.py`, `test_model_capabilities.py`, `test_runtime_model_settings_resolution.py`, `test_chat_session_runtime_state.py`, `test_unified_runtime_group_migration.py`, and `test_websocket_runtime_chat.py`
 
-`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including Approval, quota, relationship, Schedule, startup repair, storage compatibility, the monolithic Tool facade, product adapters, migrations, and dependencies, remain pending.
+`backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including quota, Schedule, startup repair, storage compatibility, product adapters, migrations, and dependencies, remain pending.
 
 The target branch also no longer contains the old Context authority:
 
@@ -295,9 +295,28 @@ Notification remains an S3 product owner, but its owner and product contracts re
 
 Generic System Email transport remains independently owned in `backend/app/services/system_email_service.py`, with its SMTP timeout behavior preserved in `backend/tests/test_system_email.py`. The former `BroadcastEmailRecipient` DTO, `deliver_broadcast_emails` helper, and per-recipient broadcast test were part of the deleted Notification broadcast path and are removed rather than retained as generic email authority. Chat messages and Channel delivery, group realtime publication, activity and observability, enterprise notification-bar settings, mixed Platform/Enterprise routes, schemas, migrations, dependencies, Frontend, and the empty target `modules/notification` package also remain staged.
 
-Heartbeat, Plaza, OKR, Autonomy, bootstrap, cleanup-script, and other retained production consumers still import the deleted Notification model or service. Those dangling imports are deliberate source-disposition evidence for their later owner/category commits and are not repaired here; they do not authorize restoring the table, API, service, inbox, broadcast, approval-notice path, or a compatibility shim. The Notification-specific monkeypatch and assertion were removed from the mixed Autonomy test while its remaining approval/Runtime assertions stay staged for later Autonomy cleanup.
+Heartbeat, Plaza, OKR, bootstrap, cleanup-script, and other retained production consumers still import the deleted Notification model or service. Those dangling imports are deliberate source-disposition evidence for their later owner/category commits and are not repaired here; they do not authorize restoring the table, API, service, inbox, broadcast, approval-notice path, or a compatibility shim. The former mixed Autonomy test is removed with the old Autonomy/Approval protocol.
 
 The deleted-authority guard makes all three legacy Notification import identities absent as modules and same-named packages and rejects ordinary Backend-test imports and dotted dynamic string references, including monkeypatch and dynamic-import targets. Fresh S3 tests must exercise the approved Notification owner and its explicit consumers rather than rename the removed broadcast assertions or preserve old approval persistence.
+
+The old Autonomy/Approval protocol is removed as one behavior-chain category:
+
+- `backend/app/services/autonomy_service.py`
+- the `ApprovalRequest` ORM and its `approval_requests` table and `approval_status_enum` declarations from the mixed `backend/app/models/audit.py`
+- `GET /enterprise/approvals`, `POST /enterprise/approvals/{approval_id}/resolve`, and the approval count from the mixed `backend/app/api/enterprise.py`
+- `default_autonomy_policy` template API fields and approval metrics from the mixed `backend/app/api/advanced.py`
+- `ApprovalRequest` metric queries and result fields from `backend/app/dao/agent_metrics_dao.py`
+- Agent `autonomy_policy`, `ApprovalRequestOut`, and `ApprovalAction` transport shapes from the mixed `backend/app/schemas/schemas.py`
+- all `default_autonomy_policy` L1/L2/L3 blocks from the twenty-two `backend/agent_templates/*/meta.yaml` files present at cutover
+- `backend/tests/test_autonomy_service_runtime_delete.py`
+
+These sources implemented one old protocol: an Agent action resolved an L1/L2/L3 autonomy level, L3 persisted an Approval Request, a human resolve call directly executed the action or resumed the exact waiting Run, and Notification or Feishu could publish approval notices. The target first release has no autonomy levels, Approval Request persistence, approval API, approval-driven Waiting/Resume, or template default for that policy. The dedicated test protected only this retired protocol, so it is deleted rather than adapted.
+
+This deletion preserves `AuditLog`, `EnterpriseInfo`, `audit_logger.py`, ordinary Audit routes and metrics, generic Feishu approval-card transport, Permission and Need Input boundaries, architecture-artifact approval tests, migrations, dependencies, and every non-autonomy Agent Template field. It does not implement a Permission approval workflow or change Need Input. If approval is added later, Permission must own its policy, persistence, approver selection, and coordinated Run behavior under a separately approved contract.
+
+Frontend `autonomy_policy`, approval tab, Enterprise pending-approval count, and related parser consumers remain staged for the approved full Frontend rewrite; they are not compatibility contracts and this Backend deletion does not edit them. The old Alembic chain also remains unchanged until the single clean-break baseline replaces all legacy tables and enums together.
+
+The deleted-authority guard makes `app.services.autonomy_service` absent as a module and same-named package, rejects ordinary Backend-test static imports and dotted dynamic references, rejects the legacy symbols and route or metric fields inside the five retained mixed Python owners, and scans every Agent Template metadata file for the deleted policy key. Its positive fixtures preserve generic Feishu approval transport, Audit, Enterprise activity, metrics, schemas, and Agent Templates without autonomy policy.
 
 The legacy Published Page authority is removed as its own minimum category:
 

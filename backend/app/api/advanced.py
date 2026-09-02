@@ -84,7 +84,6 @@ class TemplateCreate(BaseModel):
     category: str = "general"
     soul_template: str = ""
     default_skills: list[str] = []
-    default_autonomy_policy: dict = {}
 
 
 class TemplateOut(BaseModel):
@@ -95,7 +94,6 @@ class TemplateOut(BaseModel):
     category: str
     soul_template: str
     default_skills: list
-    default_autonomy_policy: dict
     is_builtin: bool
     created_at: str | None = None
 
@@ -134,7 +132,6 @@ async def create_template(
             "category": data.category,
             "soul_template": data.soul_template,
             "default_skills": data.default_skills,
-            "default_autonomy_policy": data.default_autonomy_policy,
             "created_by": current_user.id,
         }
     )
@@ -248,10 +245,6 @@ async def get_agent_metrics(
             "completion_rate": round(
                 _done_tasks / max(_total_tasks, 1) * 100, 1
             ),
-        },
-        "approvals": {
-            "total": counts["total_approvals"],
-            "pending": counts["pending_approvals"],
         },
         "activity": {
             "actions_last_24h": counts["recent_actions"],
