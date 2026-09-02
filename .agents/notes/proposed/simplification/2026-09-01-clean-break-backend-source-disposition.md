@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, legacy Invitation, and legacy Tenant Knowledge publication authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, legacy Invitation, Onboarding, Directory, Focus, Notification, Published Page, and Tenant Knowledge publication authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -298,6 +298,19 @@ Generic System Email transport remains independently owned in `backend/app/servi
 Heartbeat, Plaza, OKR, Autonomy, bootstrap, cleanup-script, and other retained production consumers still import the deleted Notification model or service. Those dangling imports are deliberate source-disposition evidence for their later owner/category commits and are not repaired here; they do not authorize restoring the table, API, service, inbox, broadcast, approval-notice path, or a compatibility shim. The Notification-specific monkeypatch and assertion were removed from the mixed Autonomy test while its remaining approval/Runtime assertions stay staged for later Autonomy cleanup.
 
 The deleted-authority guard makes all three legacy Notification import identities absent as modules and same-named packages and rejects ordinary Backend-test imports and dotted dynamic string references, including monkeypatch and dynamic-import targets. Fresh S3 tests must exercise the approved Notification owner and its explicit consumers rather than rename the removed broadcast assertions or preserve old approval persistence.
+
+The legacy Published Page authority is removed as its own minimum category:
+
+- `backend/app/models/published_page.py`
+- `backend/app/api/pages.py`
+
+The model stored a public short identifier, Agent, User and Tenant ownership fields, a Workspace-relative source path, title, view counter, and creation time in `published_pages`. The API served stored HTML without authentication at `/p/{short_id}`, incremented its view count, applied sandbox and content-type response headers, and exposed an authenticated Agent-scoped list. These old persistence and transport contracts are deleted rather than adapted. No dedicated Backend test imported or exercised them at cutover, and the target application composition did not mount either router.
+
+Published Page remains an S3 product owner, but its owner and product contracts remain unreviewed. After both contracts are reviewed and approved, the target `published_page` owner must receive fresh tests for the approved persistence, Tenant and Agent scope, authorization, bounded listing, publication source, public rendering, view accounting, content isolation, missing-source, and deletion contracts. The accepted contract, not the old route or table shape, decides whether rendering reads a Workspace snapshot or another owned artifact.
+
+This minimum deletion preserves the old `published_pages` Alembic revision until the clean-break baseline replaces the full migration chain, generic local and S3 storage, Workspace files, HTTP composition, dependencies, Frontend, and the empty target `modules/published_page` package. These staged surfaces do not authorize restoring the old model, API, table contract, route payloads, direct storage access, or a compatibility shim. There was no API or model package export, dynamic registration, or mounted route to remove.
+
+The deleted-authority guard makes both legacy Published Page import identities absent as modules and same-named packages and rejects ordinary Backend-test imports and dotted dynamic string references. Fresh S3 tests must exercise the approved Published Page owner and its public contracts rather than recreate the old unauthenticated renderer or Agent-scoped list as fixtures.
 
 The legacy Tenant Knowledge publication adapter is removed as a separate minimum category:
 

@@ -279,6 +279,19 @@ LEGACY_NOTIFICATION_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_NOTIFICATION_IMPORT_IDENTITIES
 )
+LEGACY_PUBLISHED_PAGE_IMPORT_IDENTITIES = (
+    Path("app/models/published_page"),
+    Path("app/api/pages"),
+)
+LEGACY_PUBLISHED_PAGE_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_PUBLISHED_PAGE_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_PUBLISHED_PAGE_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_PUBLISHED_PAGE_IMPORT_IDENTITIES
+)
 LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES = (
     Path("app/services/enterprise_sync"),
 )
@@ -1451,6 +1464,63 @@ def _assert_tests_do_not_reference_deleted_notification_authorities(
                 ):
                     raise DeletedAuthorityViolation(
                         "test references deleted legacy Notification authority: "
+                        f"{relative_path} -> {deleted_identity}"
+                    )
+
+
+def _assert_deleted_legacy_published_page_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_PUBLISHED_PAGE_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Published Page authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Published Page authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_published_page_authorities(
+    backend_root: Path,
+) -> None:
+    tests_root = backend_root / "tests"
+    if not tests_root.is_dir():
+        return
+
+    for source_path in sorted(tests_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+            continue
+
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        referenced_identities: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                referenced_identities.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                referenced_identities.append(node.module)
+                referenced_identities.extend(
+                    f"{node.module}.{alias.name}"
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                referenced_identities.append(node.value)
+
+        for referenced_identity in referenced_identities:
+            for deleted_identity in LEGACY_PUBLISHED_PAGE_DOTTED_IMPORT_IDENTITIES:
+                if referenced_identity == deleted_identity or referenced_identity.startswith(
+                    f"{deleted_identity}."
+                ):
+                    raise DeletedAuthorityViolation(
+                        "test references deleted legacy Published Page authority: "
                         f"{relative_path} -> {deleted_identity}"
                     )
 
@@ -2803,6 +2873,115 @@ def test_unrelated_dynamic_test_reference_passes_notification_guard(
     )
 
     _assert_tests_do_not_reference_deleted_notification_authorities(tmp_path)
+
+
+def test_legacy_published_page_import_identities_are_absent() -> None:
+    _assert_deleted_legacy_published_page_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_published_page_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_published_page_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_PUBLISHED_PAGE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_PUBLISHED_PAGE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_published_page_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Published Page authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_published_page_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.published_page\n",
+        "from app.models import published_page\n",
+        "from app.models.published_page import PublishedPage\n",
+        "import app.api.pages\n",
+        "from app.api import pages\n",
+        "from app.api.pages import router\n",
+    ],
+    ids=[
+        "model-import",
+        "model-package-import",
+        "model-symbol-import",
+        "api-import",
+        "api-package-import",
+        "api-symbol-import",
+    ],
+)
+def test_backend_test_import_of_deleted_published_page_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_published_page.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Published Page authority",
+    ):
+        _assert_tests_do_not_reference_deleted_published_page_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        'module = importlib.import_module("app.api.pages")\n',
+        'model_path = "app.models.published_page.PublishedPage"\n',
+    ],
+    ids=["dynamic-api-import-reference", "model-dotted-reference"],
+)
+def test_backend_test_dynamic_reference_of_deleted_published_page_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_published_page_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Published Page authority",
+    ):
+        _assert_tests_do_not_reference_deleted_published_page_authorities(tmp_path)
+
+
+def test_unrelated_dynamic_test_reference_passes_published_page_guard(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_unrelated_page_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        'module = importlib.import_module("app.services.text_extractor")\n',
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_published_page_authorities(tmp_path)
 
 
 def test_legacy_tenant_knowledge_publication_import_identity_is_absent() -> None:
