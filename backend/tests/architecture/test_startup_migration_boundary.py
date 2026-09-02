@@ -54,8 +54,37 @@ def _app_imports(source: str) -> set[str]:
     return imports
 
 
+def _dynamic_import_violations(tree: ast.AST) -> set[str]:
+    violations: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            violations.update(
+                alias.name for alias in node.names if alias.name == "importlib"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module in {"builtins", "importlib"}:
+            violations.add(node.module)
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id == "__import__":
+                violations.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute) and node.func.attr == "import_module":
+                violations.add(node.func.attr)
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith("app.")
+        ):
+            violations.add(node.value)
+    return violations
+
+
 def _validate_alembic_imports(source: str) -> None:
     tree = ast.parse(source)
+    dynamic_violations = _dynamic_import_violations(tree)
+    if dynamic_violations:
+        raise BoundaryViolation(
+            f"Alembic may not use dynamic application imports: {sorted(dynamic_violations)}"
+        )
+
     imports = _app_imports(source)
     required = {
         "app.infrastructure.config.get_settings",
@@ -202,6 +231,20 @@ def test_alembic_environment_imports_only_target_infrastructure() -> None:
     _validate_alembic_imports(ALEMBIC_ENV.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize(
+    "target_imports",
+    [
+        """from app.infrastructure.config import get_settings, reveal_database_url
+from app.infrastructure.database import Base""",
+        """from app.infrastructure.config import get_settings
+from app.infrastructure.config import reveal_database_url
+from app.infrastructure.database import Base""",
+    ],
+)
+def test_alembic_boundary_accepts_exact_target_imports(target_imports: str) -> None:
+    _validate_alembic_imports(f"{target_imports}\ntarget_metadata = Base.metadata\n")
+
+
 def test_alembic_connection_failure_never_exposes_database_password() -> None:
     password = "alembic-failure-secret"
     environment = os.environ.copy()
@@ -222,6 +265,27 @@ def test_alembic_connection_failure_never_exposes_database_password() -> None:
     assert completed.returncode != 0
     assert "Alembic migration failed while connecting" in diagnostic
     assert password not in diagnostic
+
+
+@pytest.mark.parametrize(
+    "bypass",
+    [
+        'import importlib\nimportlib.import_module("app.models.agent")',
+        'from importlib import import_module\nimport_module("app.models.agent")',
+        '__import__("app.models.agent")',
+        'legacy_model = "app.models.agent.Agent"',
+    ],
+)
+def test_alembic_boundary_rejects_dynamic_legacy_imports(bypass: str) -> None:
+    source = f"""from app.infrastructure.config import get_settings
+from app.infrastructure.config import reveal_database_url
+from app.infrastructure.database import Base
+{bypass}
+target_metadata = Base.metadata
+"""
+
+    with pytest.raises(BoundaryViolation, match="dynamic application imports"):
+        _validate_alembic_imports(source)
 
 
 @pytest.mark.parametrize(
