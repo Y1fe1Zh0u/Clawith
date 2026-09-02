@@ -136,7 +136,7 @@
       "e2e_level": "unavailable",
       "implementation_owners": ["identity_tenant", "credential", "model", "agent", "permission", "audit"],
       "schema_owners": ["identity_tenant", "credential", "model", "agent", "permission", "audit", "run", "context"],
-      "contract_approval_owners": ["identity_tenant", "credential", "model", "agent", "permission", "audit", "run", "context"],
+      "contract_approval_owners": ["identity_tenant", "credential", "model", "agent", "permission", "audit", "workspace", "tool", "capability_market", "run", "context"],
       "required_paths": [
         "backend/rewrite/owner-contracts.json",
         "backend/tests/database/test_schema_wave_S0.py",
@@ -193,6 +193,24 @@
           "replay_policy": "verify_receipt_before_execute"
         },
         {
+          "id": "approve-workspace-contract-only",
+          "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner workspace --contract-artifact <path> --evidence <path>",
+          "receipt": "backend/artifacts/rewrite/G003/receipts/workspace-contract-approval.json",
+          "replay_policy": "verify_receipt_before_execute"
+        },
+        {
+          "id": "approve-tool-contract-only",
+          "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner tool --contract-artifact <path> --evidence <path>",
+          "receipt": "backend/artifacts/rewrite/G003/receipts/tool-contract-approval.json",
+          "replay_policy": "verify_receipt_before_execute"
+        },
+        {
+          "id": "approve-capability-market-contract-only",
+          "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner capability_market --contract-artifact <path> --evidence <path>",
+          "receipt": "backend/artifacts/rewrite/G003/receipts/capability-market-contract-approval.json",
+          "replay_policy": "verify_receipt_before_execute"
+        },
+        {
           "id": "approve-run-contract-only",
           "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner run --contract-artifact <path> --evidence <path>",
           "receipt": "backend/artifacts/rewrite/G003/receipts/run-contract-approval.json",
@@ -214,7 +232,7 @@
       "e2e_level": "unavailable",
       "implementation_owners": ["workspace", "tool", "capability_market", "model"],
       "schema_owners": ["workspace", "tool", "capability_market", "session", "a2a", "group", "trigger", "heartbeat", "channel"],
-      "contract_approval_owners": ["workspace", "tool", "capability_market", "session", "a2a", "group", "trigger", "heartbeat", "channel"],
+      "contract_approval_owners": ["session", "a2a", "group", "trigger", "heartbeat", "channel"],
       "required_paths": [
         "backend/rewrite/owner-contracts.json",
         "backend/tests/database/test_schema_wave_S2.py",
@@ -235,24 +253,6 @@
         }
       ],
       "mutations": [
-        {
-          "id": "approve-workspace-contract-only",
-          "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner workspace --contract-artifact <path> --evidence <path>",
-          "receipt": "backend/artifacts/rewrite/G004/receipts/workspace-contract-approval.json",
-          "replay_policy": "verify_receipt_before_execute"
-        },
-        {
-          "id": "approve-tool-contract-only",
-          "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner tool --contract-artifact <path> --evidence <path>",
-          "receipt": "backend/artifacts/rewrite/G004/receipts/tool-contract-approval.json",
-          "replay_policy": "verify_receipt_before_execute"
-        },
-        {
-          "id": "approve-capability-market-contract-only",
-          "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner capability_market --contract-artifact <path> --evidence <path>",
-          "receipt": "backend/artifacts/rewrite/G004/receipts/capability-market-contract-approval.json",
-          "replay_policy": "verify_receipt_before_execute"
-        },
         {
           "id": "approve-session-contract-only",
           "command": "uv run python scripts/check_owner_contracts.py approve --manifest rewrite/owner-contracts.json --owner session --contract-artifact <path> --evidence <path>",

@@ -28,6 +28,20 @@ G004_SCHEMA_OWNERS = [
     "heartbeat",
     "channel",
 ]
+G003_APPROVAL_OWNERS = [
+    "identity_tenant",
+    "credential",
+    "model",
+    "agent",
+    "permission",
+    "audit",
+    "workspace",
+    "tool",
+    "capability_market",
+    "run",
+    "context",
+]
+G004_APPROVAL_OWNERS = ["session", "a2a", "group", "trigger", "heartbeat", "channel"]
 
 
 def _manifest() -> dict:
@@ -148,19 +162,24 @@ def test_validator_requires_complete_schema_wave_rosters(tmp_path: Path) -> None
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
-def test_validator_requires_schema_owner_contract_approvals(tmp_path: Path) -> None:
+def test_validator_requires_dependency_ordered_contract_approvals(tmp_path: Path) -> None:
     manifest = _manifest()
-    assert manifest["goals"][3]["contract_approval_owners"] == G003_SCHEMA_OWNERS
-    assert manifest["goals"][4]["contract_approval_owners"] == G004_SCHEMA_OWNERS
+    assert manifest["goals"][3]["contract_approval_owners"] == G003_APPROVAL_OWNERS
+    assert manifest["goals"][4]["contract_approval_owners"] == G004_APPROVAL_OWNERS
 
-    manifest["goals"][4]["contract_approval_owners"].remove("workspace")
+    manifest["goals"][3]["contract_approval_owners"].remove("workspace")
+    with pytest.raises(goal_gates.GateContractError, match="contract approvals mismatch for G003"):
+        goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
+
+    manifest = _manifest()
+    manifest["goals"][4]["contract_approval_owners"].remove("session")
     with pytest.raises(goal_gates.GateContractError, match="contract approvals mismatch for G004"):
         goal_gates.validate_manifest(_write_manifest(tmp_path, manifest))
 
 
 def test_validator_requires_one_receipted_approval_per_schema_owner(tmp_path: Path) -> None:
     manifest = _manifest()
-    for goal_index, expected_owners in ((3, G003_SCHEMA_OWNERS), (4, G004_SCHEMA_OWNERS)):
+    for goal_index, expected_owners in ((3, G003_APPROVAL_OWNERS), (4, G004_APPROVAL_OWNERS)):
         mutations = manifest["goals"][goal_index]["mutations"]
         owners = [mutation["command"].split("--owner ", 1)[1].split(" ", 1)[0] for mutation in mutations]
         assert owners == expected_owners

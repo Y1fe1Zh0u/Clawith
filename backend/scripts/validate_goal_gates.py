@@ -57,7 +57,22 @@ EXPECTED_SCHEMA_OWNERS = {
         "channel",
     ],
 }
-EXPECTED_APPROVALS = EXPECTED_SCHEMA_OWNERS
+EXPECTED_APPROVALS = {
+    "G003": [
+        "identity_tenant",
+        "credential",
+        "model",
+        "agent",
+        "permission",
+        "audit",
+        "workspace",
+        "tool",
+        "capability_market",
+        "run",
+        "context",
+    ],
+    "G004": ["session", "a2a", "group", "trigger", "heartbeat", "channel"],
+}
 EXPECTED_IMPLEMENTATION_OWNERS = {
     "G000": [],
     "G001": [],
@@ -81,13 +96,13 @@ EXPECTED_MUTATIONS = {
         "approve-agent-contract-only",
         "approve-permission-contract-only",
         "approve-audit-contract-only",
+        "approve-workspace-contract-only",
+        "approve-tool-contract-only",
+        "approve-capability-market-contract-only",
         "approve-run-contract-only",
         "approve-context-contract-only",
     ],
     "G004": [
-        "approve-workspace-contract-only",
-        "approve-tool-contract-only",
-        "approve-capability-market-contract-only",
         "approve-session-contract-only",
         "approve-a2a-contract-only",
         "approve-group-contract-only",
@@ -294,11 +309,11 @@ APPROVAL_COMMAND = (
 EXPECTED_MUTATION_COMMANDS = {
     "G003": {
         f"approve-{owner.replace('_', '-')}-contract-only": APPROVAL_COMMAND.format(owner=owner)
-        for owner in EXPECTED_SCHEMA_OWNERS["G003"]
+        for owner in EXPECTED_APPROVALS["G003"]
     },
     "G004": {
         f"approve-{owner.replace('_', '-')}-contract-only": APPROVAL_COMMAND.format(owner=owner)
-        for owner in EXPECTED_SCHEMA_OWNERS["G004"]
+        for owner in EXPECTED_APPROVALS["G004"]
     },
     "G007": {
         "approve-s3-owner-contract": APPROVAL_COMMAND.format(owner="<owner>"),
