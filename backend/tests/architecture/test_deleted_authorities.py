@@ -536,6 +536,31 @@ LEGACY_HEARTBEAT_SANDBOX_SOURCE = Path(
 LEGACY_HEARTBEAT_SANDBOX_FORBIDDEN_PATHS = frozenset(
     {"HEARTBEAT.md", "/HEARTBEAT.md"}
 )
+LEGACY_WORKSPACE_IMPORT_IDENTITIES = (
+    Path("app/models/workspace"),
+    Path("app/api/files"),
+    Path("app/api/upload"),
+    Path("app/services/workspace_collaboration"),
+    Path("app/services/workspace_locking"),
+    Path("app/services/workspace_reconciliation"),
+)
+LEGACY_WORKSPACE_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_WORKSPACE_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_WORKSPACE_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_WORKSPACE_IMPORT_IDENTITIES
+)
+LEGACY_WORKSPACE_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "class:WorkspaceFileRevision",
+        "class:WorkspaceEditLock",
+        "table:workspace_file_revisions",
+        "table:workspace_edit_locks",
+    }
+)
 FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
 DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
 LEGACY_FEISHU_AUTHORITY_METHODS = frozenset(
@@ -2199,6 +2224,56 @@ def _assert_tests_do_not_reference_deleted_heartbeat_authorities(
         authority="Heartbeat",
         deleted_identities=LEGACY_HEARTBEAT_DOTTED_IMPORT_IDENTITIES,
     )
+
+
+def _assert_deleted_legacy_workspace_authorities(backend_root: Path) -> None:
+    if len(LEGACY_WORKSPACE_IMPORT_IDENTITIES) != 6:
+        raise DeletedAuthorityViolation(
+            "legacy Workspace authority inventory must contain exactly 6 identities"
+        )
+    for identity in LEGACY_WORKSPACE_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Workspace authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Workspace authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_workspace_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Workspace",
+        deleted_identities=LEGACY_WORKSPACE_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_workspace_definitions(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_facts = sorted(
+            LEGACY_WORKSPACE_FORBIDDEN_DEFINITIONS & _source_contract_facts(tree)
+        )
+        if restored_facts:
+            raise DeletedAuthorityViolation(
+                "application source restores legacy Workspace definitions: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
+            )
 
 
 def _provider_transport_application_imports(tree: ast.Module) -> set[str]:
@@ -5333,8 +5408,6 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
         "from app.services.realtime import publish_event\n",
         "from app.services.realtime_runtime.router import publish_realtime_event\n",
         "from app.services.storage_runtime.local import LocalStorageBackend\n",
-        "from app.models.workspace import WorkspaceFileRevision\n",
-        "from app.services.workspace_collaboration import content_hash\n",
         "from app.modules.trigger import __name__\n",
         "from app.api.messages import router\n",
     ],
@@ -5342,8 +5415,6 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
         "realtime-service",
         "realtime-runtime",
         "storage-runtime",
-        "workspace-model",
-        "workspace-collaboration",
         "target-trigger-module",
         "messages-api",
     ],
@@ -5792,14 +5863,12 @@ def test_backend_test_reference_of_deleted_heartbeat_authority_fails_guard(
     [
         "from app.modules.heartbeat import __name__\n",
         "from app.services.sandbox.execution_lease import ExecutionLease\n",
-        "from app.services.workspace_locking import WorkspaceLockService\n",
         'metric_name = "heartbeat_count"\n',
         'task_name = "sandbox.heartbeat"\n',
     ],
     ids=[
         "target-heartbeat-module",
         "sandbox-execution-lease",
-        "workspace-lock-service",
         "lock-heartbeat-count",
         "sandbox-heartbeat-word",
     ],
@@ -5821,6 +5890,133 @@ def test_nonlegacy_heartbeat_template_path_passes_guard(tmp_path: Path) -> None:
     template_path.write_text("target template inventory", encoding="utf-8")
 
     _assert_deleted_legacy_heartbeat_authorities(tmp_path)
+
+
+def test_legacy_workspace_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_workspace_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_workspace_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_workspace_authorities(BACKEND_ROOT)
+
+
+def test_application_does_not_restore_legacy_workspace_definitions() -> None:
+    _assert_application_does_not_restore_workspace_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_WORKSPACE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_WORKSPACE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_workspace_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Workspace authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_workspace_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_WORKSPACE_DOTTED_IMPORT_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_workspace_authority_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'target = "{identity}.restored"\n'
+    )
+    test_path = tmp_path / "tests/test_restored_workspace.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Workspace authority",
+    ):
+        _assert_tests_do_not_reference_deleted_workspace_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class WorkspaceFileRevision: ...\n",
+        "class WorkspaceEditLock: ...\n",
+        'class Restored:\n    __tablename__ = "workspace_file_revisions"\n',
+        'class Restored:\n    __tablename__ = "workspace_edit_locks"\n',
+    ],
+    ids=[
+        "file-revision-class",
+        "edit-lock-class",
+        "file-revisions-table",
+        "edit-locks-table",
+    ],
+)
+def test_restored_workspace_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/modules/workspace/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application source restores legacy Workspace definitions",
+    ):
+        _assert_application_does_not_restore_workspace_definitions(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.services.workspace_paths import resolve_path_within_root\n",
+        "from app.services.storage import normalize_storage_key\n",
+        "from app.services.storage_runtime.local import LocalStorageBackend\n",
+        "from app.services.sandbox.config import SandboxConfig\n",
+        "from app.modules.workspace import __name__\n",
+    ],
+    ids=[
+        "workspace-paths",
+        "storage-facade",
+        "storage-runtime",
+        "sandbox",
+        "target-workspace-module",
+    ],
+)
+def test_retained_workspace_adjacent_reference_passes_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_retained_workspace_adjacent.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_workspace_authorities(tmp_path)
 
 
 def test_channel_provider_transports_are_isolated_from_legacy_authorities() -> None:
