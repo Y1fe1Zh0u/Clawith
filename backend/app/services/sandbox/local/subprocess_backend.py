@@ -416,7 +416,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 "--bind", str(staging_path / "memory"), "/memory",
                 "--bind", str(staging_path / "skills"), "/skills",
             ])
-            for root_file in ("focus.md", "soul.md", "HEARTBEAT.md"):
+            for root_file in ("focus.md", "soul.md"):
                 source = staging_path / root_file
                 if source.exists():
                     cmd.extend(["--bind", str(source), f"/{root_file}"])

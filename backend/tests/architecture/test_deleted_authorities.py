@@ -495,6 +495,12 @@ LEGACY_HEARTBEAT_TEMPLATE_PATH = Path("agent_template/HEARTBEAT.md")
 LEGACY_HEARTBEAT_STAGED_TEST_REFERENCES = frozenset(
     {Path("tests/test_okr_daily_collection_runtime.py")}
 )
+LEGACY_HEARTBEAT_SANDBOX_SOURCE = Path(
+    "app/services/sandbox/local/subprocess_backend.py"
+)
+LEGACY_HEARTBEAT_SANDBOX_FORBIDDEN_PATHS = frozenset(
+    {"HEARTBEAT.md", "/HEARTBEAT.md"}
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1997,6 +2003,28 @@ def _assert_deleted_legacy_heartbeat_authorities(backend_root: Path) -> None:
         raise DeletedAuthorityViolation(
             "deleted legacy Heartbeat template path was reintroduced: "
             f"{LEGACY_HEARTBEAT_TEMPLATE_PATH}"
+        )
+
+    sandbox_source = backend_root / LEGACY_HEARTBEAT_SANDBOX_SOURCE
+    if not sandbox_source.is_file():
+        return
+    tree = ast.parse(
+        sandbox_source.read_text(encoding="utf-8"),
+        filename=str(sandbox_source),
+    )
+    restored_paths = sorted(
+        {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value in LEGACY_HEARTBEAT_SANDBOX_FORBIDDEN_PATHS
+        }
+    )
+    if restored_paths:
+        raise DeletedAuthorityViolation(
+            "Sandbox recognizes the deleted legacy Heartbeat root path: "
+            f"{', '.join(restored_paths)}"
         )
 
 
@@ -5185,6 +5213,28 @@ def test_reintroduced_legacy_heartbeat_template_path_fails_guard(
     with pytest.raises(
         DeletedAuthorityViolation,
         match="deleted legacy Heartbeat template path was reintroduced",
+    ):
+        _assert_deleted_legacy_heartbeat_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "legacy_path",
+    sorted(LEGACY_HEARTBEAT_SANDBOX_FORBIDDEN_PATHS),
+)
+def test_restored_sandbox_heartbeat_root_path_fails_guard(
+    tmp_path: Path,
+    legacy_path: str,
+) -> None:
+    source_path = tmp_path / LEGACY_HEARTBEAT_SANDBOX_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        f"ROOT_FILES = ({legacy_path!r},)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="Sandbox recognizes the deleted legacy Heartbeat root path",
     ):
         _assert_deleted_legacy_heartbeat_authorities(tmp_path)
 

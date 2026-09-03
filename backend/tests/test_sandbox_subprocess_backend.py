@@ -205,6 +205,33 @@ def test_isolated_bwrap_uses_workspace_tool_paths_and_writable_copy(monkeypatch,
     assert cmd[chdir_index + 1] == "/"
 
 
+def test_isolated_bwrap_does_not_mount_legacy_heartbeat_root(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda command: "/usr/bin/bwrap" if command == "bwrap" else None,
+    )
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    for root_file in ("focus.md", "soul.md", "HEARTBEAT.md"):
+        (staging / root_file).write_text(root_file, encoding="utf-8")
+
+    cmd = SubprocessBackend(SandboxConfig())._build_bwrap_command(
+        ["python", "/workspace/.tmp/test.py"],
+        tmp_path,
+        tmp_path / ".venv",
+        staging_path=staging,
+    )
+
+    assert cmd is not None
+    assert "/focus.md" in cmd
+    assert "/soul.md" in cmd
+    assert str(staging / "HEARTBEAT.md") not in cmd
+    assert "/HEARTBEAT.md" not in cmd
+
+
 @pytest.mark.asyncio
 async def test_persistent_bwrap_session_is_reused_for_same_agent_loop(
     monkeypatch,
