@@ -117,6 +117,44 @@ LEGACY_OKR_AGENT_HOOK_REINTRODUCTIONS = [
 LEGACY_OKR_AGENT_HOOK_DOTTED_IMPORT_IDENTITY = (
     LEGACY_OKR_AGENT_HOOK_IMPORT_IDENTITY.as_posix().replace("/", ".")
 )
+LEGACY_OKR_IMPORT_IDENTITIES = (
+    Path("app/models/okr"),
+    Path("app/api/okr"),
+    Path("app/services/okr_daily_collection"),
+    Path("app/services/okr_reporting"),
+    Path("app/services/okr_scheduler"),
+    Path("app/services/business_calendar"),
+)
+LEGACY_OKR_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_OKR_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_OKR_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_OKR_IMPORT_IDENTITIES
+)
+LEGACY_OKR_DEFINITION_ROOTS = (Path("app"),)
+LEGACY_OKR_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "class:OKRObjective",
+        "class:OKRKeyResult",
+        "class:OKRAlignment",
+        "class:OKRProgressLog",
+        "class:WorkReport",
+        "class:MemberDailyReport",
+        "class:CompanyReport",
+        "class:OKRSettings",
+        "table:okr_objectives",
+        "table:okr_key_results",
+        "table:okr_alignments",
+        "table:okr_progress_logs",
+        "table:work_reports",
+        "table:member_daily_reports",
+        "table:company_reports",
+        "table:okr_settings",
+    }
+)
 LEGACY_TOKEN_TRACKER_IMPORT_IDENTITY = Path("app/services/token_tracker")
 LEGACY_TOKEN_TRACKER_REINTRODUCTIONS = [
     (LEGACY_TOKEN_TRACKER_IMPORT_IDENTITY, representation)
@@ -492,9 +530,6 @@ LEGACY_HEARTBEAT_DOTTED_IMPORT_IDENTITIES = tuple(
     for identity in LEGACY_HEARTBEAT_IMPORT_IDENTITIES
 )
 LEGACY_HEARTBEAT_TEMPLATE_PATH = Path("agent_template/HEARTBEAT.md")
-LEGACY_HEARTBEAT_STAGED_TEST_REFERENCES = frozenset(
-    {Path("tests/test_okr_daily_collection_runtime.py")}
-)
 LEGACY_HEARTBEAT_SANDBOX_SOURCE = Path(
     "app/services/sandbox/local/subprocess_backend.py"
 )
@@ -1019,6 +1054,55 @@ def _assert_tests_do_not_reference_deleted_okr_agent_hook(
         authority="OKR Agent Hook",
         deleted_identities=(LEGACY_OKR_AGENT_HOOK_DOTTED_IMPORT_IDENTITY,),
     )
+
+
+def _assert_deleted_legacy_okr_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_OKR_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy OKR authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy OKR authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_okr_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="OKR",
+        deleted_identities=LEGACY_OKR_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_okr_definitions(
+    backend_root: Path,
+) -> None:
+    source_paths: set[Path] = set()
+    for relative_root in LEGACY_OKR_DEFINITION_ROOTS:
+        source_root = backend_root / relative_root
+        if source_root.is_dir():
+            source_paths.update(source_root.rglob("*.py"))
+
+    for source_path in sorted(source_paths):
+        relative_path = source_path.relative_to(backend_root)
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_facts = sorted(
+            LEGACY_OKR_FORBIDDEN_DEFINITIONS & _source_contract_facts(tree)
+        )
+        if restored_facts:
+            raise DeletedAuthorityViolation(
+                "application source restores legacy OKR definitions: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
+            )
 
 
 def _assert_deleted_legacy_token_tracker_authority(backend_root: Path) -> None:
@@ -2114,7 +2198,6 @@ def _assert_tests_do_not_reference_deleted_heartbeat_authorities(
         backend_root,
         authority="Heartbeat",
         deleted_identities=LEGACY_HEARTBEAT_DOTTED_IMPORT_IDENTITIES,
-        excluded_test_paths=LEGACY_HEARTBEAT_STAGED_TEST_REFERENCES,
     )
 
 
@@ -2873,6 +2956,18 @@ def test_backend_tests_do_not_reference_deleted_okr_agent_hook() -> None:
     _assert_tests_do_not_reference_deleted_okr_agent_hook(BACKEND_ROOT)
 
 
+def test_legacy_okr_authorities_are_absent() -> None:
+    _assert_deleted_legacy_okr_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_okr_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_okr_authorities(BACKEND_ROOT)
+
+
+def test_application_does_not_restore_legacy_okr_definitions() -> None:
+    _assert_application_does_not_restore_okr_definitions(BACKEND_ROOT)
+
+
 def test_legacy_token_tracker_authority_is_absent() -> None:
     _assert_deleted_legacy_token_tracker_authority(BACKEND_ROOT)
 
@@ -3216,20 +3311,158 @@ def test_backend_test_dynamic_reference_to_okr_agent_hook_fails_guard(
 @pytest.mark.parametrize(
     "test_source",
     [
-        "from app.services.okr_reporting import generate_company_daily_report\n",
-        'service_path = "app.services.okr_daily_collection.trigger_daily_collection_for_tenant"\n',
+        "from app.modules.okr import __name__\n",
+        "from app.services.timezone_utils import validate_timezone_name\n",
     ],
-    ids=["okr-reporting-static-import", "okr-collection-dotted-reference"],
+    ids=["target-okr-module", "timezone-validation"],
 )
-def test_retained_okr_service_reference_passes_okr_agent_hook_guard(
+def test_target_okr_reference_passes_okr_agent_hook_guard(
     tmp_path: Path,
     test_source: str,
 ) -> None:
-    test_path = tmp_path / "tests/test_retained_okr_service_reference.py"
+    test_path = tmp_path / "tests/test_target_okr_reference.py"
     test_path.parent.mkdir(parents=True)
     test_path.write_text(test_source, encoding="utf-8")
 
     _assert_tests_do_not_reference_deleted_okr_agent_hook(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_OKR_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_OKR_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_okr_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy OKR authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_okr_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [f"import {identity}\n" for identity in LEGACY_OKR_DOTTED_IMPORT_IDENTITIES],
+    ids=[f"{identity}-static" for identity in LEGACY_OKR_DOTTED_IMPORT_IDENTITIES],
+)
+def test_backend_test_static_reference_of_deleted_okr_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_okr_static.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy OKR authority",
+    ):
+        _assert_tests_do_not_reference_deleted_okr_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        f'target = "{identity}.restored"\n'
+        for identity in LEGACY_OKR_DOTTED_IMPORT_IDENTITIES
+    ],
+    ids=[f"{identity}-dotted" for identity in LEGACY_OKR_DOTTED_IMPORT_IDENTITIES],
+)
+def test_backend_test_dotted_reference_of_deleted_okr_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_okr_dotted.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy OKR authority",
+    ):
+        _assert_tests_do_not_reference_deleted_okr_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        *(f"class {name}: ...\n" for name in (
+            "OKRObjective",
+            "OKRKeyResult",
+            "OKRAlignment",
+            "OKRProgressLog",
+            "WorkReport",
+            "MemberDailyReport",
+            "CompanyReport",
+            "OKRSettings",
+        )),
+        *(f'class RenamedOKR:\n    __tablename__ = "{name}"\n' for name in (
+            "okr_objectives",
+            "okr_key_results",
+            "okr_alignments",
+            "okr_progress_logs",
+            "work_reports",
+            "member_daily_reports",
+            "company_reports",
+            "okr_settings",
+        )),
+    ],
+)
+def test_restored_legacy_okr_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/modules/okr/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application source restores legacy OKR definitions",
+    ):
+        _assert_application_does_not_restore_okr_definitions(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.modules.okr import __name__\n",
+        "from app.services.timezone_utils import validate_timezone_name\n",
+    ],
+    ids=["target-okr-module", "timezone-validation"],
+)
+def test_target_okr_names_pass_legacy_okr_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_target_okr_names.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_okr_authorities(tmp_path)
+
+
+def test_target_okr_definitions_pass_legacy_okr_guard(tmp_path: Path) -> None:
+    source_path = tmp_path / "app/modules/okr/service.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("class OKRPolicy: ...\n", encoding="utf-8")
+
+    _assert_application_does_not_restore_okr_definitions(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -5224,14 +5457,14 @@ def test_restored_schedule_definition_fails_guard(
     [
         "from app.modules.trigger import __name__\n",
         "from app.modules.heartbeat import __name__\n",
-        "from app.services.business_calendar import is_business_day\n",
-        "from app.services.timezone_utils import get_agent_timezone_sync\n",
+        "from app.modules.okr import __name__\n",
+        "from app.services.timezone_utils import validate_timezone_name\n",
     ],
     ids=[
         "target-trigger-module",
         "target-heartbeat-module",
-        "business-calendar",
-        "timezone-utils",
+        "target-okr-module",
+        "timezone-validation",
     ],
 )
 def test_retained_trigger_and_heartbeat_reference_passes_schedule_guard(
@@ -5578,19 +5811,6 @@ def test_retained_heartbeat_names_pass_legacy_heartbeat_guard(
     test_path = tmp_path / "tests/test_retained_heartbeat_names.py"
     test_path.parent.mkdir(parents=True)
     test_path.write_text(test_source, encoding="utf-8")
-
-    _assert_tests_do_not_reference_deleted_heartbeat_authorities(tmp_path)
-
-
-def test_staged_okr_heartbeat_reference_passes_until_okr_disposition(
-    tmp_path: Path,
-) -> None:
-    test_path = tmp_path / "tests/test_okr_daily_collection_runtime.py"
-    test_path.parent.mkdir(parents=True)
-    test_path.write_text(
-        "from app.services.heartbeat import run_agent_oneshot\n",
-        encoding="utf-8",
-    )
 
     _assert_tests_do_not_reference_deleted_heartbeat_authorities(tmp_path)
 
