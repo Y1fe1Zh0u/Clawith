@@ -393,21 +393,20 @@ LEGACY_SESSION_SUBSTRATE_DAO_EXPORTS = (
     "chat_session_dao",
     "chat_message_dao",
 )
-LEGACY_SESSION_SUBSTRATE_FORBIDDEN_FACTS = {
-    Path("app/models/audit.py"): frozenset(
-        {
-            "class:ChatMessage",
-            "table:chat_messages",
-            "enum:chat_role_enum",
-        }
-    ),
-    Path("app/schemas/schemas.py"): frozenset(
-        {
-            "class:ChatMessageOut",
-            "class:ChatSend",
-        }
-    ),
-}
+LEGACY_SESSION_SUBSTRATE_DEFINITION_ROOTS = (
+    Path("app/models"),
+    Path("app/schemas"),
+    Path("app/modules"),
+)
+LEGACY_SESSION_SUBSTRATE_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "class:ChatMessage",
+        "table:chat_messages",
+        "enum:chat_role_enum",
+        "class:ChatMessageOut",
+        "class:ChatSend",
+    }
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1708,23 +1707,29 @@ def _assert_deleted_legacy_session_substrate_dao_exports(
     )
 
 
-def _assert_mixed_owners_do_not_restore_session_substrate_facts(
+def _assert_model_schema_trees_do_not_restore_session_substrate_definitions(
     backend_root: Path,
 ) -> None:
-    for relative_path, forbidden_facts in (
-        LEGACY_SESSION_SUBSTRATE_FORBIDDEN_FACTS.items()
-    ):
-        source_path = backend_root / relative_path
-        if not source_path.is_file():
+    source_paths: set[Path] = set()
+    for relative_root in LEGACY_SESSION_SUBSTRATE_DEFINITION_ROOTS:
+        source_root = backend_root / relative_root
+        if not source_root.is_dir():
             continue
+        source_paths.update(source_root.rglob("*.py"))
+
+    for source_path in sorted(source_paths):
+        relative_path = source_path.relative_to(backend_root)
         tree = ast.parse(
             source_path.read_text(encoding="utf-8"),
             filename=str(source_path),
         )
-        restored_facts = sorted(forbidden_facts & _source_contract_facts(tree))
+        restored_facts = sorted(
+            LEGACY_SESSION_SUBSTRATE_FORBIDDEN_DEFINITIONS
+            & _source_contract_facts(tree)
+        )
         if restored_facts:
             raise DeletedAuthorityViolation(
-                "mixed retained owner restores legacy Session substrate facts: "
+                "model or schema restores legacy Session substrate definitions: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
 
@@ -4201,8 +4206,10 @@ def test_legacy_session_substrate_dao_exports_are_absent() -> None:
     _assert_deleted_legacy_session_substrate_dao_exports(BACKEND_ROOT)
 
 
-def test_mixed_owners_do_not_restore_session_substrate_facts() -> None:
-    _assert_mixed_owners_do_not_restore_session_substrate_facts(BACKEND_ROOT)
+def test_model_schema_trees_do_not_restore_session_substrate_definitions() -> None:
+    _assert_model_schema_trees_do_not_restore_session_substrate_definitions(
+        BACKEND_ROOT
+    )
 
 
 @pytest.mark.parametrize(
@@ -4272,17 +4279,17 @@ def test_dynamic_session_substrate_dao_export_hook_fails_guard(
 @pytest.mark.parametrize(
     ("relative_path", "source"),
     [
-        (Path("app/models/audit.py"), "class ChatMessage: ...\n"),
+        (Path("app/models/message.py"), "class ChatMessage: ...\n"),
         (
-            Path("app/models/audit.py"),
+            Path("app/modules/session/model.py"),
             'class Legacy:\n    __tablename__ = "chat_messages"\n',
         ),
         (
-            Path("app/models/audit.py"),
+            Path("app/modules/session/model.py"),
             'role = Enum("user", name="chat_role_enum")\n',
         ),
-        (Path("app/schemas/schemas.py"), "class ChatMessageOut: ...\n"),
-        (Path("app/schemas/schemas.py"), "class ChatSend: ...\n"),
+        (Path("app/modules/session/schema.py"), "class ChatMessageOut: ...\n"),
+        (Path("app/modules/session/schema.py"), "class ChatSend: ...\n"),
     ],
     ids=[
         "chat-message-model",
@@ -4303,24 +4310,30 @@ def test_restored_session_substrate_fact_fails_guard(
 
     with pytest.raises(
         DeletedAuthorityViolation,
-        match="mixed retained owner restores legacy Session substrate facts",
+        match="model or schema restores legacy Session substrate definitions",
     ):
-        _assert_mixed_owners_do_not_restore_session_substrate_facts(tmp_path)
+        _assert_model_schema_trees_do_not_restore_session_substrate_definitions(
+            tmp_path
+        )
 
 
-def test_unrelated_audit_and_schema_facts_pass_session_substrate_guard(
+def test_target_session_input_and_agent_reply_pass_session_substrate_guard(
     tmp_path: Path,
 ) -> None:
     safe_sources = {
-        Path("app/models/audit.py"): "class AuditLog: ...\nclass EnterpriseInfo: ...\n",
-        Path("app/schemas/schemas.py"): "class AuditLogOut: ...\n",
+        Path("app/modules/session/model.py"): (
+            'class SessionInput:\n    __tablename__ = "session_inputs"\n'
+        ),
+        Path("app/modules/session/schema.py"): "class AgentReply: ...\n",
     }
     for relative_path, source in safe_sources.items():
         source_path = tmp_path / relative_path
         source_path.parent.mkdir(parents=True, exist_ok=True)
         source_path.write_text(source, encoding="utf-8")
 
-    _assert_mixed_owners_do_not_restore_session_substrate_facts(tmp_path)
+    _assert_model_schema_trees_do_not_restore_session_substrate_definitions(
+        tmp_path
+    )
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:
