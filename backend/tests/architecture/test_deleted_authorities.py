@@ -781,6 +781,24 @@ LEGACY_CORE_COMPATIBILITY_FORBIDDEN_FACTS = frozenset(
         "function:register_error_handlers",
     }
 )
+LEGACY_LOGGING_CONFIG_IDENTITY = Path("app/core/logging_config")
+LEGACY_LOGGING_CONFIG_DOTTED_IDENTITY = (
+    LEGACY_LOGGING_CONFIG_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_LOGGING_CONFIG_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "assigned:NOISY_CONNECTION_LOGGERS",
+        "assigned:configured_logger",
+        "assigned:trace_id_var",
+        "function:_disable_agentbay_logger_override",
+        "function:configure_logging",
+        "function:get_trace_id",
+        "function:intercept_standard_logging",
+        "function:new_trace_id",
+        "function:quiet_noisy_connection_loggers",
+        "function:set_trace_id",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -3056,6 +3074,47 @@ def _assert_application_does_not_restore_core_compatibility_facts(
         if restored:
             raise DeletedAuthorityViolation(
                 "application restores legacy core compatibility facts: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
+def _assert_deleted_legacy_logging_config_authority(backend_root: Path) -> None:
+    identity = LEGACY_LOGGING_CONFIG_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy logging configuration module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy logging configuration package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_logging_config(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="logging configuration",
+        deleted_identities=(LEGACY_LOGGING_CONFIG_DOTTED_IDENTITY,),
+    )
+
+
+def _assert_application_does_not_restore_logging_config_definitions(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_LOGGING_CONFIG_FORBIDDEN_DEFINITIONS
+            & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application restores legacy logging configuration definitions: "
                 f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
 
@@ -8080,6 +8139,118 @@ def test_restored_core_compatibility_fact_fails_guard(
     source_path.write_text(source, encoding="utf-8")
     with pytest.raises(DeletedAuthorityViolation, match="compatibility facts"):
         _assert_application_does_not_restore_core_compatibility_facts(tmp_path)
+
+
+def test_legacy_logging_config_authority_is_absent() -> None:
+    _assert_deleted_legacy_logging_config_authority(BACKEND_ROOT)
+    _assert_tests_do_not_reference_deleted_logging_config(BACKEND_ROOT)
+    _assert_application_does_not_restore_logging_config_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_legacy_logging_config_identity_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_LOGGING_CONFIG_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_legacy_logging_config_authority(tmp_path)
+
+
+def test_adjacent_core_modules_pass_logging_config_identity_guard(
+    tmp_path: Path,
+) -> None:
+    for relative_path in (
+        Path("app/core/email.py"),
+        Path("app/core/events.py"),
+        Path("app/core/security.py"),
+    ):
+        source_path = tmp_path / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text("", encoding="utf-8")
+    _assert_deleted_legacy_logging_config_authority(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_logging_config_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {LEGACY_LOGGING_CONFIG_DOTTED_IDENTITY}\n"
+        if reference_kind == "static"
+        else (
+            "module = importlib.import_module("
+            f'"{LEGACY_LOGGING_CONFIG_DOTTED_IDENTITY}")\n'
+        )
+    )
+    test_path = tmp_path / "tests/test_restored_logging_config.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="configuration authority"):
+        _assert_tests_do_not_reference_deleted_logging_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.core.email import force_ipv4\n",
+        "from app.core.events import get_redis\n",
+        'module = importlib.import_module("app.core.security")\n',
+    ],
+)
+def test_adjacent_core_reference_passes_logging_config_test_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_adjacent_core.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+    _assert_tests_do_not_reference_deleted_logging_config(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "trace_id_var = object()\n",
+        "NOISY_CONNECTION_LOGGERS = {}\n",
+        "configured_logger = object()\n",
+        "def get_trace_id(): ...\n",
+        "def set_trace_id(value): ...\n",
+        "def new_trace_id(): ...\n",
+        "def _disable_agentbay_logger_override(): ...\n",
+        "def configure_logging(): ...\n",
+        "def quiet_noisy_connection_loggers(): ...\n",
+        "def intercept_standard_logging(): ...\n",
+    ],
+)
+def test_restored_logging_config_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/infrastructure/restored_logging.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="configuration definitions"):
+        _assert_application_does_not_restore_logging_config_definitions(tmp_path)
+
+
+def test_adjacent_logging_definition_passes_logging_config_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "app/infrastructure/provider_logging.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "provider_log_levels = {}\ndef configure_provider_logger(): ...\n",
+        encoding="utf-8",
+    )
+    _assert_application_does_not_restore_logging_config_definitions(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
