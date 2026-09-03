@@ -613,6 +613,34 @@ EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
 EMAIL_PROVIDER_REMOVED_SEND_FIELDS = frozenset(
     {"agent_id", "attachments", "workspace_path"}
 )
+LEGACY_SEED_SCRIPT = Path("seed.py")
+LEGACY_BOOTSTRAP_IMPORT_IDENTITY = Path("app/scripts/bootstrap_db")
+LEGACY_BOOTSTRAP_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_BOOTSTRAP_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
+SETUP_AND_STARTUP_SOURCES = (
+    Path("setup.sh"),
+    Path("restart.sh"),
+    Path("backend/entrypoint.sh"),
+)
+LEGACY_BOOTSTRAP_SCRIPT_MARKERS = frozenset(
+    {
+        "ADD COLUMN IF NOT EXISTS",
+        "AGENT_DATA_DIR",
+        "ALTER TABLE",
+        "DATABASE_AUTO_CREATE_TABLES",
+        "Patch applied",
+        "Patch skipped",
+        "app.scripts.bootstrap_db",
+        "create_all",
+        "memory.md",
+        "schema bootstrap",
+        "schema patch",
+        "schema repair",
+        "seed.py",
+        "soul.md",
+    }
+)
 FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
 DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
 LEGACY_FEISHU_AUTHORITY_METHODS = frozenset(
@@ -2463,6 +2491,62 @@ def _assert_email_provider_is_decoupled_from_legacy_storage(
             "email provider service restores legacy storage coupling: "
             + "; ".join(details)
         )
+
+
+def _assert_deleted_legacy_seed_bootstrap_authorities(
+    backend_root: Path,
+) -> None:
+    seed_script = backend_root / LEGACY_SEED_SCRIPT
+    if seed_script.is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy root seed script was reintroduced: {LEGACY_SEED_SCRIPT}"
+        )
+
+    bootstrap_module = (backend_root / LEGACY_BOOTSTRAP_IMPORT_IDENTITY).with_suffix(
+        ".py"
+    )
+    bootstrap_package = backend_root / LEGACY_BOOTSTRAP_IMPORT_IDENTITY
+    if bootstrap_module.is_file():
+        raise DeletedAuthorityViolation(
+            "deleted legacy bootstrap module was reintroduced: "
+            f"{LEGACY_BOOTSTRAP_IMPORT_IDENTITY}"
+        )
+    if bootstrap_package.is_dir():
+        raise DeletedAuthorityViolation(
+            "deleted legacy bootstrap package was reintroduced: "
+            f"{LEGACY_BOOTSTRAP_IMPORT_IDENTITY}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_bootstrap_authority(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="seed/bootstrap",
+        deleted_identities=(LEGACY_BOOTSTRAP_DOTTED_IMPORT_IDENTITY,),
+    )
+
+
+def _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(
+    repository_root: Path,
+) -> None:
+    for relative_path in SETUP_AND_STARTUP_SOURCES:
+        source_path = repository_root / relative_path
+        if not source_path.is_file():
+            continue
+        source = source_path.read_text(encoding="utf-8")
+        normalized_source = source.casefold()
+        restored_markers = sorted(
+            marker
+            for marker in LEGACY_BOOTSTRAP_SCRIPT_MARKERS
+            if marker.casefold() in normalized_source
+        )
+        if restored_markers:
+            raise DeletedAuthorityViolation(
+                "setup or startup script restores legacy seed/bootstrap behavior: "
+                f"{relative_path} -> {', '.join(restored_markers)}"
+            )
 
 
 def _provider_transport_application_imports(tree: ast.Module) -> set[str]:
@@ -6509,6 +6593,119 @@ def test_system_email_service_passes_email_storage_decoupling_guard(
     )
 
     _assert_email_provider_is_decoupled_from_legacy_storage(tmp_path)
+
+
+def test_legacy_seed_bootstrap_authorities_are_absent() -> None:
+    _assert_deleted_legacy_seed_bootstrap_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_bootstrap_authority() -> None:
+    _assert_tests_do_not_reference_deleted_bootstrap_authority(BACKEND_ROOT)
+
+
+def test_setup_and_startup_scripts_do_not_restore_legacy_bootstrap() -> None:
+    _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(
+        BACKEND_ROOT.parent
+    )
+
+
+@pytest.mark.parametrize(
+    "representation",
+    ["seed-script", "bootstrap-module", "bootstrap-package"],
+)
+def test_reintroduced_legacy_seed_bootstrap_authority_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    if representation == "seed-script":
+        (tmp_path / LEGACY_SEED_SCRIPT).write_text("", encoding="utf-8")
+    elif representation == "bootstrap-module":
+        module = (tmp_path / LEGACY_BOOTSTRAP_IMPORT_IDENTITY).with_suffix(".py")
+        module.parent.mkdir(parents=True)
+        module.write_text("", encoding="utf-8")
+    else:
+        package = tmp_path / LEGACY_BOOTSTRAP_IMPORT_IDENTITY
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_legacy_seed_bootstrap_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_bootstrap_authority_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {LEGACY_BOOTSTRAP_DOTTED_IMPORT_IDENTITY}\n"
+        if reference_kind == "static"
+        else (
+            "module = importlib.import_module("
+            f'"{LEGACY_BOOTSTRAP_DOTTED_IMPORT_IDENTITY}")\n'
+        )
+    )
+    test_path = tmp_path / "tests/test_restored_bootstrap.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy seed/bootstrap authority",
+    ):
+        _assert_tests_do_not_reference_deleted_bootstrap_authority(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "python backend/seed.py\n",
+        "python -m app.scripts.bootstrap_db\n",
+        "await connection.run_sync(Base.metadata.create_all)\n",
+        "DATABASE_AUTO_CREATE_TABLES=true\n",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS legacy INTEGER\n",
+        "echo 'schema repair complete'\n",
+        'mkdir -p "$AGENT_DATA_DIR/$agent_id/workspace"\n',
+        'touch "$workspace/soul.md"\n',
+        'touch "$workspace/memory/memory.md"\n',
+    ],
+    ids=[
+        "seed-script",
+        "bootstrap-module",
+        "create-all",
+        "auto-create-setting",
+        "inline-schema-patch",
+        "schema-repair",
+        "agent-workspace",
+        "soul-file",
+        "memory-file",
+    ],
+)
+def test_restored_setup_or_startup_bootstrap_behavior_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    setup_script = tmp_path / "setup.sh"
+    setup_script.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="setup or startup script restores legacy seed/bootstrap behavior",
+    ):
+        _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
+
+
+def test_target_alembic_and_application_startup_pass_bootstrap_guard(
+    tmp_path: Path,
+) -> None:
+    setup_script = tmp_path / "setup.sh"
+    setup_script.write_text(
+        "alembic upgrade head\n"
+        "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1\n",
+        encoding="utf-8",
+    )
+
+    _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
 
 
 def test_channel_provider_transports_are_isolated_from_legacy_authorities() -> None:

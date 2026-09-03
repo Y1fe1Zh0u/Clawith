@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ────────────────────────────────────────────────
 # Clawith — First-time Setup Script
-# Sets up backend, frontend, database, and seed data.
+# Sets up backend, frontend, and database prerequisites.
 # ────────────────────────────────────────────────
 set -e
 
@@ -64,7 +64,7 @@ echo -e "${CYAN}═════════════════════�
 echo ""
 
 # ── 1. Environment file ──────────────────────────
-echo -e "${YELLOW}[1/6]${NC} Checking environment file..."
+echo -e "${YELLOW}[1/5]${NC} Checking environment file..."
 if [ ! -f "$ROOT/.env" ]; then
     cp "$ROOT/.env.example" "$ROOT/.env"
     echo -e "  ${GREEN}✓${NC} Created .env from .env.example"
@@ -75,7 +75,7 @@ fi
 
 # ── 2. PostgreSQL setup ──────────────────────────
 echo ""
-echo -e "${YELLOW}[2/6]${NC} Setting up PostgreSQL..."
+echo -e "${YELLOW}[2/5]${NC} Setting up PostgreSQL..."
 
 # --- Helper: find psql binary ---
 find_psql() {
@@ -361,7 +361,7 @@ echo -e "  ${GREEN}✓${NC} DATABASE_URL set (port $PG_PORT)"
 
 # ── 3. Backend setup ─────────────────────────────
 echo ""
-echo -e "${YELLOW}[3/6]${NC} Setting up backend..."
+echo -e "${YELLOW}[3/5]${NC} Setting up backend..."
 cd "$ROOT/backend"
 
 if [ ! -d ".venv" ]; then
@@ -387,7 +387,7 @@ fi
 
 # ── 4. Frontend setup ────────────────────────────
 echo ""
-echo -e "${YELLOW}[4/6]${NC} Setting up frontend..."
+echo -e "${YELLOW}[4/5]${NC} Setting up frontend..."
 cd "$ROOT/frontend"
 
 if [ ! -d "node_modules" ]; then
@@ -406,7 +406,7 @@ fi
 
 # ── 5. Database setup ────────────────────────────
 echo ""
-echo -e "${YELLOW}[5/6]${NC} Setting up database..."
+echo -e "${YELLOW}[5/5]${NC} Setting up database..."
 cd "$ROOT/backend"
 
 # Source .env for DATABASE_URL
@@ -414,30 +414,6 @@ if [ -f "$ROOT/.env" ]; then
     set -a
     source "$ROOT/.env"
     set +a
-fi
-
-# ── 6. Seed data ─────────────────────────────────
-echo ""
-echo -e "${YELLOW}[6/6]${NC} Running database seed..."
-
-if .venv/bin/python seed.py 2>&1 | while IFS= read -r line; do echo "  $line"; done; then
-    echo ""
-else
-    echo ""
-    echo -e "  ${RED}✗ Seed failed.${NC}"
-    echo "  Common fixes:"
-    echo "    1. Make sure PostgreSQL is running"
-    echo "    2. Set DATABASE_URL in .env, e.g.:"
-    echo "       DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable"
-    echo "    3. Create the database first:"
-    echo "       createdb clawith"
-    echo "    4. If you see 'Ident authentication failed', configure pg_hba.conf:"
-    echo "       Add this line BEFORE other host rules:"
-    echo "       host  all  clawith  127.0.0.1/32  md5"
-    echo "       Then reload: sudo systemctl reload postgresql"
-    echo ""
-    echo "  After fixing, re-run: bash setup.sh"
-    exit 1
 fi
 
 # ── Summary ──────────────────────────────────────
