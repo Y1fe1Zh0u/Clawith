@@ -13,20 +13,11 @@ from typing import Any
 
 import websockets
 from loguru import logger
-from websockets.exceptions import WebSocketException
 
 from app.services.document_conversion.chrome_renderer import (
     chrome_executable,
     read_json_url,
     stop_process,
-)
-
-_CHROME_PDF_FAILURES = (
-    OSError,
-    TimeoutError,
-    TypeError,
-    ValueError,
-    WebSocketException,
 )
 
 
@@ -179,7 +170,7 @@ async def convert_html_to_pdf(src_file: Path, tgt_file: Path, target_path: str, 
                 return f"✅ Successfully converted HTML to PDF with Chrome: {target_path}"
             chrome_pdf_error = RuntimeError("Chrome process timed out or failed to connect to debugging port")
             logger.warning("Chrome HTML to PDF failed (timed out), falling back to WeasyPrint")
-        except _CHROME_PDF_FAILURES as exc:
+        except Exception as exc:  # noqa: BLE001 - Chrome is optional and any browser failure must use WeasyPrint.
             chrome_pdf_error = exc
             logger.warning(f"Chrome HTML to PDF failed, falling back to WeasyPrint: {exc}")
 

@@ -1,9 +1,10 @@
+from http.client import BadStatusLine
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.document_conversion.chrome_renderer import stop_process
+from app.services.document_conversion.chrome_renderer import collect_browser_layout, stop_process
 from app.services.document_conversion.html_to_pdf import convert_html_to_pdf
 
 
@@ -111,3 +112,50 @@ async def test_convert_html_to_pdf_without_chrome_uses_weasyprint(
     mock_create_subprocess.assert_not_awaited()
     mock_weasy_html.return_value.write_pdf.assert_called_once_with(str(tgt))
     assert "WeasyPrint" in result
+
+
+@pytest.mark.asyncio
+@patch("app.services.document_conversion.html_to_pdf.read_json_url")
+@patch("app.services.document_conversion.html_to_pdf.chrome_executable", return_value="/usr/bin/google-chrome")
+@patch("asyncio.create_subprocess_exec", new_callable=AsyncMock)
+@patch("weasyprint.HTML")
+async def test_convert_html_to_pdf_bad_devtools_response_uses_weasyprint(
+    mock_weasy_html: MagicMock,
+    mock_create_subprocess: AsyncMock,
+    _mock_chrome_exec: MagicMock,
+    mock_read_json_url: MagicMock,
+) -> None:
+    process = MagicMock()
+    process.returncode = None
+    process.wait = AsyncMock(return_value=0)
+    mock_create_subprocess.return_value = process
+    mock_read_json_url.side_effect = [{}, BadStatusLine("invalid status")]
+
+    result = await convert_html_to_pdf(Path("/tmp/src.html"), Path("/tmp/tgt.pdf"), "tgt.pdf", {})
+
+    mock_weasy_html.return_value.write_pdf.assert_called_once_with("/tmp/tgt.pdf")
+    process.terminate.assert_called_once_with()
+    process.wait.assert_awaited_once_with()
+    assert "WeasyPrint" in result
+
+
+@pytest.mark.asyncio
+@patch("app.services.document_conversion.chrome_renderer.read_json_url")
+@patch("app.services.document_conversion.chrome_renderer.chrome_executable", return_value="/usr/bin/google-chrome")
+@patch("asyncio.create_subprocess_exec", new_callable=AsyncMock)
+async def test_collect_browser_layout_bad_devtools_response_uses_dom_fallback(
+    mock_create_subprocess: AsyncMock,
+    _mock_chrome_exec: MagicMock,
+    mock_read_json_url: MagicMock,
+) -> None:
+    process = MagicMock()
+    process.returncode = None
+    process.wait = AsyncMock(return_value=0)
+    mock_create_subprocess.return_value = process
+    mock_read_json_url.side_effect = [{}, BadStatusLine("invalid status")]
+
+    result = await collect_browser_layout(Path("/tmp/src.html"), 1280, 720, "editable")
+
+    assert result is None
+    process.terminate.assert_called_once_with()
+    process.wait.assert_awaited_once_with()

@@ -10,7 +10,7 @@ The HTML-to-PDF and HTML-to-PPTX conversion paths are asynchronous, but they sta
 
 Document conversion starts its owned Chrome process with `asyncio.create_subprocess_exec`. Synchronous Chrome DevTools discovery requests run in a worker thread; the WebSocket rendering protocol remains asynchronous.
 
-The conversion owner terminates Chrome and waits for exit. If graceful termination exceeds two seconds, it kills and then reaps the process. Cleanup still runs when discovery, navigation, rendering, or result parsing fails. Expected Chrome and protocol failures preserve the existing conversion fallback: PDF uses WeasyPrint, while PPTX uses DOM-flow rendering. Public conversion functions continue to normalize converter failures into their bounded string result.
+The conversion owner terminates Chrome and waits for exit. If graceful termination exceeds two seconds, it kills and then reaps the process. Cleanup still runs when discovery, navigation, rendering, or result parsing fails. The Chrome attempt is an optional enhancement, so its fallback boundary deliberately contains every browser, HTTP, protocol, and parsing exception: PDF uses WeasyPrint, while PPTX uses DOM-flow rendering. Public conversion functions continue to normalize converter failures into their bounded string result.
 
 ## Alternatives considered
 
@@ -29,4 +29,4 @@ Chrome startup, discovery, and shutdown no longer monopolize the event loop. A f
 - `uv run --extra dev pyright app/services/document_conversion tests/test_html_to_pdf.py`
 - `uv run --extra dev pytest --collect-only -q`
 
-The tests cover Linux and macOS Chrome arguments, Chrome timeout fallback, no-Chrome fallback, graceful termination, and kill-then-reap cleanup. They do not execute a real local Chrome, WeasyPrint, or PowerPoint renderer.
+The tests cover Linux and macOS Chrome arguments, Chrome timeout fallback, malformed DevTools HTTP response fallback for PDF and PPTX, no-Chrome fallback, graceful termination, and kill-then-reap cleanup. They do not execute a real local Chrome, WeasyPrint, or PowerPoint renderer.

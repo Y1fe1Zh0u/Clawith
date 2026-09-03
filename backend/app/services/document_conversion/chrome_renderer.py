@@ -14,15 +14,6 @@ from typing import Any
 
 import websockets
 from loguru import logger
-from websockets.exceptions import WebSocketException
-
-_BROWSER_FAILURES = (
-    OSError,
-    TimeoutError,
-    TypeError,
-    ValueError,
-    WebSocketException,
-)
 
 
 def read_json_url(url: str | urllib.request.Request, *, timeout: float) -> dict[str, Any]:
@@ -514,7 +505,7 @@ roots = [body];
                 layout["backgroundScreenshots"] = background_screenshots
                 layout["shapeScreenshots"] = shape_screenshots
             return layout
-    except _BROWSER_FAILURES as layout_exc:
+    except Exception as layout_exc:  # noqa: BLE001 - browser rendering is an optional conversion enhancement.
         logger.warning(f"Browser layout extraction failed, falling back to DOM flow conversion: {layout_exc}")
         return None
     finally:
