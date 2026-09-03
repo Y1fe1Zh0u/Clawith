@@ -606,6 +606,13 @@ STAGED_ADVANCED_API_REQUIRED_FACTS = frozenset(
         "route:POST:/templates",
     }
 )
+EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
+EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
+    {"app.services.storage", "app.services.storage_runtime"}
+)
+EMAIL_PROVIDER_REMOVED_SEND_FIELDS = frozenset(
+    {"agent_id", "attachments", "workspace_path"}
+)
 FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
 DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
 LEGACY_FEISHU_AUTHORITY_METHODS = frozenset(
@@ -2388,6 +2395,73 @@ def _assert_advanced_api_preserves_staged_non_a2a_facts(
         raise DeletedAuthorityViolation(
             "retained advanced API dropped staged non-A2A facts: "
             f"{LEGACY_A2A_ADVANCED_API_SOURCE} -> {', '.join(missing_facts)}"
+        )
+
+
+def _assert_email_provider_is_decoupled_from_legacy_storage(
+    backend_root: Path,
+) -> None:
+    source_path = backend_root / EMAIL_PROVIDER_SERVICE_SOURCE
+    if not source_path.is_file():
+        raise DeletedAuthorityViolation(
+            f"retained email provider service is missing: {EMAIL_PROVIDER_SERVICE_SOURCE}"
+        )
+    tree = ast.parse(
+        source_path.read_text(encoding="utf-8"),
+        filename=str(source_path),
+    )
+    imported_identities: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_identities.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_identities.add(node.module)
+            imported_identities.update(
+                f"{node.module}.{alias.name}"
+                for alias in node.names
+                if alias.name != "*"
+            )
+
+    forbidden_imports = sorted(
+        forbidden
+        for forbidden in EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS
+        if any(
+            imported == forbidden or imported.startswith(f"{forbidden}.")
+            for imported in imported_identities
+        )
+    )
+
+    send_email = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "send_email"
+        ),
+        None,
+    )
+    if send_email is None:
+        raise DeletedAuthorityViolation(
+            "retained email provider service is missing send_email"
+        )
+    arguments = (
+        send_email.args.posonlyargs
+        + send_email.args.args
+        + send_email.args.kwonlyargs
+    )
+    restored_fields = sorted(
+        EMAIL_PROVIDER_REMOVED_SEND_FIELDS
+        & {argument.arg for argument in arguments}
+    )
+    if forbidden_imports or restored_fields:
+        details = []
+        if forbidden_imports:
+            details.append(f"imports={','.join(forbidden_imports)}")
+        if restored_fields:
+            details.append(f"send-fields={','.join(restored_fields)}")
+        raise DeletedAuthorityViolation(
+            "email provider service restores legacy storage coupling: "
+            + "; ".join(details)
         )
 
 
@@ -6382,6 +6456,59 @@ def test_target_a2a_and_unrelated_collaboration_terms_pass_legacy_guard(
 
     _assert_tests_do_not_reference_deleted_a2a_authorities(tmp_path)
     _assert_advanced_api_does_not_restore_legacy_a2a(tmp_path)
+
+
+def test_email_provider_is_decoupled_from_legacy_storage() -> None:
+    _assert_email_provider_is_decoupled_from_legacy_storage(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import app.services.storage\nasync def send_email(config, to, subject, body, cc=None): ...\n",
+        (
+            "from app.services.storage_runtime import get_storage_backend\n"
+            "async def send_email(config, to, subject, body, cc=None): ...\n"
+        ),
+        "async def send_email(config, to, subject, body, cc=None, attachments=None): ...\n",
+        "async def send_email(config, to, subject, body, cc=None, workspace_path=None): ...\n",
+        "async def send_email(config, to, subject, body, cc=None, agent_id=None): ...\n",
+    ],
+    ids=[
+        "storage-facade-import",
+        "storage-runtime-import",
+        "attachments-field",
+        "workspace-path-field",
+        "agent-id-field",
+    ],
+)
+def test_restored_email_storage_coupling_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / EMAIL_PROVIDER_SERVICE_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="email provider service restores legacy storage coupling",
+    ):
+        _assert_email_provider_is_decoupled_from_legacy_storage(tmp_path)
+
+
+def test_system_email_service_passes_email_storage_decoupling_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / EMAIL_PROVIDER_SERVICE_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "from app.services.system_email_service import send_system_email\n"
+        "async def send_email(config, to, subject, body, cc=None): ...\n",
+        encoding="utf-8",
+    )
+
+    _assert_email_provider_is_decoupled_from_legacy_storage(tmp_path)
 
 
 def test_channel_provider_transports_are_isolated_from_legacy_authorities() -> None:
