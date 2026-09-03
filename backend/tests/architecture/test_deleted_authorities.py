@@ -662,6 +662,23 @@ LEGACY_ADMIN_API_FORBIDDEN_FACTS = frozenset(
         "route:PUT:/platform-settings",
     }
 )
+LEGACY_ENTERPRISE_TRANSPORT_IMPORT_IDENTITIES = (
+    Path("app/api/enterprise"),
+    Path("app/schemas/schemas"),
+)
+LEGACY_ENTERPRISE_TRANSPORT_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_ENTERPRISE_TRANSPORT_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_ENTERPRISE_TRANSPORT_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_ENTERPRISE_TRANSPORT_IMPORT_IDENTITIES
+)
+LEGACY_ENTERPRISE_TRANSPORT_TEST_PATHS = (
+    Path("tests/test_enterprise_invites.py"),
+    Path("tests/test_enterprise_system_settings_access.py"),
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2606,6 +2623,35 @@ def _assert_application_apis_do_not_restore_legacy_admin_facts(
                 "application API restores legacy Platform Administration facts: "
                 f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
+
+
+def _assert_deleted_legacy_enterprise_transport(backend_root: Path) -> None:
+    for identity in LEGACY_ENTERPRISE_TRANSPORT_IMPORT_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Enterprise transport module was reintroduced: "
+                f"{identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Enterprise transport package was reintroduced: "
+                f"{identity}"
+            )
+    for test_path in LEGACY_ENTERPRISE_TRANSPORT_TEST_PATHS:
+        if (backend_root / test_path).is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Enterprise transport test was reintroduced: {test_path}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_enterprise_transport(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Enterprise transport",
+        deleted_identities=LEGACY_ENTERPRISE_TRANSPORT_DOTTED_IDENTITIES,
+    )
 
 
 def _assert_email_provider_is_decoupled_from_legacy_storage(
@@ -6906,6 +6952,80 @@ def test_restored_admin_transport_fact_fails_guard(
         match="application API restores legacy Platform Administration facts",
     ):
         _assert_application_apis_do_not_restore_legacy_admin_facts(tmp_path)
+
+
+def test_legacy_enterprise_transport_is_absent() -> None:
+    _assert_deleted_legacy_enterprise_transport(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_enterprise_transport() -> None:
+    _assert_tests_do_not_reference_deleted_enterprise_transport(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_ENTERPRISE_TRANSPORT_REINTRODUCTIONS,
+)
+def test_reintroduced_legacy_enterprise_transport_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Enterprise transport {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_enterprise_transport(tmp_path)
+
+
+@pytest.mark.parametrize("test_path", LEGACY_ENTERPRISE_TRANSPORT_TEST_PATHS)
+def test_reintroduced_legacy_enterprise_transport_test_fails_guard(
+    tmp_path: Path,
+    test_path: Path,
+) -> None:
+    restored = tmp_path / test_path
+    restored.parent.mkdir(parents=True)
+    restored.write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Enterprise transport test was reintroduced",
+    ):
+        _assert_deleted_legacy_enterprise_transport(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_ENTERPRISE_TRANSPORT_DOTTED_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_enterprise_transport_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_enterprise_transport.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Enterprise transport authority",
+    ):
+        _assert_tests_do_not_reference_deleted_enterprise_transport(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
