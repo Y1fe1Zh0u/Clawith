@@ -707,6 +707,11 @@ LEGACY_RESOURCE_DISCOVERY_IDENTITY = Path("app/services/resource_discovery")
 LEGACY_RESOURCE_DISCOVERY_DOTTED_IDENTITY = (
     LEGACY_RESOURCE_DISCOVERY_IDENTITY.as_posix().replace("/", ".")
 )
+LEGACY_SYSTEM_EMAIL_SERVICE_IDENTITY = Path("app/services/system_email_service")
+LEGACY_SYSTEM_EMAIL_SERVICE_DOTTED_IDENTITY = (
+    LEGACY_SYSTEM_EMAIL_SERVICE_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_SYSTEM_EMAIL_TEST_PATH = Path("tests/test_system_email.py")
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2787,6 +2792,32 @@ def _assert_tests_do_not_reference_deleted_resource_discovery(
         backend_root,
         authority="resource discovery",
         deleted_identities=(LEGACY_RESOURCE_DISCOVERY_DOTTED_IDENTITY,),
+    )
+
+
+def _assert_deleted_system_email_service(backend_root: Path) -> None:
+    identity = LEGACY_SYSTEM_EMAIL_SERVICE_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy System Email service module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy System Email service package was reintroduced: {identity}"
+        )
+    if (backend_root / LEGACY_SYSTEM_EMAIL_TEST_PATH).is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy System Email test was reintroduced: {LEGACY_SYSTEM_EMAIL_TEST_PATH}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_system_email_service(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="System Email service",
+        deleted_identities=(LEGACY_SYSTEM_EMAIL_SERVICE_DOTTED_IDENTITY,),
     )
 
 
@@ -5374,7 +5405,7 @@ def test_unrelated_dynamic_test_reference_passes_notification_guard(
     test_path.write_text(
         (
             'monkeypatch.setattr('
-            '"app.services.system_email_service.send_system_email", object())\n'
+            '"app.services.email_service.send_email", object())\n'
         ),
         encoding="utf-8",
     )
@@ -7430,6 +7461,55 @@ def test_backend_test_reference_of_deleted_resource_discovery_fails_guard(
         _assert_tests_do_not_reference_deleted_resource_discovery(tmp_path)
 
 
+def test_legacy_system_email_service_is_absent() -> None:
+    _assert_deleted_system_email_service(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_system_email_service() -> None:
+    _assert_tests_do_not_reference_deleted_system_email_service(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package", "test"])
+def test_reintroduced_system_email_service_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_SYSTEM_EMAIL_SERVICE_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    elif representation == "package":
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    else:
+        test_path = tmp_path / LEGACY_SYSTEM_EMAIL_TEST_PATH
+        test_path.parent.mkdir(parents=True)
+        test_path.write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_system_email_service(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_system_email_service_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_SYSTEM_EMAIL_SERVICE_DOTTED_IDENTITY
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_system_email.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy System Email service authority",
+    ):
+        _assert_tests_do_not_reference_deleted_system_email_service(tmp_path)
+
+
 def test_target_a2a_package_remains_empty() -> None:
     package_init = BACKEND_ROOT / "app/modules/a2a/__init__.py"
     assert package_init.is_file()
@@ -7621,13 +7701,13 @@ def test_restored_email_storage_coupling_fails_guard(
         _assert_email_provider_is_decoupled_from_legacy_storage(tmp_path)
 
 
-def test_system_email_service_passes_email_storage_decoupling_guard(
+def test_core_email_service_passes_email_storage_decoupling_guard(
     tmp_path: Path,
 ) -> None:
     source_path = tmp_path / EMAIL_PROVIDER_SERVICE_SOURCE
     source_path.parent.mkdir(parents=True)
     source_path.write_text(
-        "from app.services.system_email_service import send_system_email\n"
+        "from app.core.email import send_smtp_email\n"
         "async def send_email(config, to, subject, body, cc=None): ...\n",
         encoding="utf-8",
     )
