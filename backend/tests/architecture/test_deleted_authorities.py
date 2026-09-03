@@ -768,6 +768,7 @@ LEGACY_CORE_COMPATIBILITY_DOTTED_IDENTITIES = tuple(
     for identity in LEGACY_CORE_COMPATIBILITY_IDENTITIES
 )
 LEGACY_ERROR_CONTRACT_TEST = Path("tests/test_error_contract.py")
+LEGACY_BASE_DAO_TEST = Path("tests/test_base_dao.py")
 LEGACY_CORE_COMPATIBILITY_FORBIDDEN_FACTS = frozenset(
     {
         "class:RosterVisibility",
@@ -3020,6 +3021,13 @@ def _assert_deleted_core_compatibility_authorities(backend_root: Path) -> None:
     if (backend_root / LEGACY_ERROR_CONTRACT_TEST).is_file():
         raise DeletedAuthorityViolation(
             f"deleted legacy HTTP error-contract test was reintroduced: {LEGACY_ERROR_CONTRACT_TEST}"
+        )
+
+
+def _assert_legacy_base_dao_test_is_absent(backend_root: Path) -> None:
+    if (backend_root / LEGACY_BASE_DAO_TEST).is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy BaseDAO test was reintroduced: {LEGACY_BASE_DAO_TEST}"
         )
 
 
@@ -8036,6 +8044,18 @@ def test_reintroduced_legacy_error_contract_test_fails_guard(tmp_path: Path) -> 
     test_path.write_text("", encoding="utf-8")
     with pytest.raises(DeletedAuthorityViolation, match="test was reintroduced"):
         _assert_deleted_core_compatibility_authorities(tmp_path)
+
+
+def test_legacy_base_dao_test_is_absent() -> None:
+    _assert_legacy_base_dao_test_is_absent(BACKEND_ROOT)
+
+
+def test_reintroduced_legacy_base_dao_test_fails_guard(tmp_path: Path) -> None:
+    test_path = tmp_path / LEGACY_BASE_DAO_TEST
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="test was reintroduced"):
+        _assert_legacy_base_dao_test_is_absent(tmp_path)
 
 
 @pytest.mark.parametrize(
