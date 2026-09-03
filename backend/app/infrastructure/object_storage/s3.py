@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
-from app.services.storage_runtime.base import (
+from app.infrastructure.object_storage.base import (
     ConditionalWriteResult,
     StorageBackend,
     StorageEntry,
     StorageVersion,
     WriteCondition,
 )
-from app.services.storage_runtime.utils import normalize_storage_key
+from app.infrastructure.object_storage.utils import normalize_storage_key
 
 
 class S3StorageBackend(StorageBackend):
@@ -30,7 +28,6 @@ class S3StorageBackend(StorageBackend):
         secret_access_key: str = "",
         presign_ttl_seconds: int = 3600,
         max_pool_connections: int = 50,
-        write_workers: int = 32,
     ):
         self.bucket = bucket
         self.prefix = normalize_storage_key(prefix)
@@ -286,11 +283,10 @@ class S3StorageBackend(StorageBackend):
         if condition is None or (
             not condition.require_absent and condition.version_token is None
         ):
-            return await super().write_bytes_if_match(
-                key,
-                data,
-                condition=condition,
-                content_type=content_type,
+            await self.write_bytes(key, data, content_type=content_type)
+            return ConditionalWriteResult(
+                ok=True,
+                current_version=await self.get_version(key),
             )
 
         kwargs: dict[str, Any] = {
@@ -335,7 +331,15 @@ class S3StorageBackend(StorageBackend):
         if condition is None or (
             not condition.require_absent and condition.version_token is None
         ):
-            return await super().delete_if_match(key, condition=condition)
+            await self.delete(key)
+            return ConditionalWriteResult(
+                ok=True,
+                current_version=StorageVersion(
+                    key=normalize_storage_key(key),
+                    exists=False,
+                    is_dir=False,
+                ),
+            )
         current = await self.get_version(key)
         if condition.require_absent:
             if current.exists:
@@ -366,25 +370,6 @@ class S3StorageBackend(StorageBackend):
             ),
         )
 
-    async def _put_succeeded(self, key: str, expected_size: int) -> bool:
-        try:
-            entry = await self.stat(key)
-        except Exception:
-            return False
-        return entry.size == expected_size
-
-    async def local_path_for(self, key: str) -> Path | None:
-        suffix = Path(normalize_storage_key(key)).suffix
-        tmp = NamedTemporaryFile(delete=False, suffix=suffix)
-        tmp.close()
-        path = Path(tmp.name)
-        await self.write_local_copy(key, path)
-        return path
-
-    async def write_local_copy(self, key: str, path: Path) -> None:
-        data = await self.read_bytes(key)
-        await asyncio.to_thread(path.write_bytes, data)
-
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
         client = self._client_or_raise()
         params: dict[str, Any] = {"Bucket": self.bucket, "Key": self._object_key(key)}
@@ -413,14 +398,6 @@ def _strip_prefix(raw_key: str, prefix: str) -> str:
     if prefix and raw_key.startswith(prefix + "/"):
         return raw_key[len(prefix) + 1:]
     return raw_key
-
-
-def _is_header_parsing_error(exc: Exception) -> bool:
-    try:
-        from urllib3.exceptions import HeaderParsingError
-    except Exception:
-        return False
-    return isinstance(exc, HeaderParsingError)
 
 
 def _clean_etag(raw: Any) -> str:

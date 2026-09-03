@@ -3,18 +3,56 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import os
-import subprocess
 import sys
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import pytest
 
-from app.services.storage_runtime import local as local_runtime
-from app.services.storage_runtime.base import WriteCondition
-from app.services.storage_runtime.local import LocalStorageBackend
-from app.services.storage_runtime.s3 import S3StorageBackend
+from app.infrastructure.object_storage import local as local_runtime
+from app.infrastructure.object_storage.base import StorageBackend, WriteCondition
+from app.infrastructure.object_storage.local import LocalStorageBackend
+from app.infrastructure.object_storage.s3 import S3StorageBackend
+from app.infrastructure.object_storage.utils import normalize_storage_key
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "../secret.txt",
+        "workspace/../secret.txt",
+        "workspace\\..\\secret.txt",
+        "workspace/../../secret.txt",
+    ],
+)
+def test_normalize_storage_key_rejects_parent_traversal(key: str) -> None:
+    with pytest.raises(ValueError, match="parent traversal"):
+        normalize_storage_key(key)
+
+
+def test_local_storage_rejects_symlink_escape_to_sibling_prefix(tmp_path) -> None:
+    storage_root = tmp_path / "storage"
+    sibling = tmp_path / "storage-escape"
+    storage_root.mkdir()
+    sibling.mkdir()
+    (storage_root / "link").symlink_to(sibling, target_is_directory=True)
+    storage = LocalStorageBackend(str(storage_root))
+
+    with pytest.raises(ValueError, match="escapes the configured root"):
+        storage._full_path("link/secret.txt")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["write", "delete"])
+async def test_base_conditional_mutations_fail_closed(operation: str) -> None:
+    storage = StorageBackend()
+
+    with pytest.raises(NotImplementedError, match="atomic conditional"):
+        if operation == "write":
+            await storage.write_bytes_if_match("key", b"data")
+        else:
+            await storage.delete_if_match("key")
 
 
 class _BarrierLocalStorage(LocalStorageBackend):
@@ -163,6 +201,7 @@ async def test_every_local_mutation_waits_for_the_shared_process_lock(
     lock_fd = os.open(tmp_path, os.O_RDONLY)
     fcntl.flock(lock_fd, fcntl.LOCK_EX)
     try:
+        task: asyncio.Task[Any]
         if operation == "write":
             task = asyncio.create_task(storage.write_bytes("workspace/file.md", b"v2"))
         elif operation == "delete":
@@ -208,28 +247,37 @@ async def test_local_mutation_waits_for_lock_held_by_another_process(tmp_path) -
         "fcntl.flock(fd, fcntl.LOCK_UN); "
         "os.close(fd)"
     )
-    process = subprocess.Popen(
-        [sys.executable, "-c", script, os.fspath(tmp_path)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        os.fspath(tmp_path),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
     )
     assert process.stdout is not None
     assert process.stdin is not None
+    mutation_task: asyncio.Task[None] | None = None
     try:
-        ready = await asyncio.to_thread(process.stdout.readline)
-        assert ready.strip() == "locked"
-        task = asyncio.create_task(storage.write_bytes("workspace/file.md", b"v2"))
+        ready = await asyncio.wait_for(process.stdout.readline(), timeout=1)
+        assert ready.strip() == b"locked"
+        mutation_task = asyncio.create_task(
+            storage.write_bytes("workspace/file.md", b"v2")
+        )
         await asyncio.sleep(0.05)
-        assert not task.done()
-        process.stdin.write("\n")
-        process.stdin.flush()
-        assert await asyncio.to_thread(process.wait, 1) == 0
-        await asyncio.wait_for(task, timeout=1)
+        assert not mutation_task.done()
+        process.stdin.write(b"\n")
+        await process.stdin.drain()
+        assert await asyncio.wait_for(process.wait(), timeout=1) == 0
+        await asyncio.wait_for(mutation_task, timeout=1)
     finally:
-        if process.poll() is None:
+        if process.returncode is None:
             process.kill()
-            await asyncio.to_thread(process.wait)
+            await process.wait()
+        if mutation_task is not None and not mutation_task.done():
+            mutation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await mutation_task
 
 
 class _S3Error(Exception):

@@ -9,16 +9,6 @@ def normalize_storage_key(key: str) -> str:
         if part in ("", "."):
             continue
         if part == "..":
-            if parts:
-                parts.pop()
-            continue
+            raise ValueError("Storage keys cannot contain parent traversal segments")
         parts.append(part)
     return "/".join(parts)
-
-
-def agent_storage_prefix(agent_id: str) -> str:
-    return normalize_storage_key(agent_id)
-
-
-def tenant_storage_prefix(tenant_id: str) -> str:
-    return normalize_storage_key(f"enterprise_info_{tenant_id}")

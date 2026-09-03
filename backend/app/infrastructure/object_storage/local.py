@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import fcntl
 import os
-from pathlib import Path
 import shutil
 import stat as stat_module
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import aiofiles
-from fastapi import HTTPException, status
 
-from app.services.storage_runtime.base import (
+from app.infrastructure.object_storage.base import (
     ConditionalWriteResult,
     StorageBackend,
     StorageEntry,
@@ -22,7 +21,7 @@ from app.services.storage_runtime.base import (
     WriteCondition,
     content_hash_bytes,
 )
-from app.services.storage_runtime.utils import normalize_storage_key
+from app.infrastructure.object_storage.utils import normalize_storage_key
 
 
 class LocalStorageBackend(StorageBackend):
@@ -35,8 +34,10 @@ class LocalStorageBackend(StorageBackend):
         normalized = normalize_storage_key(key)
         full = (self.root / normalized).resolve()
         root_resolved = self.root.resolve()
-        if not str(full).startswith(str(root_resolved)):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Path traversal not allowed")
+        try:
+            full.relative_to(root_resolved)
+        except ValueError as exc:
+            raise ValueError("Storage key escapes the configured root") from exc
         return full
 
     async def exists(self, key: str) -> bool:
@@ -206,23 +207,20 @@ class LocalStorageBackend(StorageBackend):
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
-    async def local_path_for(self, key: str) -> Path | None:
-        return self._full_path(key)
-
 
 async def _run_sync_mutation(function, *args):
     """Keep the filesystem lock until an offloaded mutation really finishes."""
     task = asyncio.create_task(asyncio.to_thread(function, *args))
     try:
         return await asyncio.shield(task)
-    except asyncio.CancelledError as cancelled:
+    except asyncio.CancelledError:
         while not task.done():
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 continue
         task.result()
-        raise cancelled
+        raise
 
 
 def _atomic_write_bytes(path: Path, data: bytes, temp_prefix: str) -> None:

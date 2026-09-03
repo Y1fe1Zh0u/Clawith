@@ -2,17 +2,17 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.services.storage_runtime.s3 import S3StorageBackend
+from app.infrastructure.object_storage.s3 import S3StorageBackend
 
 
 def test_s3_backend_passes_max_pool_connections(monkeypatch):
-    config_instances: list[object] = []
-    client_calls: list[dict] = []
-
     class FakeConfig:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             config_instances.append(self)
+
+    config_instances: list[FakeConfig] = []
+    client_calls: list[dict] = []
 
     fake_boto3 = Mock()
     fake_boto3.client.side_effect = lambda *args, **kwargs: client_calls.append(kwargs) or object()

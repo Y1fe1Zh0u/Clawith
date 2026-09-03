@@ -625,6 +625,27 @@ SETUP_AND_STARTUP_SOURCES = (
     Path("restart.sh"),
     Path("backend/entrypoint.sh"),
 )
+LEGACY_STORAGE_IMPORT_IDENTITIES = (
+    Path("app/services/storage"),
+    Path("app/services/storage_runtime"),
+)
+LEGACY_STORAGE_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_STORAGE_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_STORAGE_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_STORAGE_IMPORT_IDENTITIES
+)
+LEGACY_STORAGE_TEST_PATHS = (
+    Path("tests/test_storage_conditional_atomicity.py"),
+    Path("tests/test_storage_fallback.py"),
+    Path("tests/test_storage_s3.py"),
+)
+TARGET_OBJECT_STORAGE_PACKAGE_INIT = Path(
+    "app/infrastructure/object_storage/__init__.py"
+)
 FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
 DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
 LEGACY_FEISHU_AUTHORITY_METHODS = frozenset(
@@ -2619,6 +2640,51 @@ def _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(
                 "setup or startup script restores legacy seed/bootstrap behavior: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
+
+
+def _assert_deleted_legacy_storage_authorities(backend_root: Path) -> None:
+    if len(LEGACY_STORAGE_IMPORT_IDENTITIES) != 2:
+        raise DeletedAuthorityViolation(
+            "legacy storage authority inventory must contain exactly 2 identities"
+        )
+    for identity in LEGACY_STORAGE_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy storage authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy storage authority package was reintroduced: {identity}"
+            )
+    for test_path in LEGACY_STORAGE_TEST_PATHS:
+        if (backend_root / test_path).is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy storage test path was reintroduced: {test_path}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_storage_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="storage",
+        deleted_identities=LEGACY_STORAGE_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_target_object_storage_package_is_empty(backend_root: Path) -> None:
+    package_init = backend_root / TARGET_OBJECT_STORAGE_PACKAGE_INIT
+    if not package_init.is_file():
+        raise DeletedAuthorityViolation(
+            f"target object-storage package is missing: {TARGET_OBJECT_STORAGE_PACKAGE_INIT}"
+        )
+    if package_init.read_text(encoding="utf-8"):
+        raise DeletedAuthorityViolation(
+            "target object-storage package initializer must remain empty"
+        )
 
 
 def _provider_transport_application_imports(tree: ast.Module) -> set[str]:
@@ -5752,14 +5818,14 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
     [
         "from app.services.realtime import publish_event\n",
         "from app.services.realtime_runtime.router import publish_realtime_event\n",
-        "from app.services.storage_runtime.local import LocalStorageBackend\n",
+        "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
         "from app.modules.trigger import __name__\n",
         "from app.api.messages import router\n",
     ],
     ids=[
         "realtime-service",
         "realtime-runtime",
-        "storage-runtime",
+        "object-storage-infrastructure",
         "target-trigger-module",
         "messages-api",
     ],
@@ -6340,15 +6406,15 @@ def test_restored_workspace_definition_fails_guard(
     "test_source",
     [
         "from app.services.workspace_paths import resolve_path_within_root\n",
-        "from app.services.storage import normalize_storage_key\n",
-        "from app.services.storage_runtime.local import LocalStorageBackend\n",
+        "from app.infrastructure.object_storage.base import StorageBackend\n",
+        "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
         "from app.services.sandbox.config import SandboxConfig\n",
         "from app.modules.workspace import __name__\n",
     ],
     ids=[
         "workspace-paths",
-        "storage-facade",
-        "storage-runtime",
+        "object-storage-contract",
+        "object-storage-local",
         "sandbox",
         "target-workspace-module",
     ],
@@ -6806,6 +6872,126 @@ def test_nonexecuting_bootstrap_text_passes_script_guard(
     setup_script.write_text(source, encoding="utf-8")
 
     _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
+
+
+def test_legacy_storage_authorities_are_absent() -> None:
+    _assert_deleted_legacy_storage_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_storage_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_storage_authorities(BACKEND_ROOT)
+
+
+def test_target_object_storage_package_initializer_is_empty() -> None:
+    _assert_target_object_storage_package_is_empty(BACKEND_ROOT)
+
+
+def test_target_object_storage_package_reexport_fails_guard(tmp_path: Path) -> None:
+    package_init = tmp_path / TARGET_OBJECT_STORAGE_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(
+        "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="package initializer must remain empty",
+    ):
+        _assert_target_object_storage_package_is_empty(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_STORAGE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_STORAGE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_storage_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy storage authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_storage_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("test_path", LEGACY_STORAGE_TEST_PATHS, ids=str)
+def test_reintroduced_legacy_storage_test_path_fails_guard(
+    tmp_path: Path,
+    test_path: Path,
+) -> None:
+    restored_test = tmp_path / test_path
+    restored_test.parent.mkdir(parents=True, exist_ok=True)
+    restored_test.write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy storage test path was reintroduced",
+    ):
+        _assert_deleted_legacy_storage_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_STORAGE_DOTTED_IMPORT_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_storage_authority_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}.local")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_storage.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy storage authority",
+    ):
+        _assert_tests_do_not_reference_deleted_storage_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.infrastructure.object_storage.base import StorageBackend\n",
+        "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
+        "from app.infrastructure.object_storage.s3 import S3StorageBackend\n",
+        "from app.modules.workspace import __name__\n",
+    ],
+)
+def test_target_object_storage_references_pass_legacy_storage_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_target_object_storage.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_storage_authorities(tmp_path)
 
 
 def test_channel_provider_transports_are_isolated_from_legacy_authorities() -> None:

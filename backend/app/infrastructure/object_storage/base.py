@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass
@@ -107,14 +106,9 @@ class StorageBackend:
         condition: WriteCondition | None = None,
         content_type: str | None = None,
     ) -> ConditionalWriteResult:
-        current = await self.get_version(key)
-        if condition:
-            if condition.require_absent and current.exists:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-            if condition.version_token is not None and current.token != condition.version_token:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-        await self.write_bytes(key, data, content_type=content_type)
-        return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
+        raise NotImplementedError(
+            "Storage backends must implement atomic conditional writes"
+        )
 
     async def delete_if_match(
         self,
@@ -122,20 +116,9 @@ class StorageBackend:
         *,
         condition: WriteCondition | None = None,
     ) -> ConditionalWriteResult:
-        current = await self.get_version(key)
-        if condition:
-            if condition.require_absent:
-                if current.exists:
-                    return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-                return ConditionalWriteResult(ok=True, current_version=current)
-            if condition.version_token is not None and current.token != condition.version_token:
-                return ConditionalWriteResult(ok=False, conflict=True, current_version=current)
-        if current.exists:
-            await self.delete(key)
-        return ConditionalWriteResult(ok=True, current_version=await self.get_version(key))
-
-    async def local_path_for(self, key: str) -> Path | None:
-        return None
+        raise NotImplementedError(
+            "Storage backends must implement atomic conditional deletes"
+        )
 
     async def presign_download_url(self, key: str, filename: str | None = None, inline: bool = False) -> str | None:
         return None

@@ -29,6 +29,8 @@ METADATA_FACTORIES = {
     "sqlalchemy.orm.registry",
     "sqlalchemy.orm.declarative_base",
 }
+OBJECT_STORAGE_ROOT = "app.infrastructure.object_storage"
+OBJECT_STORAGE_PUBLIC_CONTRACT = f"{OBJECT_STORAGE_ROOT}.base"
 
 
 class FixtureCase(TypedDict):
@@ -191,6 +193,31 @@ def _scan_target_tree(
             if any(_is_module_or_child(imported, legacy) for legacy in LEGACY_MODULES):
                 violations.append(Violation("legacy-import", relative, imported))
 
+        object_storage_imports = {
+            imported
+            for imported in imports
+            if _is_module_or_child(imported, OBJECT_STORAGE_ROOT)
+        }
+        if object_storage_imports:
+            imports_concrete_storage = any(
+                not _is_module_or_child(imported, OBJECT_STORAGE_PUBLIC_CONTRACT)
+                for imported in object_storage_imports
+            )
+            infrastructure_or_composition = (
+                relative == Path("application.py")
+                or relative_parts[0] == "infrastructure"
+            )
+            workspace_public_contract = (
+                len(relative_parts) >= 2
+                and relative_parts[:2] == ("modules", "workspace")
+                and not imports_concrete_storage
+            )
+            if not (infrastructure_or_composition or workspace_public_contract):
+                violations.extend(
+                    Violation("object-storage-bypass", relative, imported)
+                    for imported in sorted(object_storage_imports)
+                )
+
         if len(relative_parts) >= 3 and relative_parts[0] == "modules":
             importing_owner = relative_parts[1]
             for imported in imports:
@@ -313,6 +340,95 @@ def test_typed_public_contracts_and_infrastructure_imports_are_allowed(
     app_root = _materialize_case(tmp_path, case)
 
     assert _violation_rules(app_root) == set()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "id": "application_local_backend",
+            "path": "app/application.py",
+            "source": (
+                "from app.infrastructure.object_storage.local "
+                "import LocalStorageBackend\n"
+            ),
+        },
+        {
+            "id": "infrastructure_s3_backend",
+            "path": "app/infrastructure/storage_factory.py",
+            "source": (
+                "from app.infrastructure.object_storage.s3 "
+                "import S3StorageBackend\n"
+            ),
+        },
+        {
+            "id": "workspace_storage_contract",
+            "path": "app/modules/workspace/service.py",
+            "source": (
+                "from app.infrastructure.object_storage.base import StorageBackend\n"
+            ),
+        },
+        {
+            "id": "workspace_package_storage_contract",
+            "path": "app/modules/workspace/__init__.py",
+            "source": (
+                "from app.infrastructure.object_storage.base import StorageBackend\n"
+            ),
+        },
+    ],
+    ids=lambda case: case["id"],
+)
+def test_approved_object_storage_imports_are_allowed(
+    tmp_path: Path,
+    case: FixtureCase,
+) -> None:
+    app_root = _materialize_case(tmp_path, case)
+
+    assert "object-storage-bypass" not in _violation_rules(app_root)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "id": "workspace_concrete_backend",
+            "path": "app/modules/workspace/service.py",
+            "source": (
+                "from app.infrastructure.object_storage.local "
+                "import LocalStorageBackend\n"
+            ),
+        },
+        {
+            "id": "other_owner_storage_contract",
+            "path": "app/modules/session/service.py",
+            "source": (
+                "from app.infrastructure.object_storage.base import StorageBackend\n"
+            ),
+        },
+        {
+            "id": "runtime_storage_contract",
+            "path": "app/runtime/runner.py",
+            "source": (
+                "from app.infrastructure.object_storage.base import StorageBackend\n"
+            ),
+        },
+        {
+            "id": "runtime_concrete_backend",
+            "path": "app/runtime/runner.py",
+            "source": (
+                "from app.infrastructure.object_storage.s3 import S3StorageBackend\n"
+            ),
+        },
+    ],
+    ids=lambda case: case["id"],
+)
+def test_unapproved_object_storage_imports_are_rejected(
+    tmp_path: Path,
+    case: FixtureCase,
+) -> None:
+    app_root = _materialize_case(tmp_path, case)
+
+    assert "object-storage-bypass" in _violation_rules(app_root)
 
 
 @pytest.mark.parametrize("case", _fixture_cases("legacy_imports.json"), ids=lambda case: case["id"])

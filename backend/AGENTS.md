@@ -40,6 +40,8 @@ app/infrastructure/config.py
 app/infrastructure/database.py
                The single SQLAlchemy registry and application-owned control and
                execution database resources.
+app/infrastructure/object_storage/
+               Low-level object-storage contract plus local and S3 mechanics.
 app/modules/   Target modular-monolith owners.
 app/runtime/   Run-owned Runner and Loop execution mechanics only.
 app/api/       HTTP and WebSocket transport adapters.
@@ -62,6 +64,8 @@ The clean-break rewrite is implemented directly on `develop`. The target tree ha
 The target is one modular monolith under `app/modules/<owner>/`, with narrow execution mechanics under `app/runtime/` and shared database, transaction, and configuration infrastructure under `app/infrastructure/`. Every owner keeps its ORM models and repositories private. Another owner may use only its typed public service contract; it must not import the private model or repository, issue writes to the owner's tables, or recreate the owner's policy.
 
 Cross-owner atomic operations use the infrastructure `TransactionContext` and typed application orchestration ports. The orchestrator selects one transaction and invokes owner services; it never writes owner tables directly. Define consumer-facing ports such as `OutcomeConsumer` and the authorization-dependency writer before their callers depend on them.
+
+Object storage is infrastructure mechanics, not an alternate Workspace owner. Infrastructure and application composition may construct concrete local or S3 backends. The Workspace owner may depend only on `app.infrastructure.object_storage.base`; every other product owner and `app.runtime` must use the approved Workspace public service rather than importing object-storage contracts or implementations directly. The empty `object_storage` package initializer does not re-export implementations.
 
 The public service/import DAG is:
 
