@@ -621,6 +621,18 @@ LEGACY_ACTIVITY_API_FORBIDDEN_FACTS = frozenset(
         "route:GET:/agents/{agent_id}/chat-history/{conv_id:path}",
     }
 )
+LEGACY_MESSAGES_API_IMPORT_IDENTITY = Path("app/api/messages")
+LEGACY_MESSAGES_API_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_MESSAGES_API_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_MESSAGES_API_FORBIDDEN_FACTS = frozenset(
+    {
+        "function:get_inbox",
+        "function:get_unread_count",
+        "route:GET:/messages/inbox",
+        "route:GET:/messages/unread-count",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2485,6 +2497,46 @@ def _assert_application_apis_do_not_restore_legacy_activity_facts(
         if restored:
             raise DeletedAuthorityViolation(
                 "application API restores legacy Activity transport facts: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
+def _assert_deleted_legacy_messages_api(backend_root: Path) -> None:
+    identity = LEGACY_MESSAGES_API_IMPORT_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy Messages API module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy Messages API package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_messages_api(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Messages API",
+        deleted_identities=(LEGACY_MESSAGES_API_DOTTED_IMPORT_IDENTITY,),
+    )
+
+
+def _assert_application_apis_do_not_restore_legacy_messages_facts(
+    backend_root: Path,
+) -> None:
+    api_root = backend_root / "app/api"
+    if not api_root.is_dir():
+        return
+    for source_path in sorted(api_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_MESSAGES_API_FORBIDDEN_FACTS & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application API restores legacy Messages transport facts: "
                 f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
 
@@ -5878,14 +5930,12 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
         "from app.services.realtime_runtime.router import publish_realtime_event\n",
         "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
         "from app.modules.trigger import __name__\n",
-        "from app.api.messages import router\n",
     ],
     ids=[
         "realtime-service",
         "realtime-runtime",
         "object-storage-infrastructure",
         "target-trigger-module",
-        "messages-api",
     ],
 )
 def test_retained_group_adjacent_reference_passes_group_participant_guard(
@@ -6626,6 +6676,81 @@ def test_restored_activity_transport_fact_fails_guard(
         match="application API restores legacy Activity transport facts",
     ):
         _assert_application_apis_do_not_restore_legacy_activity_facts(tmp_path)
+
+
+def test_legacy_messages_api_is_absent() -> None:
+    _assert_deleted_legacy_messages_api(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_messages_api() -> None:
+    _assert_tests_do_not_reference_deleted_messages_api(BACKEND_ROOT)
+
+
+def test_application_apis_do_not_restore_legacy_messages_facts() -> None:
+    _assert_application_apis_do_not_restore_legacy_messages_facts(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_legacy_messages_api_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_MESSAGES_API_IMPORT_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Messages API {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_messages_api(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_messages_api_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_MESSAGES_API_DOTTED_IMPORT_IDENTITY
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_messages_api.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Messages API authority",
+    ):
+        _assert_tests_do_not_reference_deleted_messages_api(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "async def get_inbox(): ...\n",
+        "async def get_unread_count(): ...\n",
+        '@router.get("/messages/inbox")\nasync def restored(): ...\n',
+        '@router.get("/messages/unread-count")\nasync def restored(): ...\n',
+    ],
+)
+def test_restored_messages_transport_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/api/restored_messages.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application API restores legacy Messages transport facts",
+    ):
+        _assert_application_apis_do_not_restore_legacy_messages_facts(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
