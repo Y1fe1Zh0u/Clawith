@@ -544,6 +544,7 @@ LEGACY_WORKSPACE_IMPORT_IDENTITIES = (
     Path("app/api/upload"),
     Path("app/services/workspace_collaboration"),
     Path("app/services/workspace_locking"),
+    Path("app/services/workspace_paths"),
     Path("app/services/workspace_reconciliation"),
 )
 LEGACY_WORKSPACE_REINTRODUCTIONS = [
@@ -557,8 +558,13 @@ LEGACY_WORKSPACE_DOTTED_IMPORT_IDENTITIES = tuple(
 )
 LEGACY_WORKSPACE_FORBIDDEN_DEFINITIONS = frozenset(
     {
-        "class:WorkspaceFileRevision",
         "class:WorkspaceEditLock",
+        "class:WorkspaceFileRevision",
+        "class:ResolvedWorkspacePath",
+        "class:WorkspacePathError",
+        "function:enterprise_info_root",
+        "function:resolve_agent_visible_path",
+        "function:resolve_path_within_root",
         "table:workspace_file_revisions",
         "table:workspace_edit_locks",
     }
@@ -2548,9 +2554,9 @@ def _assert_tests_do_not_reference_deleted_heartbeat_authorities(
 
 
 def _assert_deleted_legacy_workspace_authorities(backend_root: Path) -> None:
-    if len(LEGACY_WORKSPACE_IMPORT_IDENTITIES) != 6:
+    if len(LEGACY_WORKSPACE_IMPORT_IDENTITIES) != 7:
         raise DeletedAuthorityViolation(
-            "legacy Workspace authority inventory must contain exactly 6 identities"
+            "legacy Workspace authority inventory must contain exactly 7 identities"
         )
     for identity in LEGACY_WORKSPACE_IMPORT_IDENTITIES:
         module = (backend_root / identity).with_suffix(".py")
@@ -2595,6 +2601,46 @@ def _assert_application_does_not_restore_workspace_definitions(
                 "application source restores legacy Workspace definitions: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
+
+
+def _assert_sandbox_has_no_legacy_revision_branch(backend_root: Path) -> None:
+    source_path = backend_root / "app/services/sandbox/local/subprocess_backend.py"
+    if not source_path.is_file():
+        return
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    arguments = {
+        argument.arg
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for argument in (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        )
+    }
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    facts = _source_contract_facts(tree)
+    restored: list[str] = []
+    if "record_revisions" in arguments:
+        restored.append("argument:record_revisions")
+    for identity in ("app.database", "app.services.workspace_collaboration"):
+        if identity in imports:
+            restored.append(f"import:{identity}")
+    for reference in (
+        "reference:delete_workspace_file",
+        "reference:write_workspace_file",
+    ):
+        if reference in facts:
+            restored.append(reference)
+    if restored:
+        raise DeletedAuthorityViolation(
+            "Sandbox restores the dead Workspace revision branch: "
+            + ", ".join(sorted(restored))
+        )
 
 
 def _assert_deleted_legacy_a2a_authorities(backend_root: Path) -> None:
@@ -7223,17 +7269,17 @@ def test_restored_workspace_definition_fails_guard(
 @pytest.mark.parametrize(
     "test_source",
     [
-        "from app.services.workspace_paths import resolve_path_within_root\n",
         "from app.infrastructure.object_storage.base import StorageBackend\n",
         "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
         "from app.services.sandbox.config import SandboxConfig\n",
+        "from app.services.sandbox.workspace_policy import SandboxWorkspacePolicy\n",
         "from app.modules.workspace import __name__\n",
     ],
     ids=[
-        "workspace-paths",
         "object-storage-contract",
         "object-storage-local",
         "sandbox",
+        "sandbox-workspace-policy",
         "target-workspace-module",
     ],
 )
@@ -7246,6 +7292,43 @@ def test_retained_workspace_adjacent_reference_passes_guard(
     test_path.write_text(test_source, encoding="utf-8")
 
     _assert_tests_do_not_reference_deleted_workspace_authorities(tmp_path)
+
+
+def test_sandbox_has_no_legacy_workspace_revision_branch() -> None:
+    _assert_sandbox_has_no_legacy_revision_branch(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "async def merge(*, record_revisions=False): ...\n",
+        "from app.database import async_session\n",
+        "from app.services.workspace_collaboration import write_workspace_file\n",
+        "result = write_workspace_file()\n",
+        "result = delete_workspace_file()\n",
+    ],
+)
+def test_restored_sandbox_workspace_revision_branch_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/services/sandbox/local/subprocess_backend.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="revision branch"):
+        _assert_sandbox_has_no_legacy_revision_branch(tmp_path)
+
+
+def test_sandbox_workspace_publication_without_revision_branch_passes_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "app/services/sandbox/local/subprocess_backend.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "async def merge(*, workspace_mode, publish_paths): ...\n",
+        encoding="utf-8",
+    )
+    _assert_sandbox_has_no_legacy_revision_branch(tmp_path)
 
 
 def test_legacy_a2a_authority_is_absent_from_target_tree() -> None:

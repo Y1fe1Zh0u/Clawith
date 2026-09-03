@@ -19,6 +19,50 @@ from app.services.sandbox.local.subprocess_backend import (
     SubprocessBackend,
     close_subprocess_sandbox_run,
 )
+from app.services.sandbox.workspace_policy import build_workspace_policy
+
+
+def test_workspace_policy_preserves_legacy_path_normalization() -> None:
+    policy = build_workspace_policy(
+        mode="merge",
+        session_id=None,
+        default_paths=[
+            "/workspace//docs/./report.md",
+            "workspace\\docs\\..\\summary.md",
+            "../../soul.md",
+            "C:\\temp\\artifact.txt",
+        ],
+    )
+
+    assert policy.materialized_paths == (
+        "workspace/docs/report.md",
+        "workspace/summary.md",
+        "soul.md",
+        "C:/temp/artifact.txt",
+    )
+
+
+def test_sandbox_root_containment_accepts_descendant(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+
+    resolved = subprocess_backend._resolve_path_within_root(
+        root,
+        "output/result.txt",
+    )
+
+    assert resolved == root / "output/result.txt"
+
+
+@pytest.mark.parametrize("relative_path", ["../secret.txt", "/etc/passwd"])
+def test_sandbox_root_containment_rejects_escape(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    with pytest.raises(subprocess_backend._SandboxPathError):
+        subprocess_backend._resolve_path_within_root(
+            tmp_path / "workspace",
+            relative_path,
+        )
 
 
 @pytest.mark.asyncio

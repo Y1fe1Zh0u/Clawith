@@ -16,7 +16,6 @@ from loguru import logger
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
 from app.services.sandbox.local.run_workspace import close_run_workspace
-from app.services.workspace_paths import WorkspacePathError, resolve_path_within_root
 
 MAX_STDOUT_CAPTURE_BYTES = 1_000_000
 MAX_STDERR_CAPTURE_BYTES = 500_000
@@ -28,6 +27,42 @@ MAX_PUBLISHED_FILES_PER_EXECUTION = 100
 MAX_DELETED_FILES_PER_EXECUTION = 100
 MAX_PUBLISHED_TOTAL_BYTES = 50 * 1024 * 1024
 MAX_PUBLISHED_FILE_BYTES = 10 * 1024 * 1024
+
+
+class _SandboxPathError(ValueError):
+    pass
+
+
+def _resolve_path_within_root(
+    root: Path,
+    rel_path: str = "",
+    *,
+    allow_root: bool = True,
+    require_subpath: bool = False,
+    label: str = "path",
+) -> Path:
+    root_resolved = root.resolve()
+    normalized = (rel_path or "").strip()
+
+    if require_subpath and not normalized:
+        raise _SandboxPathError(
+            f"{label} must point to a file or subdirectory under the allowed root"
+        )
+
+    candidate = Path(normalized)
+    if candidate.is_absolute():
+        raise _SandboxPathError(f"Absolute {label} is not allowed")
+
+    target = (root_resolved / candidate).resolve() if normalized else root_resolved
+    try:
+        target.relative_to(root_resolved)
+    except ValueError as exc:
+        raise _SandboxPathError(f"Access denied for this {label}") from exc
+
+    if not allow_root and target == root_resolved:
+        raise _SandboxPathError(f"{label} must not resolve to the root directory")
+
+    return target
 
 
 @dataclass
@@ -546,13 +581,10 @@ class SubprocessBackend(BaseSandboxBackend):
         self,
         staging_path: Path,
         target_workspace: Path,
-        agent_id: uuid.UUID | None = None,
-        session_id: str | None = None,
         publish_paths: list[str] | None = None,
         workspace_mode: str = "merge",
-        record_revisions: bool = False,
     ) -> None:
-        """Scan staging directory, enforce safety checks, sanitize HTML/SVG, and merge to workspace with DB revisions."""
+        """Scan, sanitize, and merge approved staging outputs into the workspace."""
         import shutil
         try:
             import lxml.html
@@ -700,21 +732,8 @@ class SubprocessBackend(BaseSandboxBackend):
                     f"({MAX_PUBLISHED_FILE_BYTES} bytes)"
                 )
 
-        # Dynamic imports for database revisions
-        write_workspace_file = None
-        delete_workspace_file = None
-        async_session = None
-        if agent_id and record_revisions:
-            try:
-                from app.database import async_session
-                from app.services.workspace_collaboration import delete_workspace_file, write_workspace_file
-            except ImportError:
-                pass
-
         # 1. Process Created and Modified Files
         for rel_path, file_path in publication_candidates.items():
-            rel_path_str = str(rel_path)
-
             # Sanitize HTML/SVG if cleaner is available
             if file_path.suffix.lower() in (".html", ".svg"):
                 try:
@@ -756,12 +775,6 @@ class SubprocessBackend(BaseSandboxBackend):
                     logger.error(f"[Sandbox Gateway] Failed to sanitize file '{rel_path}': {e}")
                     continue
 
-            # Read content for revision
-            try:
-                file_content = file_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                file_content = None
-
             # Copy verified file to workspace
             dest_path = target_workspace / rel_path
             dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -771,56 +784,13 @@ class SubprocessBackend(BaseSandboxBackend):
                 logger.error(f"[Sandbox Gateway] Failed to copy '{rel_path}' to workspace: {e}")
                 continue
 
-            # Record DB revision
-            if agent_id and write_workspace_file and async_session and file_content is not None:
-                try:
-                    async with async_session() as db:
-                        await write_workspace_file(
-                            db,
-                            agent_id=agent_id,
-                            base_dir=target_workspace,
-                            path=rel_path_str,
-                            content=file_content,
-                            actor_type="agent",
-                            actor_id=agent_id,
-                            session_id=session_id,
-                            enforce_human_lock=True,
-                        )
-                        await db.commit()
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Gateway publication failed for '{rel_path}'"
-                    ) from e
-
         # 2. Process Deleted Files
         for rel_path, target_path in deletion_candidates.items():
-            rel_path_str = str(rel_path)
-
             try:
                 target_path.unlink(missing_ok=True)
             except Exception as e:
                 logger.error(f"[Sandbox Gateway] Failed to delete local file '{rel_path}': {e}")
                 continue
-
-            # Record DB deletion
-            if agent_id and delete_workspace_file and async_session:
-                try:
-                    async with async_session() as db:
-                        await delete_workspace_file(
-                            db,
-                            agent_id=agent_id,
-                            base_dir=target_workspace,
-                            path=rel_path_str,
-                            actor_type="agent",
-                            actor_id=agent_id,
-                            session_id=session_id,
-                            enforce_human_lock=True,
-                        )
-                        await db.commit()
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Gateway deletion failed for '{rel_path}'"
-                    ) from e
 
     def _clone_workspace_to_staging(self, source: Path, dest: Path) -> None:
         """Clone all workspace files to staging area, ignoring virtualenv and tmp folders."""
@@ -1110,8 +1080,8 @@ class SubprocessBackend(BaseSandboxBackend):
         else:
             work_path = (Path.cwd() / "workspace").resolve()
         try:
-            work_path = resolve_path_within_root(work_path, "", label="work_dir")
-        except WorkspacePathError as exc:
+            work_path = _resolve_path_within_root(work_path, "", label="work_dir")
+        except _SandboxPathError as exc:
             return ExecutionResult(
                 success=False,
                 stdout="",
@@ -1168,11 +1138,8 @@ class SubprocessBackend(BaseSandboxBackend):
                             await self._verify_and_merge_outputs(
                                 persistent.staging_path,
                                 work_path,
-                                agent_id=agent_id,
-                                session_id=session_id,
                                 publish_paths=publish_paths,
                                 workspace_mode=workspace_mode,
-                                record_revisions=False,
                             )
                             if publication_owner == "gateway":
                                 if gateway_publish is None:
@@ -1364,11 +1331,8 @@ class SubprocessBackend(BaseSandboxBackend):
                 await self._verify_and_merge_outputs(
                     staging_path,
                     work_path,
-                    agent_id=agent_id,
-                    session_id=session_id,
                     publish_paths=publish_paths,
                     workspace_mode=workspace_mode,
-                    record_revisions=False,
                 )
                 if publication_owner == "gateway":
                     if gateway_publish is None:
