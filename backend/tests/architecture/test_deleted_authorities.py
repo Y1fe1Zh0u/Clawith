@@ -633,6 +633,35 @@ LEGACY_MESSAGES_API_FORBIDDEN_FACTS = frozenset(
         "route:GET:/messages/unread-count",
     }
 )
+LEGACY_ADMIN_API_IMPORT_IDENTITY = Path("app/api/admin")
+LEGACY_ADMIN_API_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_ADMIN_API_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_ADMIN_API_FORBIDDEN_FACTS = frozenset(
+    {
+        "class:CompanyCreateRequest",
+        "class:CompanyCreateResponse",
+        "class:CompanyStats",
+        "class:PlatformSettingsOut",
+        "class:PlatformSettingsUpdate",
+        "function:create_company",
+        "function:get_enhanced_metrics",
+        "function:get_platform_leaderboards",
+        "function:get_platform_settings",
+        "function:get_platform_timeseries",
+        "function:list_companies",
+        "function:toggle_company",
+        "function:update_platform_settings",
+        "route:GET:/companies",
+        "route:GET:/metrics/enhanced",
+        "route:GET:/metrics/leaderboards",
+        "route:GET:/metrics/timeseries",
+        "route:GET:/platform-settings",
+        "route:POST:/companies",
+        "route:PUT:/companies/{company_id}/toggle",
+        "route:PUT:/platform-settings",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2541,6 +2570,44 @@ def _assert_application_apis_do_not_restore_legacy_messages_facts(
             )
 
 
+def _assert_deleted_legacy_admin_api(backend_root: Path) -> None:
+    identity = LEGACY_ADMIN_API_IMPORT_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy Admin API module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy Admin API package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_admin_api(backend_root: Path) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Admin API",
+        deleted_identities=(LEGACY_ADMIN_API_DOTTED_IMPORT_IDENTITY,),
+    )
+
+
+def _assert_application_apis_do_not_restore_legacy_admin_facts(
+    backend_root: Path,
+) -> None:
+    api_root = backend_root / "app/api"
+    if not api_root.is_dir():
+        return
+    for source_path in sorted(api_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_ADMIN_API_FORBIDDEN_FACTS & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application API restores legacy Platform Administration facts: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
 def _assert_email_provider_is_decoupled_from_legacy_storage(
     backend_root: Path,
 ) -> None:
@@ -3124,7 +3191,7 @@ def _source_contract_facts(tree: ast.Module) -> set[str]:
                 ):
                     continue
                 route = _string_value(decorator.args[0])
-                if route and decorator.func.attr in {"delete", "get", "post"}:
+                if route and decorator.func.attr in {"delete", "get", "post", "put"}:
                     facts.add(f"route:{decorator.func.attr.upper()}:{route}")
         elif isinstance(node, ast.Assign):
             for target in node.targets:
@@ -4140,9 +4207,8 @@ def test_backend_test_dynamic_reference_to_token_tracker_fails_guard(
     "test_source",
     [
         "from app.models.activity_log import DailyTokenUsage\n",
-        'report_path = "app.api.admin.get_platform_timeseries"\n',
     ],
-    ids=["daily-usage-static-import", "admin-report-dotted-reference"],
+    ids=["daily-usage-static-import"],
 )
 def test_retained_token_reporting_reference_passes_token_tracker_guard(
     tmp_path: Path,
@@ -6751,6 +6817,95 @@ def test_restored_messages_transport_fact_fails_guard(
         match="application API restores legacy Messages transport facts",
     ):
         _assert_application_apis_do_not_restore_legacy_messages_facts(tmp_path)
+
+
+def test_legacy_admin_api_is_absent() -> None:
+    _assert_deleted_legacy_admin_api(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_admin_api() -> None:
+    _assert_tests_do_not_reference_deleted_admin_api(BACKEND_ROOT)
+
+
+def test_application_apis_do_not_restore_legacy_admin_facts() -> None:
+    _assert_application_apis_do_not_restore_legacy_admin_facts(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_legacy_admin_api_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_ADMIN_API_IMPORT_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Admin API {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_admin_api(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_admin_api_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_ADMIN_API_DOTTED_IMPORT_IDENTITY
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_admin_api.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Admin API authority",
+    ):
+        _assert_tests_do_not_reference_deleted_admin_api(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        *(f"class {name}: ...\n" for name in (
+            "CompanyStats", "CompanyCreateRequest", "CompanyCreateResponse",
+            "PlatformSettingsOut", "PlatformSettingsUpdate",
+        )),
+        *(f"async def {name}(): ...\n" for name in (
+            "list_companies", "create_company", "toggle_company",
+            "get_platform_timeseries", "get_platform_leaderboards",
+            "get_enhanced_metrics", "get_platform_settings",
+            "update_platform_settings",
+        )),
+        '@router.get("/companies")\nasync def restored(): ...\n',
+        '@router.post("/companies")\nasync def restored(): ...\n',
+        '@router.put("/companies/{company_id}/toggle")\nasync def restored(): ...\n',
+        '@router.get("/metrics/timeseries")\nasync def restored(): ...\n',
+        '@router.get("/metrics/leaderboards")\nasync def restored(): ...\n',
+        '@router.get("/metrics/enhanced")\nasync def restored(): ...\n',
+        '@router.get("/platform-settings")\nasync def restored(): ...\n',
+        '@router.put("/platform-settings")\nasync def restored(): ...\n',
+    ],
+)
+def test_restored_admin_transport_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/api/restored_admin.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application API restores legacy Platform Administration facts",
+    ):
+        _assert_application_apis_do_not_restore_legacy_admin_facts(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
