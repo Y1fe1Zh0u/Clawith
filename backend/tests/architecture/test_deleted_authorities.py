@@ -695,6 +695,14 @@ LEGACY_QUOTA_GUARD_IDENTITY = Path("app/services/quota_guard")
 LEGACY_QUOTA_GUARD_DOTTED_IDENTITY = (
     LEGACY_QUOTA_GUARD_IDENTITY.as_posix().replace("/", ".")
 )
+LEGACY_REALTIME_SERVICE_IDENTITIES = (
+    Path("app/services/realtime"),
+    Path("app/services/realtime_runtime"),
+)
+LEGACY_REALTIME_SERVICE_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_REALTIME_SERVICE_IDENTITIES
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2731,6 +2739,28 @@ def _assert_tests_do_not_reference_deleted_quota_guard(backend_root: Path) -> No
         backend_root,
         authority="quota guard",
         deleted_identities=(LEGACY_QUOTA_GUARD_DOTTED_IDENTITY,),
+    )
+
+
+def _assert_deleted_realtime_services(backend_root: Path) -> None:
+    for identity in LEGACY_REALTIME_SERVICE_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Realtime service module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Realtime service package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_realtime_services(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Realtime service",
+        deleted_identities=LEGACY_REALTIME_SERVICE_DOTTED_IDENTITIES,
     )
 
 
@@ -6118,14 +6148,10 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
 @pytest.mark.parametrize(
     "test_source",
     [
-        "from app.services.realtime import publish_event\n",
-        "from app.services.realtime_runtime.router import publish_realtime_event\n",
         "from app.infrastructure.object_storage.local import LocalStorageBackend\n",
         "from app.modules.trigger import __name__\n",
     ],
     ids=[
-        "realtime-service",
-        "realtime-runtime",
         "object-storage-infrastructure",
         "target-trigger-module",
     ],
@@ -7265,6 +7291,69 @@ def test_backend_test_reference_of_deleted_quota_guard_fails_guard(
         match="test references deleted legacy quota guard authority",
     ):
         _assert_tests_do_not_reference_deleted_quota_guard(tmp_path)
+
+
+def test_legacy_realtime_services_are_absent() -> None:
+    _assert_deleted_realtime_services(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_realtime_services() -> None:
+    _assert_tests_do_not_reference_deleted_realtime_services(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_REALTIME_SERVICE_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_realtime_service_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Realtime service {representation} was reintroduced",
+    ):
+        _assert_deleted_realtime_services(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_REALTIME_SERVICE_DOTTED_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_realtime_service_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}.router")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_realtime.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Realtime service authority",
+    ):
+        _assert_tests_do_not_reference_deleted_realtime_services(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
