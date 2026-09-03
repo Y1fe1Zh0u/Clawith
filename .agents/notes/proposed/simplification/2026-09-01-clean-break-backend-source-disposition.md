@@ -1,6 +1,6 @@
 # Agent Note: Clean-Break Backend Source Disposition
 
-Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, legacy Invitation, Onboarding, Directory, Focus, Notification, Published Page, Plaza, legacy Agent Template, AgentBay, Tenant Knowledge publication, and old Autonomy/Approval authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
+Status: proposed — the capability disposition is agreed; target application composition and database infrastructure are implemented, and the legacy Agent execution, old Context, structured Experience, old Model/LLM, Persistent Task, old Tool, old Skill, dedicated OpenClaw/Gateway, old Agent Credential, overloaded old Agent aggregate and its remaining dedicated schema/API tests, old Identity/Tenant aggregate, old Auth, old SSO, overloaded old Organization/Relationship, legacy Invitation, Onboarding, Directory, Focus, Notification, Published Page, Plaza, legacy Agent Template, AgentBay, Tenant Knowledge publication, and old Autonomy/Approval authorities are removed, while owner rewrites and the remaining category deletions remain incomplete
 
 ## Problem
 
@@ -137,11 +137,13 @@ The overloaded old Agent aggregate authority is also removed as a separate categ
 - `backend/app/services/agent_seeder.py`
 - the `agent_dao` and `agent_access_dao` compatibility exports from `backend/app/dao/__init__.py`
 - `backend/tests/test_agent_delete_api.py`
+- `backend/tests/test_agent_model_step_limit.py`
 - `backend/tests/test_agent_permission_candidates.py`
 - `backend/tests/test_agent_seeder_storage_repair.py`
 - `backend/tests/test_agent_visibility.py`
+- `backend/tests/test_timezone_validation.py`
 
-These sources combined Agent identity and CRUD with creator ownership, access modes, visibility and management grants, permission candidates, soft deletion, execution/container status, start/stop and API-key operations, OpenClaw fields, runtime and quota counters, template bootstrap, default-Agent seeding and storage repair, and relationships to Runtime, Task, Channel, Model, and User state. The deleted tests asserted only those retired aggregate contracts. They are not moved or adapted; the target Agent and Permission owners must write fresh contract tests when implemented.
+These sources combined Agent identity and CRUD with creator ownership, access modes, visibility and management grants, permission candidates, soft deletion, execution/container status, start/stop and API-key operations, OpenClaw fields, runtime and quota counters, template bootstrap, default-Agent seeding and storage repair, and relationships to Runtime, Task, Channel, Model, and User state. The deleted tests asserted only those retired aggregate contracts, including the old `AgentUpdate` Tool-round limit and timezone fields and the removed Agent detail API's effective-timezone fallback. The Tool-round limit contradicts the accepted target contract, which has no maximum Model Step, model-turn, or renamed Tool-round counter. These tests are not moved or adapted; the target Agent, Model System, and Permission owners must write fresh tests from their approved contracts when implemented.
 
 `AgentPermission`, `AgentTemplate`, and `AgentUserOnboarding` were physically declared in the removed `models/agent.py`, but they are not accepted as facts owned by the target Agent aggregate. Permission grants, Agent Template, and Onboarding must be reimplemented by their separate target owners only after those owner contracts are reviewed and approved, with new persistence and service tests. The retained `advanced.py`, Directory, Metrics, Onboarding, Identity, Organization, Workspace, storage `agent_files`, mixed `schemas.py`, migrations, dependency declarations, Frontend, and target module packages remain staged for their own minimum commits. Their dangling imports and relationships are evidence of incomplete source disposition, not authorization to recreate the removed aggregate or add a compatibility shim.
 
@@ -156,7 +158,7 @@ The old Identity/Tenant aggregate authority is also removed as a separate catego
 - `backend/app/dao/user_dao.py`
 - `backend/app/dao/tenant_dao.py`
 - the `identity_dao`, `user_dao`, and `tenant_dao` compatibility exports from `backend/app/dao/__init__.py`
-- the old Tenant model/API validation assertions removed from the mixed `backend/tests/test_timezone_validation.py`
+- the old Tenant model/API validation assertions formerly removed from the later-deleted mixed `backend/tests/test_timezone_validation.py`
 
 These sources combined a global login Identity, tenant-scoped User membership, Tenant configuration and sparse Tenant settings with CRUD, tenant switching and assignment, self-create and join, quota counters and limits, logo storage, registration configuration, SSO-domain lookup, Tenant deletion, and compatibility association proxies. The removed tests asserted only retired Tenant persistence or API schemas. They are not adapted; the target `identity_tenant` owner must write fresh Account, Membership, Tenant, Tenant Principal, and Platform Principal tests from its approved contract.
 
