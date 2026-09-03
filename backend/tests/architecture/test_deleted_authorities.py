@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import re
+import shlex
 import symtable
 from pathlib import Path
 
@@ -622,24 +624,6 @@ SETUP_AND_STARTUP_SOURCES = (
     Path("setup.sh"),
     Path("restart.sh"),
     Path("backend/entrypoint.sh"),
-)
-LEGACY_BOOTSTRAP_SCRIPT_MARKERS = frozenset(
-    {
-        "ADD COLUMN IF NOT EXISTS",
-        "AGENT_DATA_DIR",
-        "ALTER TABLE",
-        "DATABASE_AUTO_CREATE_TABLES",
-        "Patch applied",
-        "Patch skipped",
-        "app.scripts.bootstrap_db",
-        "create_all",
-        "memory.md",
-        "schema bootstrap",
-        "schema patch",
-        "schema repair",
-        "seed.py",
-        "soul.md",
-    }
 )
 FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
 DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
@@ -2528,6 +2512,99 @@ def _assert_tests_do_not_reference_deleted_bootstrap_authority(
     )
 
 
+_SHELL_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+_LEGACY_DDL_REPAIR = re.compile(
+    r"\b(?:ALTER\s+TABLE|CREATE\s+(?:UNIQUE\s+)?INDEX|UPDATE\s+\w+\s+SET)\b",
+    re.IGNORECASE,
+)
+
+
+def _shell_tokens(line: str) -> list[str]:
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
+    lexer.commenters = "#"
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
+def _expand_shell_assignments(value: str, assignments: dict[str, str]) -> str:
+    expanded = value
+    for name, assigned in assignments.items():
+        expanded = expanded.replace(f"${{{name}}}", assigned)
+        expanded = re.sub(rf"\${re.escape(name)}\b", assigned, expanded)
+    return expanded
+
+
+def _legacy_bootstrap_executable_facts(source: str) -> set[str]:
+    facts: set[str] = set()
+    assignments: dict[str, str] = {}
+    logical_lines = source.replace("\\\n", " ").splitlines()
+    for line in logical_lines:
+        tokens = _shell_tokens(line)
+        if not tokens:
+            continue
+
+        for token in tokens:
+            assignment = _SHELL_ASSIGNMENT.match(token)
+            if assignment:
+                assignments[assignment.group(1)] = assignment.group(2)
+
+        expanded_line = _expand_shell_assignments(line, assignments)
+        expanded_tokens = _shell_tokens(expanded_line)
+        command_tokens = [
+            token
+            for token in expanded_tokens
+            if not _SHELL_ASSIGNMENT.match(token)
+            and token not in {"if", "then", "!", "exec", "env", "export"}
+        ]
+        if not command_tokens:
+            continue
+
+        command = Path(command_tokens[0]).name
+        has_redirection = any(
+            token in {">", ">>", "<", "<<"} for token in expanded_tokens
+        )
+        if command in {"echo", "printf"} and not has_redirection:
+            continue
+
+        invokes_process = command in {
+            "bash",
+            "python",
+            "python3",
+            "sh",
+            "uv",
+        } or command.startswith("python")
+        if (
+            (invokes_process or command == "seed.py")
+            and re.search(r"(?:^|[\s/])seed\.py(?:\s|$)", expanded_line)
+        ):
+            facts.add("seed-script")
+        if invokes_process and "app.scripts.bootstrap_db" in expanded_line:
+            facts.add("bootstrap-module")
+        if invokes_process and "create_all" in expanded_line:
+            facts.add("create-all")
+        if command in {"bash", "psql", "python", "python3", "sh"} and (
+            _LEGACY_DDL_REPAIR.search(expanded_line)
+        ):
+            facts.add("ddl-repair")
+
+        mutates_paths = command in {"install", "mkdir", "tee", "touch"} or (
+            command in {"cat", "echo", "printf"} and has_redirection
+        )
+        if not mutates_paths:
+            continue
+        normalized_line = expanded_line.replace("\\", "/").casefold()
+        materializes_agent_tree = "agent_data_dir" in normalized_line and any(
+            segment in normalized_line
+            for segment in ("/workspace", "/memory", "/skills")
+        )
+        materializes_owned_file = any(
+            path in normalized_line for path in ("/memory.md", "/soul.md")
+        )
+        if materializes_agent_tree or materializes_owned_file:
+            facts.add("workspace-materialization")
+    return facts
+
+
 def _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(
     repository_root: Path,
 ) -> None:
@@ -2536,16 +2613,11 @@ def _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(
         if not source_path.is_file():
             continue
         source = source_path.read_text(encoding="utf-8")
-        normalized_source = source.casefold()
-        restored_markers = sorted(
-            marker
-            for marker in LEGACY_BOOTSTRAP_SCRIPT_MARKERS
-            if marker.casefold() in normalized_source
-        )
-        if restored_markers:
+        restored_facts = sorted(_legacy_bootstrap_executable_facts(source))
+        if restored_facts:
             raise DeletedAuthorityViolation(
                 "setup or startup script restores legacy seed/bootstrap behavior: "
-                f"{relative_path} -> {', '.join(restored_markers)}"
+                f"{relative_path} -> {', '.join(restored_facts)}"
             )
 
 
@@ -6660,22 +6732,20 @@ def test_backend_test_reference_of_deleted_bootstrap_authority_fails_guard(
     "source",
     [
         "python backend/seed.py\n",
+        'SEED_COMMAND="python backend/seed.py"\nexec $SEED_COMMAND\n',
         "python -m app.scripts.bootstrap_db\n",
-        "await connection.run_sync(Base.metadata.create_all)\n",
-        "DATABASE_AUTO_CREATE_TABLES=true\n",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS legacy INTEGER\n",
-        "echo 'schema repair complete'\n",
+        'python -c "Base.metadata.create_all()"\n',
+        'psql "$DATABASE_URL" -c "ALTER TABLE users ADD COLUMN legacy INTEGER"\n',
         'mkdir -p "$AGENT_DATA_DIR/$agent_id/workspace"\n',
         'touch "$workspace/soul.md"\n',
-        'touch "$workspace/memory/memory.md"\n',
+        'printf "# Memory" > "$workspace/memory/memory.md"\n',
     ],
     ids=[
         "seed-script",
+        "assigned-seed-command",
         "bootstrap-module",
         "create-all",
-        "auto-create-setting",
         "inline-schema-patch",
-        "schema-repair",
         "agent-workspace",
         "soul-file",
         "memory-file",
@@ -6704,6 +6774,36 @@ def test_target_alembic_and_application_startup_pass_bootstrap_guard(
         "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1\n",
         encoding="utf-8",
     )
+
+    _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "# python backend/seed.py\n# ALTER TABLE users ADD COLUMN legacy INTEGER\n",
+        'echo "Run python -m app.scripts.bootstrap_db only in the legacy checkout"\n',
+        'echo "Schema repair no longer calls create_all or writes soul.md"\n',
+        'BOOTSTRAP_DOCUMENTATION="python backend/seed.py"\n',
+        (
+            "export AGENT_DATA_DIR=/data/agents\n"
+            "env AGENT_DATA_DIR=/data/agents uvicorn app.main:app\n"
+        ),
+    ],
+    ids=[
+        "comments",
+        "log-documentation",
+        "schema-log",
+        "documentation-assignment",
+        "environment-pass-through",
+    ],
+)
+def test_nonexecuting_bootstrap_text_passes_script_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    setup_script = tmp_path / "setup.sh"
+    setup_script.write_text(source, encoding="utf-8")
 
     _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
 
