@@ -380,6 +380,16 @@ This minimum deletion preserves the OKR models, API, daily collection, reporting
 
 The deleted-authority guard makes `app.services.okr_agent_hook` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve static and dotted references to retained OKR services.
 
+The legacy Token Tracker is removed as its own minimum category:
+
+- `backend/app/services/token_tracker.py`
+
+The module normalized provider usage dictionaries, estimated token counts, and attempted to update deleted Agent counters plus `DailyTokenUsage` through an independent database session. No current runtime, package export, or test imported any of its types or functions, so neither its normalization nor its write path could execute. The orphan tracker is deleted rather than retained as an apparent accounting authority.
+
+This minimum deletion preserves the `DailyTokenUsage` model, administrator reporting queries, their migration history, API response contracts, and Frontend token-usage presentation. Those retained read surfaces remain staged for their own owner disposition and do not imply that the deleted tracker still produces current usage facts. A future usage-accounting producer requires an approved owner, explicit Run attribution, transaction semantics, provider normalization, and focused tests.
+
+The deleted-authority guard makes `app.services.token_tracker` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve references to `DailyTokenUsage` and administrator reporting.
+
 The legacy AgentBay authority is removed as its own minimum category:
 
 - `backend/app/api/agentbay_control.py`
