@@ -8,6 +8,8 @@ import io
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
+from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile
 
 from loguru import logger
 
@@ -17,6 +19,37 @@ EXTRACTABLE_EXTS = {".pdf", ".docx", ".xlsx", ".pptx"}
 # Text extensions that don't need extraction
 TEXT_EXTS = {".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml",
              ".js", ".ts", ".py", ".html", ".css", ".sh", ".log", ".env"}
+
+_COMMON_EXTRACTION_ERRORS: tuple[type[Exception], ...] = (
+    BadZipFile,
+    EOFError,
+    KeyError,
+    OSError,
+    ParseError,
+    ValueError,
+)
+
+
+def _supported_extraction_errors(extension: str) -> tuple[type[Exception], ...]:
+    if extension == ".pdf":
+        from pdfminer.pdfexceptions import PDFException
+
+        return (*_COMMON_EXTRACTION_ERRORS, PDFException)
+    if extension == ".docx":
+        from docx.opc.exceptions import OpcError
+        from lxml.etree import LxmlError
+
+        return (*_COMMON_EXTRACTION_ERRORS, OpcError, LxmlError)
+    if extension == ".xlsx":
+        from openpyxl.utils.exceptions import InvalidFileException
+
+        return (*_COMMON_EXTRACTION_ERRORS, InvalidFileException)
+    if extension == ".pptx":
+        from lxml.etree import LxmlError
+        from pptx.exc import PythonPptxError
+
+        return (*_COMMON_EXTRACTION_ERRORS, PythonPptxError, LxmlError)
+    return _COMMON_EXTRACTION_ERRORS
 
 
 def _clean_cell(value: object) -> str:
@@ -65,8 +98,8 @@ def extract_text(file_bytes: bytes, filename: str) -> str | None:
             return _extract_xlsx(file_bytes)
         elif ext == ".pptx":
             return _extract_pptx(file_bytes)
-    except Exception as e:
-        logger.error(f"[TextExtractor] Failed to extract from {filename}: {e}")
+    except _supported_extraction_errors(ext) as exc:
+        logger.error(f"[TextExtractor] Failed to extract from {filename}: {exc}")
         return None
     
     return None
