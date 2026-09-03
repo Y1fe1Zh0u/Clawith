@@ -679,6 +679,14 @@ LEGACY_ENTERPRISE_TRANSPORT_TEST_PATHS = (
     Path("tests/test_enterprise_invites.py"),
     Path("tests/test_enterprise_system_settings_access.py"),
 )
+LEGACY_OBSERVABILITY_AUDIT_SERVICE_IDENTITIES = (
+    Path("app/services/activity_logger"),
+    Path("app/services/audit_logger"),
+)
+LEGACY_OBSERVABILITY_AUDIT_SERVICE_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_OBSERVABILITY_AUDIT_SERVICE_IDENTITIES
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2651,6 +2659,28 @@ def _assert_tests_do_not_reference_deleted_enterprise_transport(
         backend_root,
         authority="Enterprise transport",
         deleted_identities=LEGACY_ENTERPRISE_TRANSPORT_DOTTED_IDENTITIES,
+    )
+
+
+def _assert_deleted_observability_audit_services(backend_root: Path) -> None:
+    for identity in LEGACY_OBSERVABILITY_AUDIT_SERVICE_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy observability/audit service module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy observability/audit service package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_observability_audit_services(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="observability/audit service",
+        deleted_identities=LEGACY_OBSERVABILITY_AUDIT_SERVICE_DOTTED_IDENTITIES,
     )
 
 
@@ -7026,6 +7056,69 @@ def test_backend_test_reference_of_deleted_enterprise_transport_fails_guard(
         match="test references deleted legacy Enterprise transport authority",
     ):
         _assert_tests_do_not_reference_deleted_enterprise_transport(tmp_path)
+
+
+def test_observability_audit_orphan_services_are_absent() -> None:
+    _assert_deleted_observability_audit_services(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_observability_audit_services() -> None:
+    _assert_tests_do_not_reference_deleted_observability_audit_services(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_OBSERVABILITY_AUDIT_SERVICE_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_observability_audit_service_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy observability/audit service {representation} was reintroduced",
+    ):
+        _assert_deleted_observability_audit_services(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_OBSERVABILITY_AUDIT_SERVICE_DOTTED_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_observability_audit_service_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_observability_audit.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy observability/audit service authority",
+    ):
+        _assert_tests_do_not_reference_deleted_observability_audit_services(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
