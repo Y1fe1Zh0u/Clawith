@@ -398,7 +398,7 @@ class FeishuService:
             headers = {"Authorization": f"Bearer {app_token}"}
 
             # Upload file
-            with open(fp, "rb") as f:
+            with open(fp, "rb") as f:  # noqa: ASYNC230 -- bytes must be materialized before multipart upload
                 file_bytes = f.read()
             # Determine file type for Feishu upload
             ext = fp.suffix.lower()

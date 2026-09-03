@@ -33,14 +33,18 @@ class FeishuContactSearchLimitError(RuntimeError):
 def _body(payload: Mapping[str, object], *, stage: str) -> Mapping[str, object]:
     data = payload.get("data")
     if not isinstance(data, Mapping):
-        raise ValueError(f"Feishu {stage} returned an invalid data object")
+        raise ValueError(  # noqa: TRY004 -- preserve the provider payload contract
+            f"Feishu {stage} returned an invalid data object"
+        )
     return data
 
 
 def _items(data: Mapping[str, object], *, stage: str) -> list[Mapping[str, object]]:
     raw_items = data.get("items", [])
     if not isinstance(raw_items, list):
-        raise ValueError(f"Feishu {stage} returned an invalid item list")
+        raise ValueError(  # noqa: TRY004 -- preserve the provider payload contract
+            f"Feishu {stage} returned an invalid item list"
+        )
     return [item for item in raw_items if isinstance(item, Mapping)]
 
 
@@ -123,7 +127,9 @@ async def _get(
     )
     payload = feishu_service._parse_api_response(response, stage=stage)
     if not isinstance(payload, Mapping):
-        raise ValueError(f"Feishu {stage} returned an invalid response")
+        raise ValueError(  # noqa: TRY004 -- preserve the provider payload contract
+            f"Feishu {stage} returned an invalid response"
+        )
     return payload
 
 
