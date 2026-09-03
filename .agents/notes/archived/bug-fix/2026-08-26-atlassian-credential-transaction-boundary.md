@@ -2,6 +2,8 @@
 
 Status: implemented — Atlassian credentials and assigned tools share one fail-closed persistence contract.
 
+Archived: 2026-09-03
+
 ## Problem
 
 Atlassian configuration spans the owning `ChannelConfig`, discovered shared `Tool` records, per-Agent assignments, and runtime credential dispatch. Persisting plaintext credentials, accepting undecryptable values as legacy plaintext, or committing those records independently would expose a secret at rest, dispatch ciphertext as a credential, or publish configuration success without matching tool assignments.

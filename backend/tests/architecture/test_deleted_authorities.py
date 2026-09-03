@@ -510,6 +510,76 @@ LEGACY_FEISHU_CREDENTIAL_STATE = frozenset(
     {"app_id", "app_secret", "_app_access_token"}
 )
 LEGACY_DINGTALK_STREAM_WRAPPERS = frozenset({"download_dingtalk_media"})
+LEGACY_CHANNEL_IMPORT_IDENTITIES = (
+    Path("app/models/channel_config"),
+    Path("app/models/channel_delivery"),
+    Path("app/api/atlassian"),
+    Path("app/api/dingtalk"),
+    Path("app/api/discord_bot"),
+    Path("app/api/feishu"),
+    Path("app/api/slack"),
+    Path("app/api/teams"),
+    Path("app/api/wechat"),
+    Path("app/api/wecom"),
+    Path("app/api/whatsapp"),
+    Path("app/services/atlassian_tool_service"),
+    Path("app/services/channel_user_service"),
+    Path("app/services/dingtalk_stream"),
+    Path("app/services/discord_gateway"),
+    Path("app/services/feishu_group_targets"),
+    Path("app/services/feishu_ws"),
+    Path("app/services/wechat_channel"),
+    Path("app/services/wecom_stream"),
+)
+LEGACY_CHANNEL_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_CHANNEL_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_CHANNEL_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_CHANNEL_IMPORT_IDENTITIES
+)
+LEGACY_CHANNEL_PACKAGE_EXPORTS = {
+    Path("app/models/__init__.py"): ("channel_config", "channel_delivery"),
+    Path("app/api/__init__.py"): (
+        "atlassian",
+        "dingtalk",
+        "discord_bot",
+        "feishu",
+        "slack",
+        "teams",
+        "wechat",
+        "wecom",
+        "whatsapp",
+    ),
+    Path("app/services/__init__.py"): (
+        "atlassian_tool_service",
+        "channel_user_service",
+        "dingtalk_stream",
+        "discord_gateway",
+        "feishu_group_targets",
+        "feishu_ws",
+        "wechat_channel",
+        "wecom_stream",
+    ),
+}
+LEGACY_CHANNEL_CLEANUP_SCRIPT = Path(
+    "scripts/remove_legacy_atlassian_agent_tool_secrets.py"
+)
+LEGACY_CHANNEL_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "class:ChannelConfig",
+        "class:ChannelDelivery",
+        "class:ChannelConfigCreate",
+        "class:ChannelConfigOut",
+        "table:channel_configs",
+        "table:channel_deliveries",
+        "enum:channel_type_enum",
+        "assigned:_CHANNEL_SECRET_KEY_PARTS",
+        "function:_redact_channel_secrets",
+    }
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -2171,6 +2241,122 @@ def _assert_channel_provider_transports_are_isolated(backend_root: Path) -> None
         )
 
 
+def _assert_deleted_legacy_channel_authorities(backend_root: Path) -> None:
+    if len(LEGACY_CHANNEL_IMPORT_IDENTITIES) != 19:
+        raise DeletedAuthorityViolation(
+            "legacy Channel authority inventory must contain exactly 19 identities"
+        )
+    for identity in LEGACY_CHANNEL_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Channel authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Channel authority package was reintroduced: {identity}"
+            )
+
+    cleanup_script = backend_root / LEGACY_CHANNEL_CLEANUP_SCRIPT
+    if cleanup_script.exists():
+        raise DeletedAuthorityViolation(
+            "deleted legacy Channel cleanup script was reintroduced: "
+            f"{LEGACY_CHANNEL_CLEANUP_SCRIPT}"
+        )
+
+
+def _assert_deleted_legacy_channel_package_exports(backend_root: Path) -> None:
+    for relative_path, exports in LEGACY_CHANNEL_PACKAGE_EXPORTS.items():
+        package_init = backend_root / relative_path
+        if not package_init.is_file():
+            continue
+        source = package_init.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(package_init))
+        symbols = symtable.symtable(source, str(package_init), "exec")
+        try:
+            dynamic_hook = symbols.lookup(DYNAMIC_MODULE_EXPORT_HOOK)
+        except KeyError:
+            binds_dynamic_hook = False
+        else:
+            binds_dynamic_hook = (
+                dynamic_hook.is_assigned()
+                or dynamic_hook.is_imported()
+                or dynamic_hook.is_namespace()
+            )
+        dynamic_installer = _ModuleScopeDynamicExportHookVisitor()
+        dynamic_installer.visit(tree)
+        if binds_dynamic_hook or dynamic_installer.installs_hook:
+            raise DeletedAuthorityViolation(
+                "deleted legacy Channel package exports can be restored by a "
+                f"dynamic hook: {relative_path}"
+            )
+
+        for node in ast.walk(tree):
+            for export in exports:
+                references_export = (
+                    isinstance(node, ast.Name) and node.id == export
+                ) or (
+                    isinstance(node, ast.Attribute) and node.attr == export
+                ) or (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and (
+                        node.value == export
+                        or node.value.endswith(f".{export}")
+                    )
+                ) or (
+                    isinstance(node, ast.keyword) and node.arg == export
+                ) or (
+                    isinstance(node, ast.alias)
+                    and (
+                        node.name.split(".")[-1] == export
+                        or node.asname == export
+                    )
+                ) or (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module is not None
+                    and node.module.split(".")[-1] == export
+                )
+                if references_export:
+                    raise DeletedAuthorityViolation(
+                        "deleted legacy Channel package export was reintroduced: "
+                        f"{relative_path} -> {export}"
+                    )
+
+
+def _assert_tests_do_not_reference_deleted_channel_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Channel",
+        deleted_identities=LEGACY_CHANNEL_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_channel_definitions(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        relative_path = source_path.relative_to(backend_root)
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_facts = sorted(
+            LEGACY_CHANNEL_FORBIDDEN_DEFINITIONS & _source_contract_facts(tree)
+        )
+        if restored_facts:
+            raise DeletedAuthorityViolation(
+                "application source restores legacy Channel definitions: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
+            )
+
+
 def _assert_deleted_legacy_autonomy_approval_authority(
     backend_root: Path,
 ) -> None:
@@ -3213,25 +3399,6 @@ def test_backend_test_dynamic_reference_to_wecom_service_fails_guard(
         match="test references deleted legacy WeCom service authority",
     ):
         _assert_tests_do_not_reference_deleted_wecom_service(tmp_path)
-
-
-@pytest.mark.parametrize(
-    "test_source",
-    [
-        "from app.api.wecom import wecom_callback\n",
-        'stream_path = "app.services.wecom_stream.wecom_stream_manager"\n',
-    ],
-    ids=["wecom-api-static-import", "wecom-stream-dotted-reference"],
-)
-def test_active_wecom_reference_passes_deleted_wecom_service_guard(
-    tmp_path: Path,
-    test_source: str,
-) -> None:
-    test_path = tmp_path / "tests/test_active_wecom_reference.py"
-    test_path.parent.mkdir(parents=True)
-    test_path.write_text(test_source, encoding="utf-8")
-
-    _assert_tests_do_not_reference_deleted_wecom_service(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -4930,8 +5097,6 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
 @pytest.mark.parametrize(
     "test_source",
     [
-        "from app.services.channel_user_service import resolve_channel_user\n",
-        "from app.services.feishu_group_targets import sync_feishu_group_targets\n",
         "from app.services.realtime import publish_event\n",
         "from app.services.realtime_runtime.router import publish_realtime_event\n",
         "from app.services.storage_runtime.local import LocalStorageBackend\n",
@@ -4941,8 +5106,6 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
         "from app.api.messages import router\n",
     ],
     ids=[
-        "channel-user-service",
-        "feishu-group-targets",
         "realtime-service",
         "realtime-runtime",
         "storage-runtime",
@@ -5061,14 +5224,12 @@ def test_restored_schedule_definition_fails_guard(
     [
         "from app.modules.trigger import __name__\n",
         "from app.modules.heartbeat import __name__\n",
-        "from app.services.feishu_group_targets import resolve_feishu_group_target\n",
         "from app.services.business_calendar import is_business_day\n",
         "from app.services.timezone_utils import get_agent_timezone_sync\n",
     ],
     ids=[
         "target-trigger-module",
         "target-heartbeat-module",
-        "feishu-group-targets",
         "business-calendar",
         "timezone-utils",
     ],
@@ -5249,22 +5410,10 @@ def test_restored_trigger_webhook_definition_fails_guard(
     [
         "from app.modules.trigger import __name__\n",
         "from app.modules.heartbeat import __name__\n",
-        "from app.api.feishu import feishu_event_webhook\n",
-        "from app.api.slack import slack_event_webhook\n",
-        "from app.api.wecom import wecom_event_webhook\n",
-        "from app.api.teams import teams_event_webhook\n",
-        "from app.api.whatsapp import whatsapp_event_webhook\n",
-        "from app.api.discord_bot import discord_interaction_webhook\n",
     ],
     ids=[
         "target-trigger-module",
         "target-heartbeat-module",
-        "feishu-channel-webhook",
-        "slack-channel-webhook",
-        "wecom-channel-webhook",
-        "teams-channel-webhook",
-        "whatsapp-channel-webhook",
-        "discord-channel-webhook",
     ],
 )
 def test_retained_target_and_channel_reference_passes_trigger_webhook_guard(
@@ -5636,6 +5785,214 @@ def test_explicit_provider_operations_pass_channel_transport_guard(tmp_path: Pat
     )
 
     _assert_channel_provider_transports_are_isolated(tmp_path)
+
+
+def test_legacy_channel_authorities_are_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_channel_authorities(BACKEND_ROOT)
+
+
+def test_legacy_channel_package_exports_are_absent() -> None:
+    _assert_deleted_legacy_channel_package_exports(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_channel_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_channel_authorities(BACKEND_ROOT)
+
+
+def test_application_does_not_restore_legacy_channel_definitions() -> None:
+    _assert_application_does_not_restore_channel_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_CHANNEL_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_CHANNEL_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_channel_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Channel authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_channel_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("representation", ["file", "directory"])
+def test_reintroduced_legacy_channel_cleanup_script_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    script_path = tmp_path / LEGACY_CHANNEL_CLEANUP_SCRIPT
+    script_path.parent.mkdir(parents=True)
+    if representation == "file":
+        script_path.write_text("", encoding="utf-8")
+    else:
+        script_path.mkdir()
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Channel cleanup script was reintroduced",
+    ):
+        _assert_deleted_legacy_channel_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("package_path", "source"),
+    [
+        (Path("app/api/__init__.py"), "from .feishu import router\n"),
+        (
+            Path("app/models/__init__.py"),
+            "from app.models.channel_config import ChannelConfig\n",
+        ),
+        (
+            Path("app/services/__init__.py"),
+            '__all__ = ["dingtalk_stream"]\n',
+        ),
+        (Path("app/api/__init__.py"), "whatsapp = object()\n"),
+    ],
+    ids=["relative-import", "absolute-import", "all-export", "assignment-export"],
+)
+def test_restored_static_channel_package_export_fails_guard(
+    tmp_path: Path,
+    package_path: Path,
+    source: str,
+) -> None:
+    package_init = tmp_path / package_path
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Channel package export was reintroduced",
+    ):
+        _assert_deleted_legacy_channel_package_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def __getattr__(name): return None\n",
+        "globals()['__getattr__'] = lambda name: None\n",
+    ],
+    ids=["function-hook", "globals-hook"],
+)
+def test_restored_dynamic_channel_package_export_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    package_init = tmp_path / "app/services/__init__.py"
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Channel package exports can be restored by a dynamic hook",
+    ):
+        _assert_deleted_legacy_channel_package_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_CHANNEL_DOTTED_IMPORT_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_channel_authority_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'target = "{identity}.restored"\n'
+    )
+    test_path = tmp_path / "tests/test_restored_channel.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Channel authority",
+    ):
+        _assert_tests_do_not_reference_deleted_channel_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class ChannelConfig: ...\n",
+        "class ChannelDelivery: ...\n",
+        "class ChannelConfigCreate: ...\n",
+        "class ChannelConfigOut: ...\n",
+        'class Restored:\n    __tablename__ = "channel_configs"\n',
+        'class Restored:\n    __tablename__ = "channel_deliveries"\n',
+        'channel_type = Enum("feishu", name="channel_type_enum")\n',
+        '_CHANNEL_SECRET_KEY_PARTS = ("secret",)\n',
+        "def _redact_channel_secrets(value): return value\n",
+    ],
+    ids=[
+        "config-class",
+        "delivery-class",
+        "create-schema",
+        "out-schema",
+        "config-table",
+        "delivery-table",
+        "channel-enum",
+        "schema-secret-parts",
+        "schema-redaction-helper",
+    ],
+)
+def test_restored_channel_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/modules/channel/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application source restores legacy Channel definitions",
+    ):
+        _assert_application_does_not_restore_channel_definitions(tmp_path)
+
+
+def test_retained_channel_provider_and_target_references_pass_guard(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_retained_channel_provider.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        (
+            "from app.services.feishu_service import FeishuAPIError, feishu_service\n"
+            "from app.services.feishu_contact_search import search_feishu_contacts\n"
+            "from app.services.dingtalk_service import send_dingtalk_message\n"
+            "from app.services.dingtalk_token import dingtalk_token_manager\n"
+            "from app.services.dingtalk_reaction import add_thinking_reaction\n"
+            "from app.services.mcp_client import MCPClient\n"
+            "from app.modules.channel import __name__\n"
+        ),
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_channel_authorities(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:
