@@ -375,6 +375,39 @@ LEGACY_TENANT_KNOWLEDGE_PUBLICATION_REINTRODUCTIONS = [
     for identity in LEGACY_TENANT_KNOWLEDGE_PUBLICATION_IMPORT_IDENTITIES
     for representation in ("module", "package")
 ]
+LEGACY_SESSION_SUBSTRATE_IMPORT_IDENTITIES = (
+    Path("app/models/chat_session"),
+    Path("app/dao/chat_session_dao"),
+    Path("app/dao/chat_message_dao"),
+    Path("app/services/chat_session_service"),
+    Path("app/services/channel_session"),
+    Path("app/api/chat_sessions"),
+    Path("app/api/websocket"),
+)
+LEGACY_SESSION_SUBSTRATE_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_SESSION_SUBSTRATE_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_SESSION_SUBSTRATE_DAO_EXPORTS = (
+    "chat_session_dao",
+    "chat_message_dao",
+)
+LEGACY_SESSION_SUBSTRATE_FORBIDDEN_FACTS = {
+    Path("app/models/audit.py"): frozenset(
+        {
+            "class:ChatMessage",
+            "table:chat_messages",
+            "enum:chat_role_enum",
+        }
+    ),
+    Path("app/schemas/schemas.py"): frozenset(
+        {
+            "class:ChatMessageOut",
+            "class:ChatSend",
+        }
+    ),
+}
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1644,6 +1677,55 @@ def _assert_deleted_legacy_tenant_knowledge_publication_authority(
             raise DeletedAuthorityViolation(
                 "deleted legacy Tenant Knowledge publication authority package was "
                 f"reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_session_substrate_authorities(
+    backend_root: Path,
+) -> None:
+    for identity in LEGACY_SESSION_SUBSTRATE_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Session substrate authority module was "
+                f"reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Session substrate authority package was "
+                f"reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_session_substrate_dao_exports(
+    backend_root: Path,
+) -> None:
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Session substrate",
+        exports=LEGACY_SESSION_SUBSTRATE_DAO_EXPORTS,
+    )
+
+
+def _assert_mixed_owners_do_not_restore_session_substrate_facts(
+    backend_root: Path,
+) -> None:
+    for relative_path, forbidden_facts in (
+        LEGACY_SESSION_SUBSTRATE_FORBIDDEN_FACTS.items()
+    ):
+        source_path = backend_root / relative_path
+        if not source_path.is_file():
+            continue
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_facts = sorted(forbidden_facts & _source_contract_facts(tree))
+        if restored_facts:
+            raise DeletedAuthorityViolation(
+                "mixed retained owner restores legacy Session substrate facts: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
             )
 
 
@@ -4109,6 +4191,136 @@ def test_reintroduced_legacy_tenant_knowledge_publication_identity_fails_guard(
         ),
     ):
         _assert_deleted_legacy_tenant_knowledge_publication_authority(tmp_path)
+
+
+def test_legacy_session_substrate_authorities_are_absent() -> None:
+    _assert_deleted_legacy_session_substrate_authorities(BACKEND_ROOT)
+
+
+def test_legacy_session_substrate_dao_exports_are_absent() -> None:
+    _assert_deleted_legacy_session_substrate_dao_exports(BACKEND_ROOT)
+
+
+def test_mixed_owners_do_not_restore_session_substrate_facts() -> None:
+    _assert_mixed_owners_do_not_restore_session_substrate_facts(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_SESSION_SUBSTRATE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_SESSION_SUBSTRATE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_session_substrate_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Session substrate authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_session_substrate_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("export", LEGACY_SESSION_SUBSTRATE_DAO_EXPORTS)
+def test_reintroduced_legacy_session_substrate_dao_export_fails_guard(
+    tmp_path: Path,
+    export: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(f"__all__ = [{export!r}]\n", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Session substrate DAO package export was reintroduced",
+    ):
+        _assert_deleted_legacy_session_substrate_dao_exports(tmp_path)
+
+
+def test_dynamic_session_substrate_dao_export_hook_fails_guard(
+    tmp_path: Path,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(
+        "def __getattr__(name):\n    return object()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="app.dao package exports must be static",
+    ):
+        _assert_dao_package_exports_are_static(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "source"),
+    [
+        (Path("app/models/audit.py"), "class ChatMessage: ...\n"),
+        (
+            Path("app/models/audit.py"),
+            'class Legacy:\n    __tablename__ = "chat_messages"\n',
+        ),
+        (
+            Path("app/models/audit.py"),
+            'role = Enum("user", name="chat_role_enum")\n',
+        ),
+        (Path("app/schemas/schemas.py"), "class ChatMessageOut: ...\n"),
+        (Path("app/schemas/schemas.py"), "class ChatSend: ...\n"),
+    ],
+    ids=[
+        "chat-message-model",
+        "chat-messages-table",
+        "chat-role-enum",
+        "chat-message-out-schema",
+        "chat-send-schema",
+    ],
+)
+def test_restored_session_substrate_fact_fails_guard(
+    tmp_path: Path,
+    relative_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / relative_path
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="mixed retained owner restores legacy Session substrate facts",
+    ):
+        _assert_mixed_owners_do_not_restore_session_substrate_facts(tmp_path)
+
+
+def test_unrelated_audit_and_schema_facts_pass_session_substrate_guard(
+    tmp_path: Path,
+) -> None:
+    safe_sources = {
+        Path("app/models/audit.py"): "class AuditLog: ...\nclass EnterpriseInfo: ...\n",
+        Path("app/schemas/schemas.py"): "class AuditLogOut: ...\n",
+    }
+    for relative_path, source in safe_sources.items():
+        source_path = tmp_path / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source, encoding="utf-8")
+
+    _assert_mixed_owners_do_not_restore_session_substrate_facts(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:

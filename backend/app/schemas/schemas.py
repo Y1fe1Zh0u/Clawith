@@ -534,24 +534,6 @@ class EnterpriseInfoOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ─── Chat ───────────────────────────────────────────────
-
-class ChatMessageOut(BaseModel):
-    id: uuid.UUID
-    agent_id: uuid.UUID
-    user_id: uuid.UUID
-    role: str
-    content: str
-    thinking: str | None = None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class ChatSend(BaseModel):
-    content: str = Field(min_length=1)
-
-
 # ─── Audit Log ──────────────────────────────────────────
 
 class AuditLogOut(BaseModel):

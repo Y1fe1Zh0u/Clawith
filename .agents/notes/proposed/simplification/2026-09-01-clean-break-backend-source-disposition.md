@@ -427,6 +427,24 @@ The target owner is definitively `tenant_knowledge`, but its owner contract rema
 
 The deleted-authority guard makes `app.services.enterprise_sync` absent as both a module and a same-named package, with negative fixtures for both restoration forms. Mixed `enterprise.py` routes retain a dangling import until their later source-disposition category; that staged failure does not authorize restoring the publication adapter.
 
+The legacy direct Session substrate is removed as one complete authority category:
+
+- `backend/app/models/chat_session.py`
+- `backend/app/dao/chat_session_dao.py` and `backend/app/dao/chat_message_dao.py`, including both `app.dao` package exports
+- `backend/app/services/chat_session_service.py` and `backend/app/services/channel_session.py`
+- `backend/app/api/chat_sessions.py` and `backend/app/api/websocket.py`
+- the `ChatMessage` ORM declaration, `chat_messages` table mapping, and `chat_role_enum` declaration from the mixed `backend/app/models/audit.py`
+- `ChatMessageOut` and `ChatSend` from the mixed `backend/app/schemas/schemas.py`
+- `backend/tests/test_chat_session_dao.py`, `backend/tests/test_chat_session_service.py`, `backend/tests/test_chat_sessions_api.py`, and `backend/tests/test_channel_session.py`
+
+Together these sources owned the old mutable `ChatSession` and `ChatMessage` persistence, direct-session primary election and soft deletion, Channel conversation-to-session lookup, WebSocket intake, queued message execution, history reconstruction, checkpoint-driven streaming, direct Tool reconciliation, Session reply persistence, and the corresponding CRUD and transport payloads. Their tests protected only those legacy tables, services, routes, and WebSocket mechanics, so they are deleted rather than adapted. `ChatMessageOut` and `ChatSend` had no non-legacy Backend consumer at cutover.
+
+Direct Session remains a required S2 owner and product capability. Its approved target contract must introduce immutable human Session Input, cutoff, Main Run initiation or resume, and atomic Session Reply through the target Session, Run, Context, Permission, and transaction boundaries. This deletion neither selects the target schema or API nor extracts compatibility behavior from the old services.
+
+This minimum deletion preserves Group APIs and services, group realtime, generic Socket and realtime infrastructure, Channel protocol adapters and delivery outbox, Trigger Runtime, the independent Messages API, OKR, administration and maintenance scripts, every legacy Alembic revision, dependencies, Frontend, and the empty target `modules/session` package. Some retained production files and retained Group, Channel, Trigger, and OKR tests still import or refer to deleted `ChatSession`, `ChatMessage`, `channel_session`, or WebSocket identities. Those dangling references are deliberate source-disposition evidence for their later owner/category commits; they do not authorize restoring the old Session model, DAO, service, HTTP or WebSocket transport, payload schemas, table, enum, or a compatibility shim.
+
+The deleted-authority guard makes all seven old Session substrate import identities absent as modules and same-named packages, prevents static restoration of `chat_session_dao` and `chat_message_dao`, and relies on the repository-wide static `app.dao` rule to reject dynamic package export hooks. Structural guards reject restoration of `ChatMessage`, `chat_messages`, `chat_role_enum`, `ChatMessageOut`, and `ChatSend` in their retained mixed files. The guard deliberately does not scan ordinary Backend tests for all Session references because retained Group, Channel, Trigger, and OKR tests still document staged consumers. Fresh Session tests must exercise the approved target owner and assembled product-input path.
+
 ### Delete without porting
 
 The following behavior and its dedicated source, schema, tests, configuration, and dependencies are removed:

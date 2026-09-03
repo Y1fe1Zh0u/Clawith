@@ -1,10 +1,10 @@
-"""Audit log, chat message, and enterprise info models."""
+"""Audit log and enterprise info models."""
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func, text
-from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -25,38 +25,6 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     details: Mapped[dict] = mapped_column(JSON, default={})
     ip_address: Mapped[str | None] = mapped_column(String(50))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-
-
-class ChatMessage(Base):
-    """Message on the unified chat substrate."""
-
-    __tablename__ = "chat_messages"
-    __tenant_scoped__ = True
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
-    )
-    agent_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True, index=True
-    )
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
-    )
-    role: Mapped[str] = mapped_column(
-        Enum("user", "assistant", "system", "tool_call", name="chat_role_enum"),
-        nullable=False,
-    )
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    conversation_id: Mapped[str] = mapped_column(String(200), default="web", nullable=False, index=True)
-    # Participant identity (unified User/Agent identity)
-    participant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("participants.id"), nullable=True)
-    # Model thinking process
-    thinking: Mapped[str | None] = mapped_column(Text, nullable=True)
-    mentions: Mapped[list] = mapped_column(
-        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
