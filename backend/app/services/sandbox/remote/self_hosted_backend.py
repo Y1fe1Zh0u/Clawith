@@ -52,7 +52,10 @@ class SelfHostedBackend(BaseSandboxBackend):
         try:
             async with httpx.AsyncClient() as client:
                 # Try /v1/sandbox first (aio-sandbox), then fall back to /health
-                for endpoint in ["/v1/sandbox", "/health"]:
+                for probe, endpoint in (
+                    ("sandbox", "/v1/sandbox"),
+                    ("health", "/health"),
+                ):
                     check_url = self.api_url.split("/v1/")[0] + endpoint if "/v1/" in self.api_url else f"{self.api_url.rsplit('/', 1)[0]}/health"
                     try:
                         response = await client.get(check_url, timeout=5.0)
@@ -60,8 +63,8 @@ class SelfHostedBackend(BaseSandboxBackend):
                             return True
                     except Exception as exc:  # noqa: BLE001 -- external health probe
                         logger.debug(
-                            "[SelfHosted] Health probe failed endpoint={} error={}",
-                            check_url,
+                            "[SelfHosted] Health probe failed probe={} error={}",
+                            probe,
                             type(exc).__name__,
                         )
                         continue

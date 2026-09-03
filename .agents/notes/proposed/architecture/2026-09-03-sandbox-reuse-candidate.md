@@ -17,6 +17,7 @@ Retain Sandbox as a reuse candidate with these fixed behavioral invariants:
 - `merge` and `isolated_output` keep their existing publication paths, conflict modes, gateway callbacks, and publication-ownership checks;
 - execution leases keep the exact Tenant/Agent/Session key, NX acquisition, TTL, owner-checked renewal and release, heartbeat, publication window, and ownership-loss behavior;
 - remote provider errors keep their existing timeout, known failure, and unknown-outcome distinctions.
+- provider health diagnostics identify only the probe and exception type; configured URL userinfo, query, and fragment values are never logged.
 
 There is no current product, Tool, API, Runner, or application-composition entry that constructs these objects. Tests prove only the retained mechanics. A future owning contract must identify the product caller and lifecycle owner, provide decoded secrets and an owned Redis client explicitly, supply approved Workspace materialization and publication callbacks, define authorization and Tenant inputs, and verify the assembled entry path. It must not add a settings singleton, hidden `SECRET_KEY`, alternate execution path, or compatibility import.
 
@@ -33,6 +34,7 @@ The legacy implemented venue-ownership Note is archived because its `agent_tools
 ## Acceptance criteria
 
 - Sandbox imports no deleted Auth, DAO, global Redis-events, Workspace facade, or target Settings authority.
+- Provider health failures do not disclose configured URL credentials or query/fragment secrets.
 - The retained package and its tests pass Ruff and Pyright without file-level ignores.
 - Focused tests preserve the listed invariants and full Backend collection remains clean.
 - Future activation begins with an approved owner and assembled-path tests rather than restoring deleted entrypoints.
