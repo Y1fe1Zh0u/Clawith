@@ -758,6 +758,28 @@ LEGACY_RUN_SETTING_DAO_EXPORTS = ("agent_run_dao", "system_setting_dao")
 LEGACY_RUN_SETTING_FORBIDDEN_FACTS = frozenset(
     {"class:SystemSetting", "table:system_settings"}
 )
+LEGACY_CORE_COMPATIBILITY_IDENTITIES = (
+    Path("app/core/middleware"),
+    Path("app/core/permissions"),
+    Path("app/core/error_contract"),
+)
+LEGACY_CORE_COMPATIBILITY_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_CORE_COMPATIBILITY_IDENTITIES
+)
+LEGACY_ERROR_CONTRACT_TEST = Path("tests/test_error_contract.py")
+LEGACY_CORE_COMPATIBILITY_FORBIDDEN_FACTS = frozenset(
+    {
+        "class:RosterVisibility",
+        "class:TenantContextMiddleware",
+        "class:TraceIdMiddleware",
+        "function:build_visible_agents_query",
+        "function:can_manage_agent",
+        "function:can_use_agent",
+        "function:check_agent_access",
+        "function:register_error_handlers",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2981,6 +3003,51 @@ def _assert_application_does_not_restore_run_setting_facts(
         if restored:
             raise DeletedAuthorityViolation(
                 "application restores legacy Run/Settings persistence facts: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
+def _assert_deleted_core_compatibility_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_CORE_COMPATIBILITY_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy core compatibility module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy core compatibility package was reintroduced: {identity}"
+            )
+    if (backend_root / LEGACY_ERROR_CONTRACT_TEST).is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy HTTP error-contract test was reintroduced: {LEGACY_ERROR_CONTRACT_TEST}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_core_compatibility_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="core compatibility",
+        deleted_identities=LEGACY_CORE_COMPATIBILITY_DOTTED_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_core_compatibility_facts(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_CORE_COMPATIBILITY_FORBIDDEN_FACTS
+            & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application restores legacy core compatibility facts: "
                 f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
 
@@ -7913,6 +7980,86 @@ def test_restored_run_setting_fact_fails_guard(
     source_path.write_text(source, encoding="utf-8")
     with pytest.raises(DeletedAuthorityViolation, match="persistence facts"):
         _assert_application_does_not_restore_run_setting_facts(tmp_path)
+
+
+def test_legacy_core_compatibility_authorities_are_absent() -> None:
+    _assert_deleted_core_compatibility_authorities(BACKEND_ROOT)
+    _assert_tests_do_not_reference_deleted_core_compatibility_authorities(BACKEND_ROOT)
+    _assert_application_does_not_restore_core_compatibility_facts(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_CORE_COMPATIBILITY_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_core_compatibility_authority_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_core_compatibility_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_core_compatibility_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_CORE_COMPATIBILITY_DOTTED_IDENTITIES[0]
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_core_compatibility.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="compatibility authority"):
+        _assert_tests_do_not_reference_deleted_core_compatibility_authorities(tmp_path)
+
+
+def test_reintroduced_legacy_error_contract_test_fails_guard(tmp_path: Path) -> None:
+    test_path = tmp_path / LEGACY_ERROR_CONTRACT_TEST
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="test was reintroduced"):
+        _assert_deleted_core_compatibility_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class RosterVisibility: ...\n",
+        "class TenantContextMiddleware: ...\n",
+        "class TraceIdMiddleware: ...\n",
+        "def build_visible_agents_query(): ...\n",
+        "async def can_manage_agent(): ...\n",
+        "async def can_use_agent(): ...\n",
+        "async def check_agent_access(): ...\n",
+        "def register_error_handlers(): ...\n",
+    ],
+)
+def test_restored_core_compatibility_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/core/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="compatibility facts"):
+        _assert_application_does_not_restore_core_compatibility_facts(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
