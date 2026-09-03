@@ -477,6 +477,24 @@ LEGACY_TRIGGER_WEBHOOK_FORBIDDEN_DEFINITIONS = frozenset(
         "table:trigger_executions",
     }
 )
+LEGACY_HEARTBEAT_IMPORT_IDENTITIES = (
+    Path("app/services/heartbeat"),
+    Path("app/services/heartbeat_runtime"),
+    Path("app/scripts/migrate_legacy_heartbeat_template"),
+)
+LEGACY_HEARTBEAT_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_HEARTBEAT_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_HEARTBEAT_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_HEARTBEAT_IMPORT_IDENTITIES
+)
+LEGACY_HEARTBEAT_TEMPLATE_PATH = Path("agent_template/HEARTBEAT.md")
+LEGACY_HEARTBEAT_STAGED_TEST_REFERENCES = frozenset(
+    {Path("tests/test_okr_daily_collection_runtime.py")}
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1580,6 +1598,7 @@ def _assert_tests_do_not_reference_deleted_authorities(
     *,
     authority: str,
     deleted_identities: tuple[str, ...],
+    excluded_test_paths: frozenset[Path] = frozenset(),
 ) -> None:
     tests_root = backend_root / "tests"
     if not tests_root.is_dir():
@@ -1587,7 +1606,10 @@ def _assert_tests_do_not_reference_deleted_authorities(
 
     for source_path in sorted(tests_root.rglob("*.py")):
         relative_path = source_path.relative_to(backend_root)
-        if relative_path == DELETED_AUTHORITY_GUARD_TEST:
+        if (
+            relative_path == DELETED_AUTHORITY_GUARD_TEST
+            or relative_path in excluded_test_paths
+        ):
             continue
 
         tree = ast.parse(
@@ -1953,6 +1975,40 @@ def _assert_application_does_not_restore_trigger_webhook_definitions(
                 "application source restores legacy Trigger/Webhook definitions: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
+
+
+def _assert_deleted_legacy_heartbeat_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_HEARTBEAT_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Heartbeat authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Heartbeat authority package was reintroduced: "
+                f"{identity}"
+            )
+
+    template_path = backend_root / LEGACY_HEARTBEAT_TEMPLATE_PATH
+    if template_path.exists():
+        raise DeletedAuthorityViolation(
+            "deleted legacy Heartbeat template path was reintroduced: "
+            f"{LEGACY_HEARTBEAT_TEMPLATE_PATH}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_heartbeat_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Heartbeat",
+        deleted_identities=LEGACY_HEARTBEAT_DOTTED_IMPORT_IDENTITIES,
+        excluded_test_paths=LEGACY_HEARTBEAT_STAGED_TEST_REFERENCES,
+    )
 
 
 def _assert_deleted_legacy_autonomy_approval_authority(
@@ -4128,7 +4184,7 @@ def test_unrelated_dynamic_test_reference_passes_plaza_guard(tmp_path: Path) -> 
     test_path = tmp_path / "tests/test_unrelated_social_reference.py"
     test_path.parent.mkdir(parents=True)
     test_path.write_text(
-        'module = importlib.import_module("app.services.heartbeat")\n',
+        'module = importlib.import_module("app.modules.heartbeat")\n',
         encoding="utf-8",
     )
 
@@ -4845,8 +4901,6 @@ def test_restored_schedule_definition_fails_guard(
     [
         "from app.modules.trigger import __name__\n",
         "from app.modules.heartbeat import __name__\n",
-        "from app.services.heartbeat_runtime import enqueue_heartbeat_runtime\n",
-        "from app.services.heartbeat import heartbeat_loop\n",
         "from app.services.feishu_group_targets import resolve_feishu_group_target\n",
         "from app.services.business_calendar import is_business_day\n",
         "from app.services.timezone_utils import get_agent_timezone_sync\n",
@@ -4854,8 +4908,6 @@ def test_restored_schedule_definition_fails_guard(
     ids=[
         "target-trigger-module",
         "target-heartbeat-module",
-        "heartbeat-runtime",
-        "heartbeat-service",
         "feishu-group-targets",
         "business-calendar",
         "timezone-utils",
@@ -5037,8 +5089,6 @@ def test_restored_trigger_webhook_definition_fails_guard(
     [
         "from app.modules.trigger import __name__\n",
         "from app.modules.heartbeat import __name__\n",
-        "from app.services.heartbeat_runtime import enqueue_heartbeat_runtime\n",
-        "from app.services.heartbeat import heartbeat_loop\n",
         "from app.api.feishu import feishu_event_webhook\n",
         "from app.api.slack import slack_event_webhook\n",
         "from app.api.wecom import wecom_event_webhook\n",
@@ -5049,8 +5099,6 @@ def test_restored_trigger_webhook_definition_fails_guard(
     ids=[
         "target-trigger-module",
         "target-heartbeat-module",
-        "heartbeat-runtime",
-        "heartbeat-service",
         "feishu-channel-webhook",
         "slack-channel-webhook",
         "wecom-channel-webhook",
@@ -5084,6 +5132,144 @@ def test_target_trigger_heartbeat_and_channel_definitions_pass_guard(
         source_path.write_text(source, encoding="utf-8")
 
     _assert_application_does_not_restore_trigger_webhook_definitions(tmp_path)
+
+
+def test_legacy_heartbeat_authorities_are_absent() -> None:
+    _assert_deleted_legacy_heartbeat_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_heartbeat_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_heartbeat_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_HEARTBEAT_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_HEARTBEAT_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_heartbeat_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Heartbeat authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_heartbeat_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("representation", ["file", "directory"])
+def test_reintroduced_legacy_heartbeat_template_path_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    template_path = tmp_path / LEGACY_HEARTBEAT_TEMPLATE_PATH
+    template_path.parent.mkdir(parents=True, exist_ok=True)
+    if representation == "file":
+        template_path.write_text("legacy heartbeat", encoding="utf-8")
+    else:
+        template_path.mkdir()
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Heartbeat template path was reintroduced",
+    ):
+        _assert_deleted_legacy_heartbeat_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.services.heartbeat\n",
+        "from app.services.heartbeat_runtime import enqueue_heartbeat_runtime\n",
+        "from app.scripts import migrate_legacy_heartbeat_template\n",
+        'module = importlib.import_module("app.services.heartbeat")\n',
+        'monkeypatch.setattr("app.services.heartbeat_runtime.enqueue_heartbeat_runtime", fake)\n',
+        'target = "app.scripts.migrate_legacy_heartbeat_template.main"\n',
+    ],
+    ids=[
+        "heartbeat-service-import",
+        "heartbeat-runtime-import",
+        "heartbeat-script-import",
+        "dynamic-service-import",
+        "dotted-runtime-reference",
+        "dotted-script-reference",
+    ],
+)
+def test_backend_test_reference_of_deleted_heartbeat_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_heartbeat.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Heartbeat authority",
+    ):
+        _assert_tests_do_not_reference_deleted_heartbeat_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.modules.heartbeat import __name__\n",
+        "from app.services.sandbox.execution_lease import ExecutionLease\n",
+        "from app.services.workspace_locking import WorkspaceLockService\n",
+        'metric_name = "heartbeat_count"\n',
+        'task_name = "sandbox.heartbeat"\n',
+    ],
+    ids=[
+        "target-heartbeat-module",
+        "sandbox-execution-lease",
+        "workspace-lock-service",
+        "lock-heartbeat-count",
+        "sandbox-heartbeat-word",
+    ],
+)
+def test_retained_heartbeat_names_pass_legacy_heartbeat_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_retained_heartbeat_names.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_heartbeat_authorities(tmp_path)
+
+
+def test_staged_okr_heartbeat_reference_passes_until_okr_disposition(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_okr_daily_collection_runtime.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "from app.services.heartbeat import run_agent_oneshot\n",
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_heartbeat_authorities(tmp_path)
+
+
+def test_nonlegacy_heartbeat_template_path_passes_guard(tmp_path: Path) -> None:
+    template_path = tmp_path / "app/templates/HEARTBEAT.md"
+    template_path.parent.mkdir(parents=True)
+    template_path.write_text("target template inventory", encoding="utf-8")
+
+    _assert_deleted_legacy_heartbeat_authorities(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:
