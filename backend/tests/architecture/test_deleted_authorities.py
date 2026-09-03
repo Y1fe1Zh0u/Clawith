@@ -449,6 +449,34 @@ LEGACY_SCHEDULE_DEFINITION_ROOTS = (Path("app"),)
 LEGACY_SCHEDULE_FORBIDDEN_DEFINITIONS = frozenset(
     {"class:AgentSchedule", "table:agent_schedules"}
 )
+LEGACY_TRIGGER_WEBHOOK_IMPORT_IDENTITIES = (
+    Path("app/models/trigger"),
+    Path("app/models/trigger_execution"),
+    Path("app/dao/trigger_dao"),
+    Path("app/api/triggers"),
+    Path("app/api/webhooks"),
+    Path("app/services/trigger_daemon"),
+    Path("app/services/trigger_runtime"),
+)
+LEGACY_TRIGGER_WEBHOOK_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_TRIGGER_WEBHOOK_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_TRIGGER_WEBHOOK_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_TRIGGER_WEBHOOK_IMPORT_IDENTITIES
+)
+LEGACY_TRIGGER_DAO_EXPORT = "trigger_dao"
+LEGACY_TRIGGER_WEBHOOK_DEFINITION_ROOTS = (Path("app"),)
+LEGACY_TRIGGER_WEBHOOK_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "class:AgentTrigger",
+        "class:TriggerExecution",
+        "table:agent_triggers",
+        "table:trigger_executions",
+    }
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1861,6 +1889,68 @@ def _assert_application_does_not_restore_schedule_definitions(
         if restored_facts:
             raise DeletedAuthorityViolation(
                 "application source restores legacy Schedule definitions: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
+            )
+
+
+def _assert_deleted_legacy_trigger_webhook_authorities(
+    backend_root: Path,
+) -> None:
+    for identity in LEGACY_TRIGGER_WEBHOOK_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Trigger/Webhook authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Trigger/Webhook authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_deleted_legacy_trigger_dao_export(backend_root: Path) -> None:
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Trigger/Webhook",
+        exports=(LEGACY_TRIGGER_DAO_EXPORT,),
+    )
+
+
+def _assert_tests_do_not_reference_deleted_trigger_webhook_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Trigger/Webhook",
+        deleted_identities=LEGACY_TRIGGER_WEBHOOK_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_trigger_webhook_definitions(
+    backend_root: Path,
+) -> None:
+    source_paths: set[Path] = set()
+    for relative_root in LEGACY_TRIGGER_WEBHOOK_DEFINITION_ROOTS:
+        source_root = backend_root / relative_root
+        if source_root.is_dir():
+            source_paths.update(source_root.rglob("*.py"))
+
+    for source_path in sorted(source_paths):
+        relative_path = source_path.relative_to(backend_root)
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_facts = sorted(
+            LEGACY_TRIGGER_WEBHOOK_FORBIDDEN_DEFINITIONS
+            & _source_contract_facts(tree)
+        )
+        if restored_facts:
+            raise DeletedAuthorityViolation(
+                "application source restores legacy Trigger/Webhook definitions: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
 
@@ -4631,7 +4721,7 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
         "from app.services.storage_runtime.local import LocalStorageBackend\n",
         "from app.models.workspace import WorkspaceFileRevision\n",
         "from app.services.workspace_collaboration import content_hash\n",
-        "from app.services.trigger_runtime.intake import TriggerRuntimeIntake\n",
+        "from app.modules.trigger import __name__\n",
         "from app.api.messages import router\n",
     ],
     ids=[
@@ -4642,7 +4732,7 @@ def test_backend_test_dynamic_group_participant_reference_fails_guard(
         "storage-runtime",
         "workspace-model",
         "workspace-collaboration",
-        "trigger-runtime",
+        "target-trigger-module",
         "messages-api",
     ],
 )
@@ -4755,7 +4845,6 @@ def test_restored_schedule_definition_fails_guard(
     [
         "from app.modules.trigger import __name__\n",
         "from app.modules.heartbeat import __name__\n",
-        "from app.services.trigger_runtime.intake import TriggerRuntimeIntake\n",
         "from app.services.heartbeat_runtime import enqueue_heartbeat_runtime\n",
         "from app.services.heartbeat import heartbeat_loop\n",
         "from app.services.feishu_group_targets import resolve_feishu_group_target\n",
@@ -4765,7 +4854,6 @@ def test_restored_schedule_definition_fails_guard(
     ids=[
         "target-trigger-module",
         "target-heartbeat-module",
-        "trigger-runtime",
         "heartbeat-runtime",
         "heartbeat-service",
         "feishu-group-targets",
@@ -4788,9 +4876,7 @@ def test_target_trigger_and_heartbeat_definitions_pass_schedule_guard(
     tmp_path: Path,
 ) -> None:
     safe_sources = {
-        Path("app/modules/trigger/model.py"): (
-            'class AgentTrigger:\n    __tablename__ = "agent_triggers"\n'
-        ),
+        Path("app/modules/trigger/service.py"): "class TriggerPolicy: ...\n",
         Path("app/modules/heartbeat/service.py"): "class HeartbeatPolicy: ...\n",
     }
     for relative_path, source in safe_sources.items():
@@ -4799,6 +4885,205 @@ def test_target_trigger_and_heartbeat_definitions_pass_schedule_guard(
         source_path.write_text(source, encoding="utf-8")
 
     _assert_application_does_not_restore_schedule_definitions(tmp_path)
+
+
+def test_legacy_trigger_webhook_authorities_are_absent() -> None:
+    _assert_deleted_legacy_trigger_webhook_authorities(BACKEND_ROOT)
+
+
+def test_legacy_trigger_dao_export_is_absent() -> None:
+    _assert_deleted_legacy_trigger_dao_export(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_trigger_webhook_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_trigger_webhook_authorities(BACKEND_ROOT)
+
+
+def test_application_does_not_restore_legacy_trigger_webhook_definitions() -> None:
+    _assert_application_does_not_restore_trigger_webhook_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_TRIGGER_WEBHOOK_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_TRIGGER_WEBHOOK_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_trigger_webhook_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Trigger/Webhook authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_trigger_webhook_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.trigger_dao import trigger_dao\n",
+        "from app.dao.trigger_dao import trigger_dao as restored\n",
+        "trigger_dao = object()\n",
+        '__all__ = ["trigger_dao"]\n',
+        'globals()["trigger_dao"] = object()\n',
+    ],
+    ids=[
+        "direct-import",
+        "aliased-import",
+        "assignment-reexport",
+        "all-exposure",
+        "globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_trigger_dao_export_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Trigger/Webhook DAO package export was reintroduced",
+    ):
+        _assert_deleted_legacy_trigger_dao_export(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.trigger\n",
+        "from app.models.trigger_execution import TriggerExecution\n",
+        "from app.dao import trigger_dao\n",
+        "from app.api.triggers import router\n",
+        'module = importlib.import_module("app.api.webhooks")\n',
+        'monkeypatch.setattr("app.services.trigger_daemon._tick", fake)\n',
+        'target = "app.services.trigger_runtime.intake.TriggerRuntimeIntake"\n',
+    ],
+    ids=[
+        "trigger-model-import",
+        "execution-model-import",
+        "dao-package-import",
+        "trigger-api-import",
+        "dynamic-webhook-api-import",
+        "dotted-daemon-reference",
+        "dotted-runtime-reference",
+    ],
+)
+def test_backend_test_reference_of_deleted_trigger_webhook_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_trigger_webhook.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Trigger/Webhook authority",
+    ):
+        _assert_tests_do_not_reference_deleted_trigger_webhook_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class AgentTrigger: ...\n",
+        "class TriggerExecution: ...\n",
+        'class RenamedTrigger:\n    __tablename__ = "agent_triggers"\n',
+        'class RenamedExecution:\n    __tablename__ = "trigger_executions"\n',
+    ],
+    ids=[
+        "trigger-class-name",
+        "execution-class-name",
+        "trigger-table-name",
+        "execution-table-name",
+    ],
+)
+def test_restored_trigger_webhook_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/modules/trigger/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application source restores legacy Trigger/Webhook definitions",
+    ):
+        _assert_application_does_not_restore_trigger_webhook_definitions(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.modules.trigger import __name__\n",
+        "from app.modules.heartbeat import __name__\n",
+        "from app.services.heartbeat_runtime import enqueue_heartbeat_runtime\n",
+        "from app.services.heartbeat import heartbeat_loop\n",
+        "from app.api.feishu import feishu_event_webhook\n",
+        "from app.api.slack import slack_event_webhook\n",
+        "from app.api.wecom import wecom_event_webhook\n",
+        "from app.api.teams import teams_event_webhook\n",
+        "from app.api.whatsapp import whatsapp_event_webhook\n",
+        "from app.api.discord_bot import discord_interaction_webhook\n",
+    ],
+    ids=[
+        "target-trigger-module",
+        "target-heartbeat-module",
+        "heartbeat-runtime",
+        "heartbeat-service",
+        "feishu-channel-webhook",
+        "slack-channel-webhook",
+        "wecom-channel-webhook",
+        "teams-channel-webhook",
+        "whatsapp-channel-webhook",
+        "discord-channel-webhook",
+    ],
+)
+def test_retained_target_and_channel_reference_passes_trigger_webhook_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_retained_trigger_webhook_names.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_trigger_webhook_authorities(tmp_path)
+
+
+def test_target_trigger_heartbeat_and_channel_definitions_pass_guard(
+    tmp_path: Path,
+) -> None:
+    safe_sources = {
+        Path("app/modules/trigger/service.py"): "class TriggerPolicy: ...\n",
+        Path("app/modules/heartbeat/service.py"): "class HeartbeatPolicy: ...\n",
+        Path("app/api/feishu.py"): "def feishu_event_webhook(): ...\n",
+    }
+    for relative_path, source in safe_sources.items():
+        source_path = tmp_path / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source, encoding="utf-8")
+
+    _assert_application_does_not_restore_trigger_webhook_definitions(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:
