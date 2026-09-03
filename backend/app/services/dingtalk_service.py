@@ -27,7 +27,7 @@ async def get_dingtalk_access_token(app_id: str, app_secret: str) -> dict:
             else:
                 logger.error(f"[DingTalk] Failed to get access_token: {data}")
                 return {"errcode": data.get("errcode"), "errmsg": data.get("errmsg")}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- normalize every provider/decoding failure to the result contract
             logger.error(f"[DingTalk] Network error getting access_token: {e}")
             return {"errcode": -1, "errmsg": str(e)}
 
@@ -81,7 +81,7 @@ async def send_dingtalk_v1_robot_oto_message(
             else:
                 logger.error(f"[DingTalk] Failed to send v1.0 OTO message: {data}")
                 return {"errcode": resp.status_code, "errmsg": str(data)}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- normalize every provider/decoding failure to the result contract
             logger.error(f"[DingTalk] Network error sending v1.0 OTO message: {e}")
             return {"errcode": -1, "errmsg": str(e)}
 
@@ -120,7 +120,7 @@ async def send_dingtalk_corp_conversation(
             else:
                 logger.error(f"[DingTalk] Failed to send corp conversation: {data}")
                 return data
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- normalize every provider/decoding failure to the result contract
             logger.error(f"[DingTalk] Network error sending corp conversation: {e}")
             return {"errcode": -1, "errmsg": str(e)}
 
