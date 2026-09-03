@@ -832,6 +832,18 @@ LEGACY_SECURITY_DAO_FORBIDDEN_DEFINITIONS = frozenset(
         "function:verify_password_async",
     }
 )
+LEGACY_CORE_EVENTS_IDENTITY = Path("app/core/events")
+LEGACY_CORE_EVENTS_DOTTED_IDENTITY = (
+    LEGACY_CORE_EVENTS_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_CORE_EVENTS_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "assigned:_redis_client",
+        "function:close_redis",
+        "function:get_redis",
+        "function:publish_event",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -3201,6 +3213,45 @@ def _assert_application_does_not_restore_security_dao_definitions(
         if restored:
             raise DeletedAuthorityViolation(
                 "application restores legacy Security/DAO definitions: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
+def _assert_deleted_legacy_core_events_authority(backend_root: Path) -> None:
+    identity = LEGACY_CORE_EVENTS_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy core events module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy core events package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_core_events(backend_root: Path) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="core events",
+        deleted_identities=(LEGACY_CORE_EVENTS_DOTTED_IDENTITY,),
+    )
+
+
+def _assert_application_does_not_restore_core_events_definitions(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_CORE_EVENTS_FORBIDDEN_DEFINITIONS
+            & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application restores legacy core events definitions: "
                 f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
 
@@ -8254,7 +8305,6 @@ def test_adjacent_core_modules_pass_logging_config_identity_guard(
 ) -> None:
     for relative_path in (
         Path("app/core/email.py"),
-        Path("app/core/events.py"),
     ):
         source_path = tmp_path / relative_path
         source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -8286,7 +8336,6 @@ def test_backend_test_reference_of_deleted_logging_config_fails_guard(
     "test_source",
     [
         "from app.core.email import force_ipv4\n",
-        "from app.core.events import get_redis\n",
     ],
 )
 def test_adjacent_core_reference_passes_logging_config_test_guard(
@@ -8440,6 +8489,78 @@ def test_explicit_sandbox_secret_decoder_passes_security_dao_guard(
     )
     _assert_deleted_legacy_security_dao_authorities(tmp_path)
     _assert_application_does_not_restore_security_dao_definitions(tmp_path)
+
+
+def test_legacy_core_events_authority_is_absent() -> None:
+    _assert_deleted_legacy_core_events_authority(BACKEND_ROOT)
+    _assert_tests_do_not_reference_deleted_core_events(BACKEND_ROOT)
+    _assert_application_does_not_restore_core_events_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_legacy_core_events_identity_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_CORE_EVENTS_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_legacy_core_events_authority(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_core_events_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {LEGACY_CORE_EVENTS_DOTTED_IDENTITY}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{LEGACY_CORE_EVENTS_DOTTED_IDENTITY}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_core_events.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="core events authority"):
+        _assert_tests_do_not_reference_deleted_core_events(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "_redis_client = None\n",
+        "async def get_redis(): ...\n",
+        "async def publish_event(channel, data): ...\n",
+        "async def close_redis(): ...\n",
+    ],
+)
+def test_restored_core_events_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/infrastructure/restored_events.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="core events definitions"):
+        _assert_application_does_not_restore_core_events_definitions(tmp_path)
+
+
+def test_injected_sandbox_lease_redis_passes_core_events_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "app/services/sandbox/execution_lease.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "class SandboxLeaseRedis: ...\n",
+        encoding="utf-8",
+    )
+    _assert_deleted_legacy_core_events_authority(tmp_path)
+    _assert_application_does_not_restore_core_events_definitions(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
