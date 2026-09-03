@@ -407,6 +407,29 @@ LEGACY_SESSION_SUBSTRATE_FORBIDDEN_DEFINITIONS = frozenset(
         "class:ChatSend",
     }
 )
+LEGACY_GROUP_PARTICIPANT_IMPORT_IDENTITIES = (
+    Path("app/models/group"),
+    Path("app/models/participant"),
+    Path("app/dao/group_dao"),
+    Path("app/dao/participant_dao"),
+    Path("app/api/groups"),
+    Path("app/api/group_websocket"),
+    Path("app/services/group_chat_service"),
+    Path("app/services/group_message_service"),
+    Path("app/services/group_file_service"),
+    Path("app/services/group_realtime"),
+    Path("app/services/participant_identity"),
+)
+LEGACY_GROUP_PARTICIPANT_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_GROUP_PARTICIPANT_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_GROUP_PARTICIPANT_DAO_EXPORTS = ("group_dao", "participant_dao")
+LEGACY_GROUP_PARTICIPANT_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_GROUP_PARTICIPANT_IMPORT_IDENTITIES
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1732,6 +1755,44 @@ def _assert_model_schema_trees_do_not_restore_session_substrate_definitions(
                 "model or schema restores legacy Session substrate definitions: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
+
+
+def _assert_deleted_legacy_group_participant_authorities(
+    backend_root: Path,
+) -> None:
+    for identity in LEGACY_GROUP_PARTICIPANT_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Group/Participant authority module was "
+                f"reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Group/Participant authority package was "
+                f"reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_legacy_group_participant_dao_exports(
+    backend_root: Path,
+) -> None:
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="Group/Participant",
+        exports=LEGACY_GROUP_PARTICIPANT_DAO_EXPORTS,
+    )
+
+
+def _assert_tests_do_not_reference_deleted_group_participant_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Group/Participant",
+        deleted_identities=LEGACY_GROUP_PARTICIPANT_DOTTED_IMPORT_IDENTITIES,
+    )
 
 
 def _assert_deleted_legacy_autonomy_approval_authority(
@@ -4334,6 +4395,196 @@ def test_target_session_input_and_agent_reply_pass_session_substrate_guard(
     _assert_model_schema_trees_do_not_restore_session_substrate_definitions(
         tmp_path
     )
+
+
+def test_legacy_group_participant_authorities_are_absent() -> None:
+    _assert_deleted_legacy_group_participant_authorities(BACKEND_ROOT)
+
+
+def test_legacy_group_participant_dao_exports_are_absent() -> None:
+    _assert_deleted_legacy_group_participant_dao_exports(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_group_participant_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_group_participant_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_GROUP_PARTICIPANT_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_GROUP_PARTICIPANT_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_group_participant_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Group/Participant authority "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_group_participant_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.group_dao import group_dao\n",
+        "from app.dao.participant_dao import participant_dao as restored\n",
+        "group_dao = object()\n",
+        '__all__ = ["participant_dao"]\n',
+        'globals()["group_dao"] = object()\n',
+    ],
+    ids=[
+        "direct-import",
+        "aliased-import",
+        "assignment-reexport",
+        "all-exposure",
+        "globals-restoration",
+    ],
+)
+def test_reintroduced_legacy_group_participant_dao_export_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted legacy Group/Participant DAO package export was reintroduced",
+    ):
+        _assert_deleted_legacy_group_participant_dao_exports(tmp_path)
+
+
+def test_dynamic_group_participant_dao_export_hook_fails_guard(
+    tmp_path: Path,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(
+        "def __getattr__(name):\n    return object()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="app.dao package exports must be static",
+    ):
+        _assert_dao_package_exports_are_static(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.group\n",
+        "from app.models.participant import Participant\n",
+        "from app.dao import group_dao\n",
+        "from app.api.group_websocket import websocket_group_chat\n",
+        "from app.services.group_chat_service import GroupChatService\n",
+        "from app.services.participant_identity import get_or_create_user_participant\n",
+    ],
+    ids=[
+        "group-model-import",
+        "participant-model-symbol-import",
+        "dao-package-import",
+        "websocket-symbol-import",
+        "group-service-symbol-import",
+        "participant-service-symbol-import",
+    ],
+)
+def test_backend_test_static_group_participant_reference_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_group_participant.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Group/Participant authority",
+    ):
+        _assert_tests_do_not_reference_deleted_group_participant_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        'module = importlib.import_module("app.api.groups")\n',
+        'service_path = "app.services.group_message_service.send_group_message"\n',
+        'monkeypatch.setattr("app.services.group_realtime.publish_group_message_created", fake)\n',
+    ],
+    ids=[
+        "dynamic-api-import",
+        "dotted-service-reference",
+        "dotted-monkeypatch-reference",
+    ],
+)
+def test_backend_test_dynamic_group_participant_reference_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_group_participant_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Group/Participant authority",
+    ):
+        _assert_tests_do_not_reference_deleted_group_participant_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.services.channel_user_service import resolve_channel_user\n",
+        "from app.services.feishu_group_targets import sync_feishu_group_targets\n",
+        "from app.services.realtime import publish_event\n",
+        "from app.services.realtime_runtime.router import publish_realtime_event\n",
+        "from app.services.storage_runtime.local import LocalStorageBackend\n",
+        "from app.models.workspace import WorkspaceFileRevision\n",
+        "from app.services.workspace_collaboration import content_hash\n",
+        "from app.services.trigger_runtime.intake import TriggerRuntimeIntake\n",
+        "from app.api.messages import router\n",
+    ],
+    ids=[
+        "channel-user-service",
+        "feishu-group-targets",
+        "realtime-service",
+        "realtime-runtime",
+        "storage-runtime",
+        "workspace-model",
+        "workspace-collaboration",
+        "trigger-runtime",
+        "messages-api",
+    ],
+)
+def test_retained_group_adjacent_reference_passes_group_participant_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_retained_group_adjacent_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_group_participant_authorities(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:
