@@ -125,6 +125,14 @@ LEGACY_TOKEN_TRACKER_REINTRODUCTIONS = [
 LEGACY_TOKEN_TRACKER_DOTTED_IMPORT_IDENTITY = (
     LEGACY_TOKEN_TRACKER_IMPORT_IDENTITY.as_posix().replace("/", ".")
 )
+LEGACY_WECOM_SERVICE_IMPORT_IDENTITY = Path("app/services/wecom_service")
+LEGACY_WECOM_SERVICE_REINTRODUCTIONS = [
+    (LEGACY_WECOM_SERVICE_IMPORT_IDENTITY, representation)
+    for representation in ("module", "package")
+]
+LEGACY_WECOM_SERVICE_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_WECOM_SERVICE_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
 LEGACY_IDENTITY_TENANT_IMPORT_IDENTITIES = (
     Path("app/models/user"),
     Path("app/models/tenant"),
@@ -829,6 +837,30 @@ def _assert_tests_do_not_reference_deleted_token_tracker(
         backend_root,
         authority="Token Tracker",
         deleted_identities=(LEGACY_TOKEN_TRACKER_DOTTED_IMPORT_IDENTITY,),
+    )
+
+
+def _assert_deleted_legacy_wecom_service_authority(backend_root: Path) -> None:
+    identity = LEGACY_WECOM_SERVICE_IMPORT_IDENTITY
+    module = (backend_root / identity).with_suffix(".py")
+    package = backend_root / identity
+    if module.is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy WeCom service module was reintroduced: {identity}"
+        )
+    if package.is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy WeCom service package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_wecom_service(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="WeCom service",
+        deleted_identities=(LEGACY_WECOM_SERVICE_DOTTED_IMPORT_IDENTITY,),
     )
 
 
@@ -2139,6 +2171,14 @@ def test_backend_tests_do_not_reference_deleted_token_tracker() -> None:
     _assert_tests_do_not_reference_deleted_token_tracker(BACKEND_ROOT)
 
 
+def test_legacy_wecom_service_authority_is_absent() -> None:
+    _assert_deleted_legacy_wecom_service_authority(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_wecom_service() -> None:
+    _assert_tests_do_not_reference_deleted_wecom_service(BACKEND_ROOT)
+
+
 def test_legacy_identity_tenant_authorities_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_identity_tenant_authorities(BACKEND_ROOT)
 
@@ -2574,6 +2614,100 @@ def test_retained_token_reporting_reference_passes_token_tracker_guard(
     test_path.write_text(test_source, encoding="utf-8")
 
     _assert_tests_do_not_reference_deleted_token_tracker(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_WECOM_SERVICE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_WECOM_SERVICE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_wecom_service_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy WeCom service {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_wecom_service_authority(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.services.wecom_service\n",
+        "from app.services import wecom_service\n",
+        "from app.services.wecom_service import send_wecom_message\n",
+    ],
+    ids=["module-import", "package-import", "symbol-import"],
+)
+def test_backend_test_static_reference_to_wecom_service_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_wecom_service.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy WeCom service authority",
+    ):
+        _assert_tests_do_not_reference_deleted_wecom_service(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        'module = importlib.import_module("app.services.wecom_service")\n',
+        'sender_path = "app.services.wecom_service.send_wecom_message"\n',
+    ],
+    ids=["dynamic-module-import", "dotted-sender-reference"],
+)
+def test_backend_test_dynamic_reference_to_wecom_service_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_wecom_service_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy WeCom service authority",
+    ):
+        _assert_tests_do_not_reference_deleted_wecom_service(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.api.wecom import wecom_callback\n",
+        'stream_path = "app.services.wecom_stream.wecom_stream_manager"\n',
+    ],
+    ids=["wecom-api-static-import", "wecom-stream-dotted-reference"],
+)
+def test_active_wecom_reference_passes_deleted_wecom_service_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_active_wecom_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_wecom_service(tmp_path)
 
 
 @pytest.mark.parametrize(

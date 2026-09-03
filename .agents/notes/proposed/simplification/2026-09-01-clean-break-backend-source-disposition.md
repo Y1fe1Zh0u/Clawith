@@ -390,6 +390,16 @@ This minimum deletion preserves the `DailyTokenUsage` model, administrator repor
 
 The deleted-authority guard makes `app.services.token_tracker` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve references to `DailyTokenUsage` and administrator reporting.
 
+The dead standalone WeCom service is removed as its own minimum category:
+
+- `backend/app/services/wecom_service.py`
+
+The module implemented direct access-token retrieval and one text-message send call, but no current API, Channel adapter, package export, runtime path, or test imported either function. It did not participate in the active WeCom callback or stream-client paths. The unused facade is deleted rather than retained as a second apparent WeCom transport authority.
+
+This minimum deletion preserves `backend/app/api/wecom.py`, `backend/app/services/wecom_stream.py`, `backend/tests/test_wecom_channel_api.py`, `backend/tests/test_wecom_stream.py`, WeCom configuration and migration surfaces, Frontend, and every active Channel path. Their later Channel disposition remains independent and does not authorize restoring the dead access-token or send-message facade.
+
+The deleted-authority guard makes `app.services.wecom_service` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve static references to the active WeCom API and dotted references to `app.services.wecom_stream`.
+
 The legacy AgentBay authority is removed as its own minimum category:
 
 - `backend/app/api/agentbay_control.py`
