@@ -13,7 +13,6 @@ from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import make_msgid, parseaddr
-from typing import Optional
 
 from app.core.email import force_ipv4, send_smtp_email
 
@@ -152,7 +151,7 @@ async def send_email(
     to: str,
     subject: str,
     body: str,
-    cc: Optional[str] = None,
+    cc: str | None = None,
 ) -> str:
     """Send an email via SMTP.
 
@@ -177,7 +176,9 @@ async def send_email(
     if cc:
         msg["Cc"] = cc
     msg["Message-ID"] = make_msgid()
-    msg["Date"] = datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z")
+    msg["Date"] = datetime.now().strftime(  # noqa: DTZ005 -- preserve the existing local-time header
+        "%a, %d %b %Y %H:%M:%S %z"
+    )
 
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
@@ -201,14 +202,14 @@ async def send_email(
         return f"✅ Email sent to {to}" + (f" (CC: {cc})" if cc else "")
     except smtplib.SMTPAuthenticationError:
         return "❌ SMTP authentication failed. Please check your email address and authorization code."
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- the public adapter normalizes all SMTP failures
         return f"❌ Failed to send email: {str(e)[:200]}"
 
 
 async def read_emails(
     config: dict,
     limit: int = 10,
-    search: Optional[str] = None,
+    search: str | None = None,
     folder: str = "INBOX",
 ) -> str:
     """Read emails from IMAP mailbox.
@@ -286,7 +287,7 @@ async def read_emails(
         if "LOGIN" in err.upper() or "AUTH" in err.upper():
             return "❌ IMAP authentication failed. Please check your email address and authorization code."
         return f"❌ IMAP error: {err[:200]}"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- the public adapter normalizes all IMAP failures
         return f"❌ Failed to read emails: {str(e)[:200]}"
 
 
@@ -365,7 +366,7 @@ async def reply_email(
 
         return f"✅ Reply sent to {reply_msg['To']} (Subject: {reply_subject})"
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- the public adapter normalizes fetch and send failures
         return f"❌ Failed to reply: {str(e)[:200]}"
 
 
@@ -396,7 +397,7 @@ async def test_connection(config: dict) -> dict:
     except imaplib.IMAP4.error as e:
         result["ok"] = False
         result["imap"] = f"❌ IMAP failed: {str(e)[:150]}"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- connection tests report provider failures as data
         result["ok"] = False
         result["imap"] = f"❌ IMAP error: {str(e)[:150]}"
 
@@ -417,7 +418,7 @@ async def test_connection(config: dict) -> dict:
     except smtplib.SMTPAuthenticationError:
         result["ok"] = False
         result["smtp"] = "❌ SMTP authentication failed"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- connection tests report provider failures as data
         result["ok"] = False
         result["smtp"] = f"❌ SMTP error: {str(e)[:150]}"
 
