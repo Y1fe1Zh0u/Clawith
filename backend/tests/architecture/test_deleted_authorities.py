@@ -501,6 +501,15 @@ LEGACY_HEARTBEAT_SANDBOX_SOURCE = Path(
 LEGACY_HEARTBEAT_SANDBOX_FORBIDDEN_PATHS = frozenset(
     {"HEARTBEAT.md", "/HEARTBEAT.md"}
 )
+FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
+DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
+LEGACY_FEISHU_AUTHORITY_METHODS = frozenset(
+    {"get_app_access_token", "exchange_code_for_user", "login_or_register"}
+)
+LEGACY_FEISHU_CREDENTIAL_STATE = frozenset(
+    {"app_id", "app_secret", "_app_access_token"}
+)
+LEGACY_DINGTALK_STREAM_WRAPPERS = frozenset({"download_dingtalk_media"})
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -2037,6 +2046,129 @@ def _assert_tests_do_not_reference_deleted_heartbeat_authorities(
         deleted_identities=LEGACY_HEARTBEAT_DOTTED_IMPORT_IDENTITIES,
         excluded_test_paths=LEGACY_HEARTBEAT_STAGED_TEST_REFERENCES,
     )
+
+
+def _provider_transport_application_imports(tree: ast.Module) -> set[str]:
+    application_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "app" or alias.name.startswith("app.")
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level > 0:
+            prefix = "." * node.level
+            if node.module is None:
+                application_imports.update(
+                    f"{prefix}{alias.name}" for alias in node.names
+                )
+            else:
+                application_imports.add(f"{prefix}{node.module}")
+        elif node.module == "app":
+            application_imports.update(f"app.{alias.name}" for alias in node.names)
+        elif node.module is not None and node.module.startswith("app."):
+            application_imports.add(node.module)
+    return application_imports
+
+
+def _assert_channel_provider_transports_are_isolated(backend_root: Path) -> None:
+    feishu_source = backend_root / FEISHU_PROVIDER_TRANSPORT_SOURCE
+    if feishu_source.is_file():
+        tree = ast.parse(
+            feishu_source.read_text(encoding="utf-8"),
+            filename=str(feishu_source),
+        )
+        application_imports = _provider_transport_application_imports(tree)
+
+        feishu_class = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == "FeishuService"
+            ),
+            None,
+        )
+        restored_methods: list[str] = []
+        restored_state: list[str] = []
+        tenant_token_contract_valid = False
+        if feishu_class is not None:
+            restored_methods = sorted(
+                LEGACY_FEISHU_AUTHORITY_METHODS
+                & {
+                    node.name
+                    for node in feishu_class.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                }
+            )
+            restored_state = sorted(
+                LEGACY_FEISHU_CREDENTIAL_STATE
+                & {
+                    node.attr
+                    for node in ast.walk(feishu_class)
+                    if isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "self"
+                }
+            )
+            tenant_token_method = next(
+                (
+                    node
+                    for node in feishu_class.body
+                    if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "get_tenant_access_token"
+                ),
+                None,
+            )
+            if tenant_token_method is not None:
+                positional = tenant_token_method.args.posonlyargs + tenant_token_method.args.args
+                required_count = len(positional) - len(tenant_token_method.args.defaults)
+                required_names = {argument.arg for argument in positional[:required_count]}
+                tenant_token_contract_valid = {"app_id", "app_secret"} <= required_names
+
+        violations = []
+        if application_imports:
+            violations.append(f"imports={','.join(sorted(application_imports))}")
+        if restored_methods:
+            violations.append(f"methods={','.join(restored_methods)}")
+        if restored_state:
+            violations.append(f"state={','.join(restored_state)}")
+        if not tenant_token_contract_valid:
+            violations.append("get_tenant_access_token must require app_id and app_secret")
+        if violations:
+            raise DeletedAuthorityViolation(
+                "Feishu provider transport restores legacy auth or credential authority: "
+                + "; ".join(violations)
+            )
+
+    dingtalk_source = backend_root / DINGTALK_PROVIDER_TRANSPORT_SOURCE
+    if not dingtalk_source.is_file():
+        return
+    tree = ast.parse(
+        dingtalk_source.read_text(encoding="utf-8"),
+        filename=str(dingtalk_source),
+    )
+    application_imports = _provider_transport_application_imports(tree)
+    restored_wrappers = sorted(
+        LEGACY_DINGTALK_STREAM_WRAPPERS
+        & {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+    )
+    violations = []
+    if application_imports:
+        violations.append(f"imports={','.join(sorted(application_imports))}")
+    if restored_wrappers:
+        violations.append(f"wrappers={','.join(restored_wrappers)}")
+    if violations:
+        raise DeletedAuthorityViolation(
+            "DingTalk provider transport restores application authority or stream wrapper: "
+            + "; ".join(violations)
+        )
 
 
 def _assert_deleted_legacy_autonomy_approval_authority(
@@ -5320,6 +5452,190 @@ def test_nonlegacy_heartbeat_template_path_passes_guard(tmp_path: Path) -> None:
     template_path.write_text("target template inventory", encoding="utf-8")
 
     _assert_deleted_legacy_heartbeat_authorities(tmp_path)
+
+
+def test_channel_provider_transports_are_isolated_from_legacy_authorities() -> None:
+    _assert_channel_provider_transports_are_isolated(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("feishu_source", "expected_detail"),
+    [
+        ("from app.config import get_settings\n", "imports=app.config"),
+        ("from app.core.security import create_access_token\n", "imports=app.core.security"),
+        ("from app.dao import query_dao\n", "imports=app.dao"),
+        ("from app.models.identity import IdentityProvider\n", "imports=app.models.identity"),
+        ("from app.models.user import User\n", "imports=app.models.user"),
+        ("from app.models.org import OrgMember\n", "imports=app.models.org"),
+        (
+            "from app.services.registration_service import registration_service\n",
+            "imports=app.services.registration_service",
+        ),
+        ("from app import config\n", "imports=app.config"),
+        ("from . import channel_session\n", "imports=.channel_session"),
+        ("from ..models import user\n", "imports=..models"),
+        (
+            (
+                "class FeishuService:\n"
+                "    async def get_app_access_token(self): ...\n"
+                "    async def get_tenant_access_token(self, app_id, app_secret): ...\n"
+            ),
+            "methods=get_app_access_token",
+        ),
+        (
+            (
+                "class FeishuService:\n"
+                "    def __init__(self): self.app_secret = 'secret'\n"
+                "    async def get_tenant_access_token(self, app_id, app_secret): ...\n"
+            ),
+            "state=app_secret",
+        ),
+        (
+            (
+                "class FeishuService:\n"
+                "    async def get_tenant_access_token(self, app_id=None, app_secret=None): ...\n"
+            ),
+            "must require app_id and app_secret",
+        ),
+    ],
+    ids=[
+        "config-import",
+        "security-import",
+        "dao-import",
+        "identity-provider-import",
+        "user-import",
+        "organization-import",
+        "registration-service-import",
+        "package-config-import",
+        "relative-sibling-import",
+        "relative-parent-import",
+        "legacy-app-token-method",
+        "default-credential-state",
+        "optional-tenant-token-credentials",
+    ],
+)
+def test_restored_feishu_auth_or_credential_authority_fails_guard(
+    tmp_path: Path,
+    feishu_source: str,
+    expected_detail: str,
+) -> None:
+    source_path = tmp_path / FEISHU_PROVIDER_TRANSPORT_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(feishu_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="Feishu provider transport restores legacy auth or credential authority",
+    ) as raised:
+        _assert_channel_provider_transports_are_isolated(tmp_path)
+
+    assert expected_detail in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    sorted(LEGACY_FEISHU_AUTHORITY_METHODS - {"get_app_access_token"}),
+)
+def test_restored_feishu_identity_method_fails_provider_transport_guard(
+    tmp_path: Path,
+    method_name: str,
+) -> None:
+    source_path = tmp_path / FEISHU_PROVIDER_TRANSPORT_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        (
+            "class FeishuService:\n"
+            "    async def get_tenant_access_token(self, app_id, app_secret): ...\n"
+            f"    async def {method_name}(self): ...\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeletedAuthorityViolation, match=f"methods={method_name}"):
+        _assert_channel_provider_transports_are_isolated(tmp_path)
+
+
+def test_restored_dingtalk_stream_wrapper_fails_provider_transport_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / DINGTALK_PROVIDER_TRANSPORT_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "async def download_dingtalk_media(app_id, app_secret, download_code): ...\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="DingTalk provider transport restores application authority or stream wrapper",
+    ):
+        _assert_channel_provider_transports_are_isolated(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("dingtalk_source", "expected_detail"),
+    [
+        (
+            "from app.services import dingtalk_stream\n",
+            "imports=app.services",
+        ),
+        ("from . import channel_session\n", "imports=.channel_session"),
+        ("from ..models import user\n", "imports=..models"),
+    ],
+    ids=["application-import", "relative-sibling-import", "relative-parent-import"],
+)
+def test_restored_dingtalk_application_import_fails_provider_transport_guard(
+    tmp_path: Path,
+    dingtalk_source: str,
+    expected_detail: str,
+) -> None:
+    feishu_source = tmp_path / FEISHU_PROVIDER_TRANSPORT_SOURCE
+    feishu_source.parent.mkdir(parents=True)
+    feishu_source.write_text(
+        "class FeishuService:\n"
+        "    async def get_tenant_access_token(self, app_id, app_secret): ...\n",
+        encoding="utf-8",
+    )
+    dingtalk_path = tmp_path / DINGTALK_PROVIDER_TRANSPORT_SOURCE
+    dingtalk_path.write_text(dingtalk_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="DingTalk provider transport restores application authority or stream wrapper",
+    ) as raised:
+        _assert_channel_provider_transports_are_isolated(tmp_path)
+
+    assert expected_detail in str(raised.value)
+
+
+def test_explicit_provider_operations_pass_channel_transport_guard(tmp_path: Path) -> None:
+    feishu_source = tmp_path / FEISHU_PROVIDER_TRANSPORT_SOURCE
+    feishu_source.parent.mkdir(parents=True)
+    feishu_source.write_text(
+        (
+            "import httpx\n"
+            "from loguru import logger\n"
+            "import lark_oapi\n"
+            "class FeishuService:\n"
+            "    async def get_tenant_access_token(self, app_id, app_secret): ...\n"
+            "    async def send_message(self, app_id, app_secret): ...\n"
+            "    async def create_approval_instance(self, app_id, app_secret): ...\n"
+        ),
+        encoding="utf-8",
+    )
+    dingtalk_source = tmp_path / DINGTALK_PROVIDER_TRANSPORT_SOURCE
+    dingtalk_source.parent.mkdir(parents=True, exist_ok=True)
+    dingtalk_source.write_text(
+        (
+            "import json\n"
+            "import httpx\n"
+            "from loguru import logger\n"
+            "async def send_dingtalk_message(app_id, app_secret, user_id, message): ...\n"
+        ),
+        encoding="utf-8",
+    )
+
+    _assert_channel_provider_transports_are_isolated(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:
