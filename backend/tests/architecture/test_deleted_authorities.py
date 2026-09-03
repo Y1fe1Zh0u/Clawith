@@ -607,6 +607,20 @@ LEGACY_ADVANCED_API_FORBIDDEN_FACTS = frozenset(
         "route:POST:/templates",
     }
 )
+LEGACY_ACTIVITY_API_IMPORT_IDENTITY = Path("app/api/activity")
+LEGACY_ACTIVITY_API_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_ACTIVITY_API_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_ACTIVITY_API_FORBIDDEN_FACTS = frozenset(
+    {
+        "function:get_agent_activity",
+        "function:get_conversation_messages",
+        "function:list_conversations",
+        "route:GET:/agents/{agent_id}/activity",
+        "route:GET:/agents/{agent_id}/chat-history/conversations",
+        "route:GET:/agents/{agent_id}/chat-history/{conv_id:path}",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2432,6 +2446,46 @@ def _assert_application_apis_do_not_restore_legacy_advanced_facts(
             raise DeletedAuthorityViolation(
                 "application API restores legacy advanced facts: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
+            )
+
+
+def _assert_deleted_legacy_activity_api(backend_root: Path) -> None:
+    identity = LEGACY_ACTIVITY_API_IMPORT_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy Activity API module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy Activity API package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_activity_api(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Activity API",
+        deleted_identities=(LEGACY_ACTIVITY_API_DOTTED_IMPORT_IDENTITY,),
+    )
+
+
+def _assert_application_apis_do_not_restore_legacy_activity_facts(
+    backend_root: Path,
+) -> None:
+    api_root = backend_root / "app/api"
+    if not api_root.is_dir():
+        return
+    for source_path in sorted(api_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_ACTIVITY_API_FORBIDDEN_FACTS & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application API restores legacy Activity transport facts: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
 
 
@@ -6493,6 +6547,85 @@ def test_backend_test_reference_of_deleted_advanced_api_fails_guard(
         match="test references deleted legacy advanced API authority",
     ):
         _assert_tests_do_not_reference_deleted_advanced_api(tmp_path)
+
+
+def test_legacy_activity_api_is_absent() -> None:
+    _assert_deleted_legacy_activity_api(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_activity_api() -> None:
+    _assert_tests_do_not_reference_deleted_activity_api(BACKEND_ROOT)
+
+
+def test_application_apis_do_not_restore_legacy_activity_facts() -> None:
+    _assert_application_apis_do_not_restore_legacy_activity_facts(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_legacy_activity_api_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_ACTIVITY_API_IMPORT_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Activity API {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_activity_api(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_activity_api_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {LEGACY_ACTIVITY_API_DOTTED_IMPORT_IDENTITY}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{LEGACY_ACTIVITY_API_DOTTED_IMPORT_IDENTITY}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_activity_api.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Activity API authority",
+    ):
+        _assert_tests_do_not_reference_deleted_activity_api(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "async def get_agent_activity(): ...\n",
+        "async def list_conversations(): ...\n",
+        "async def get_conversation_messages(): ...\n",
+        '@router.get("/agents/{agent_id}/activity")\nasync def restored(): ...\n',
+        '@router.get("/agents/{agent_id}/chat-history/conversations")\nasync def restored(): ...\n',
+        '@router.get("/agents/{agent_id}/chat-history/{conv_id:path}")\nasync def restored(): ...\n',
+    ],
+)
+def test_restored_activity_transport_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/api/restored_activity.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application API restores legacy Activity transport facts",
+    ):
+        _assert_application_apis_do_not_restore_legacy_activity_facts(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
