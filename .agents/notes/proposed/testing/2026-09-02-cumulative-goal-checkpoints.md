@@ -1,6 +1,6 @@
 # Agent Note: Cumulative Goal Checkpoints for the Backend Rewrite
 
-Status: proposed — the tracked checkpoint contract exists, while most Goal receipts and later E2E fixtures do not yet exist
+Status: proposed — the tracked contract and G001/G002 evidence exist, while later Goal receipts and E2E fixtures do not yet exist
 
 ## Problem
 
@@ -15,6 +15,8 @@ The E2E boundary advances monotonically. G000 is the planning gate. G001 validat
 G003 registers the complete S0/S1 schema roster. Its dependency-ordered contract approval roster is `identity_tenant`, `credential`, Model, Agent, Permission, Audit, Workspace, Tool, Capability Market, Run, and Context. Workspace, Tool, and Capability Market are contract-only transitive prerequisites for Run and Context; their schema and services remain G004. G003's service/API implementation roster remains `identity_tenant`, `credential`, Model configuration, `agent`, `permission`, and `audit`; deferred Run and Context bring contract and schema only, and their services remain G005. G004 registers the complete S2 schema roster and adds contract approvals only for `session`, `a2a`, `group`, `trigger`, `heartbeat`, and `channel`, because the first three S2 owners carry forward from G003. Its service implementation roster remains Workspace, Tool, Capability Market, and Model execution; the six deferred product-input owners bring contract and schema only, and their services/APIs remain G006. Each new owner approval is a separate receipt-guarded mutation in dependency-safe owner-DAG order.
 
 G001 uses repository commands to validate the actual 401-row disposition state with zero unreviewed or missing dispositions, governance, the owner DAG/wave roster, product roster and approved linkage, the strict load profile, and the immutable reference. Passing tests do not substitute for these current ledger, profile, and reference checks. Every validation ID has one exact command and artifact path. Shell composition, unknown scripts, alternate whitespace, filesystem writes, Alembic upgrade, reference binding, and build/approval/transition/release commands are outside the repeatable validation language.
+
+The tracked `backend/artifacts/rewrite/G001/` and `backend/artifacts/rewrite/G002/` files record the first completed cumulative checkpoints. They bind the exact commands, source commit, time, exit status, and bounded result summary. They are point-in-time evidence rather than permanent health claims; any later source change must rerun the affected cumulative gates and replace the evidence in a new commit instead of treating the old result as current.
 
 G005 also requires an adversarial execution-scheduler test. After each bounded Model Step or bounded Tool batch, a still-runnable Run releases its scarce execution slot and re-enters the in-memory Tenant-then-Agent scheduler. With 50 continuously runnable, nonterminating Tenant A Runs occupying all initial slots, an eligible Tenant B Run obtains its next Model Step after at most one consecutive eligible-Tenant skip, while FIFO remains per Agent. Cancellation or failure removes the Run and releases capacity. The test does not use the initial admission queue as a substitute and does not introduce a persisted queue, checkpoint, durable scheduler state, or whole-Run limit.
 
@@ -50,4 +52,4 @@ This is safe for validation commands but unsafe for contract approvals, coverage
 
 ## Risks and open evidence
 
-The manifest names fixtures and receipts that later Goals must create; their presence in the contract is not evidence that those tests ran or that E2E is currently available. The tracked validator proves only governance consistency. Each Goal still needs the fresh command output, service fixtures, database state, and receipt artifacts named by its gate. The live `.omx` plans and Ultragoal files mirror this tracked authority for execution convenience but remain ignored, non-authoritative runtime artifacts.
+G001 and G002 now have tracked checkpoint evidence. The manifest still names fixtures and receipts that G003-G009 must create; their presence in the contract is not evidence that those tests ran or that E2E is currently available. The tracked validator proves only governance consistency. Each later Goal still needs the fresh command output, service fixtures, database state, and receipt artifacts named by its gate. The live `.omx` plans and Ultragoal files mirror this tracked authority for execution convenience but remain ignored, non-authoritative runtime artifacts.
