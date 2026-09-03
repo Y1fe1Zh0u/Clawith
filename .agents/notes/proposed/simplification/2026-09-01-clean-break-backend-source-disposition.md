@@ -717,9 +717,11 @@ The old `app/services/agent_runtime/` package is not incrementally converted. Ne
 
 The following implementations carry useful bounded behavior and should be evaluated for extraction instead of rewritten automatically:
 
+The retained Sandbox package has no current product, Tool, API, Runner, or application-composition entry. It is a tested reuse candidate, not an active target capability. The stale implemented venue-ownership Note is archived because its old `agent_tools` entry and formatter no longer exist; `2026-09-03-sandbox-reuse-candidate.md` records the preserved mechanics and the explicit future owner, secret, Redis, Workspace, authorization, and assembled-entry requirements.
+
 | Reusable capability | Candidate source | Required adaptation |
 |---|---|---|
-| Sandbox providers and isolation | `app/services/sandbox/` including local Docker/subprocess and remote providers | keep Sandbox as a separate execution venue; remove Runtime-specific leases or identity assumptions that do not match new Run scope |
+| Sandbox providers and isolation | `app/services/sandbox/` including local Docker/subprocess and remote providers | preserve the tested venue, fallback, session, lease, isolation, and publication mechanics; activate them only through a reviewed owner with explicit dependencies and assembled-path tests |
 | Local and S3 object operations | `app/infrastructure/object_storage/local.py`, `s3.py`, and infrastructure atomicity tests | expose only through the new Workspace owner; legacy facades, fallback, and product path helpers are removed |
 | Document and text conversion | `document_conversion/` and `text_extractor.py` | register reviewed operations as ordinary Tools with bounded results; the orphan vision injection facade is deleted |
 | Provider HTTP and multimodal encoding | individually named functions recovered from Git history for the former `app/services/llm/client.py`, `multimodal_content.py`, and narrow utilities | review and test each recovered function behind the target Provider Adapter; the old package and `llm/caller.py` are never restored |

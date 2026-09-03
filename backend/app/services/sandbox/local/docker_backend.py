@@ -77,7 +77,7 @@ class DockerBackend(BaseSandboxBackend):
         try:
             self.client.ping()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 -- health normalizes Docker SDK failures.
             return False
 
     async def execute(
@@ -152,7 +152,7 @@ class DockerBackend(BaseSandboxBackend):
             # Pull image if needed
             try:
                 self.client.images.get(image)
-            except Exception:
+            except Exception:  # noqa: BLE001 -- any SDK lookup miss triggers pull.
                 # Image not found, pull it
                 self.client.images.pull(image)
 
@@ -190,7 +190,7 @@ class DockerBackend(BaseSandboxBackend):
                 error=None if exit_code == 0 else f"Exit code: {exit_code}"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- Docker failures become results.
             duration_ms = int((time.time() - start_time) * 1000)
             error_msg = str(e)
             logger.exception("[Docker] Execution error")
@@ -218,5 +218,5 @@ class DockerBackend(BaseSandboxBackend):
             if container is not None:
                 try:
                     container.remove(force=True)
-                except Exception:
+                except Exception:  # noqa: BLE001 -- best-effort SDK cleanup.
                     logger.warning("[Docker] Failed to remove execution container")

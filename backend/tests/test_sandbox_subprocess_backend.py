@@ -94,6 +94,16 @@ async def test_workspace_venv_uses_async_subprocess(monkeypatch, tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_subprocess_health_normalizes_unexpected_start_failure(monkeypatch) -> None:
+    async def fail_start(*_args, **_kwargs):
+        raise RuntimeError("unexpected subprocess failure")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_start)
+
+    assert await SubprocessBackend(SandboxConfig()).health_check() is False
+
+
+@pytest.mark.asyncio
 async def test_workspace_venv_timeout_terminates_child(monkeypatch, tmp_path: Path) -> None:
     terminated: list[int] = []
 
@@ -333,6 +343,67 @@ async def test_persistent_bwrap_session_is_reused_for_same_agent_loop(
 
 
 @pytest.mark.asyncio
+async def test_output_callback_failure_preserves_persistent_execution_result(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    token = "fixedtoken"
+    temp_path = tmp_path / "workspace" / ".tmp"
+    temp_path.mkdir(parents=True)
+    (temp_path / f"_exec_stdout_{token}").write_text("hello", encoding="utf-8")
+    warnings: list[tuple[object, ...]] = []
+
+    class FakeStdin:
+        def write(self, _data: bytes) -> None:
+            return None
+
+        async def drain(self) -> None:
+            return None
+
+    class FakeStdout:
+        async def readline(self) -> bytes:
+            return f"{subprocess_backend._BWRAP_DONE_PREFIX}{token}:0\n".encode()
+
+    class FakeStderr:
+        async def read(self) -> bytes:
+            return b""
+
+    async def reject_output(_text: str, _label: str) -> None:
+        raise RuntimeError("callback failed")
+
+    monkeypatch.setattr(
+        subprocess_backend.uuid,
+        "uuid4",
+        lambda: SimpleNamespace(hex=token),
+    )
+    monkeypatch.setattr(
+        subprocess_backend.logger,
+        "warning",
+        lambda *args: warnings.append(args),
+    )
+    session = SimpleNamespace(
+        staging_path=tmp_path,
+        process=SimpleNamespace(
+            stdin=FakeStdin(),
+            stdout=FakeStdout(),
+            stderr=FakeStderr(),
+        ),
+    )
+
+    result = await SubprocessBackend(SandboxConfig())._run_in_persistent_session(
+        session,  # type: ignore[arg-type]
+        code="print('hello')",
+        language="python",
+        timeout=1,
+        on_output=reject_output,
+    )
+
+    assert result == (0, "hello", "", False)
+    assert warnings
+    assert warnings[0][0] == "[Subprocess] Final output callback failed stream={} error={}"
+
+
+@pytest.mark.asyncio
 async def test_close_subprocess_sandbox_run_releases_process_and_workspace(monkeypatch) -> None:
     closed = []
 
@@ -348,6 +419,33 @@ async def test_close_subprocess_sandbox_run_releases_process_and_workspace(monke
     await close_subprocess_sandbox_run("run-1")
 
     assert closed == [("process", "run-1"), ("workspace", "run-1")]
+
+
+@pytest.mark.asyncio
+async def test_close_run_releases_workspace_after_process_cleanup_failure(
+    monkeypatch,
+) -> None:
+    closed: list[str] = []
+    logged: list[str] = []
+
+    async def close_process(_run_id: str) -> None:
+        raise RuntimeError("process cleanup failed")
+
+    async def close_workspace(run_id: str) -> None:
+        closed.append(run_id)
+
+    monkeypatch.setattr(SubprocessBackend, "close_run", close_process)
+    monkeypatch.setattr(subprocess_backend, "close_run_workspace", close_workspace)
+    monkeypatch.setattr(
+        subprocess_backend.logger,
+        "exception",
+        lambda message, *_args: logged.append(message),
+    )
+
+    await close_subprocess_sandbox_run("run-1")
+
+    assert closed == ["run-1"]
+    assert logged == ["[Subprocess] Failed to close Agent-loop sandbox for run {}"]
 
 
 def test_sandbox_config_proxy_parsing() -> None:

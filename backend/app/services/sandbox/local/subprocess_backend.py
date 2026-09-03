@@ -10,6 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from loguru import logger
 
@@ -168,7 +169,7 @@ class SubprocessBackend(BaseSandboxBackend):
 
     name = "subprocess"
     _bwrap_missing_warned = False
-    _run_sessions: dict[str, _PersistentBwrapSession] = {}
+    _run_sessions: ClassVar[dict[str, _PersistentBwrapSession]] = {}
 
     def __init__(self, config: SandboxConfig):
         self.config = config
@@ -182,15 +183,17 @@ class SubprocessBackend(BaseSandboxBackend):
         session.pip_stop_event.set()
         try:
             await session.pip_watcher_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        except asyncio.CancelledError:
+            logger.debug("[Subprocess] Pip watcher cancelled during Run cleanup")
+        except Exception:  # noqa: BLE001 -- cleanup retains process ownership.
+            logger.exception("[Subprocess] Pip watcher failed during Run cleanup")
         if session.process.returncode is None:
             try:
                 if session.process.stdin is not None:
                     session.process.stdin.write(b"exit\n")
                     await session.process.stdin.drain()
                 await asyncio.wait_for(session.process.wait(), timeout=2)
-            except (asyncio.TimeoutError, BrokenPipeError, ConnectionResetError):
+            except (TimeoutError, BrokenPipeError, ConnectionResetError):
                 backend = cls(SandboxConfig())
                 await backend._terminate_and_reap_process(session.process)
         session.temp_dir.cleanup()
@@ -270,7 +273,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 timeout=PROCESS_TERMINATION_GRACE_SECONDS,
             )
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         try:
@@ -299,7 +302,7 @@ class SubprocessBackend(BaseSandboxBackend):
                     proc.communicate(),
                     timeout=VENV_CREATION_TIMEOUT_SECONDS,
                 )
-            except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            except (TimeoutError, asyncio.CancelledError) as exc:
                 if proc.returncode is None:
                     await self._terminate_and_reap_process(proc)
                 if isinstance(exc, asyncio.CancelledError):
@@ -379,25 +382,25 @@ class SubprocessBackend(BaseSandboxBackend):
                 resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
                 if hasattr(resource, "RLIMIT_CORE"):
                     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-            except Exception as exc:
+            except (ImportError, OSError, OverflowError, ValueError) as exc:
                 logger.warning(f"[Subprocess] Failed to apply resource limits: {exc}")
 
             if hasattr(os, "setgid"):
                 try:
                     os.setgid(os.getgid())
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("[Subprocess] setgid unchanged error={}", type(exc).__name__)
             if hasattr(os, "setuid"):
                 try:
                     os.setuid(os.getuid())
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("[Subprocess] setuid unchanged error={}", type(exc).__name__)
 
             if hasattr(os, "chroot") and os.geteuid() == 0:
                 try:
                     os.chroot(work_path)
                     os.chdir("/")
-                except Exception as exc:
+                except OSError as exc:
                     logger.warning(f"[Subprocess] Failed to chroot into workspace: {exc}")
 
         return _preexec
@@ -520,7 +523,7 @@ class SubprocessBackend(BaseSandboxBackend):
             )
             await proc.communicate()
             return proc.returncode == 0
-        except Exception:
+        except Exception:  # noqa: BLE001 -- health normalizes subprocess failures.
             return False
 
     async def _watch_pip_requests(self, staging_path: Path, venv_path: Path, stop_event: asyncio.Event) -> None:
@@ -534,7 +537,11 @@ class SubprocessBackend(BaseSandboxBackend):
                             continue
                         try:
                             args_str = request_file.read_text(encoding="utf-8").strip()
-                        except Exception:
+                        except (OSError, UnicodeError) as exc:
+                            logger.debug(
+                                "[Subprocess Sandbox Host] Ignored unreadable pip request error={}",
+                                type(exc).__name__,
+                            )
                             continue
 
                         req_id = request_file.name.split("_")[-1]
@@ -562,7 +569,7 @@ class SubprocessBackend(BaseSandboxBackend):
                             stdout, stderr = await proc.communicate()
                             exit_code = proc.returncode
                             output = (stdout + stderr).decode("utf-8", errors="replace")
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001 -- subprocess boundary
                             logger.error(f"[Subprocess Sandbox Host] Failed to run proxy pip: {exc}")
                             exit_code = 1
                             output = f"pip proxy failed: {exc}\n"
@@ -571,9 +578,9 @@ class SubprocessBackend(BaseSandboxBackend):
                             output_file.write_text(output[-20000:], encoding="utf-8")
                             response_file.write_text(str(exit_code), encoding="utf-8")
                             request_file.unlink(missing_ok=True)
-                        except Exception as exc:
+                        except OSError as exc:
                             logger.error(f"[Subprocess Sandbox Host] Failed to write pip response: {exc}")
-            except Exception as exc:
+            except (OSError, ValueError) as exc:
                 logger.error(f"[Subprocess Sandbox Host] Error in pip watcher loop: {exc}")
             await asyncio.sleep(0.2)
 
@@ -624,8 +631,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 file_path = Path(root) / file
                 relative_path = file_path.relative_to(staging_path)
                 if (
-                    file.startswith("_exec_tmp")
-                    or file.startswith(".pip_")
+                    file.startswith(("_exec_tmp", ".pip_"))
                     or ".tmp" in relative_path.parts
                     or not is_allowed(relative_path)
                     or file_path.is_symlink()
@@ -641,8 +647,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 file_path = Path(root) / file
                 relative_path = file_path.relative_to(target_workspace)
                 if (
-                    file.startswith("_exec_tmp")
-                    or file.startswith(".pip_")
+                    file.startswith(("_exec_tmp", ".pip_"))
                     or ".tmp" in relative_path.parts
                     or not is_allowed(relative_path)
                     or file_path.is_symlink()
@@ -666,14 +671,23 @@ class SubprocessBackend(BaseSandboxBackend):
                             f"[Sandbox Gateway] Blocked attempt to modify protected file: {rel_path}"
                         )
                     continue
-                except OSError:
+                except OSError as exc:
+                    logger.warning(
+                        "[Sandbox Gateway] Protected file comparison failed path={} error={}",
+                        rel_path,
+                        type(exc).__name__,
+                    )
                     continue
             if target_file is not None:
                 try:
                     if file_path.read_bytes() == target_file.read_bytes():
                         continue
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug(
+                        "[Sandbox Gateway] Treating unreadable file as changed path={} error={}",
+                        rel_path,
+                        type(exc).__name__,
+                    )
             if file_path.suffix.lower() in banned_suffixes:
                 logger.warning(
                     f"[Sandbox Gateway] Blocked banned file extension: {rel_path}"
@@ -696,8 +710,12 @@ class SubprocessBackend(BaseSandboxBackend):
                 restored_path = staging_path / rel_path
                 restored_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(target_path, restored_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning(
+                    "[Sandbox Gateway] Protected file restore failed path={} error={}",
+                    rel_path,
+                    type(exc).__name__,
+                )
 
         # Session-isolated output has one serialized writer and cannot mutate the
         # shared Workspace tree, so shared-workspace change-count limits do not
@@ -719,6 +737,10 @@ class SubprocessBackend(BaseSandboxBackend):
             try:
                 file_size = file_path.stat().st_size
             except FileNotFoundError:
+                logger.debug(
+                    "[Sandbox Gateway] Publication candidate disappeared path={}",
+                    rel_path,
+                )
                 continue
             total_size += file_size
             if total_size > MAX_PUBLISHED_TOTAL_BYTES:
@@ -758,7 +780,7 @@ class SubprocessBackend(BaseSandboxBackend):
                             )
                             if cleaned.startswith("<div>") and cleaned.endswith("</div>"):
                                 cleaned = cleaned[5:-6]
-                        except Exception:
+                        except Exception:  # noqa: BLE001 -- sanitizer fallback boundary
                             cleaned = cleaner.clean_html(content)
                     else:
                         import re
@@ -771,7 +793,7 @@ class SubprocessBackend(BaseSandboxBackend):
                     if not isinstance(cleaned, str):
                         raise TypeError("HTML sanitizer returned non-text content")
                     file_path.write_text(cleaned, encoding="utf-8")
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 -- sanitizer provider boundary
                     logger.error(f"[Sandbox Gateway] Failed to sanitize file '{rel_path}': {e}")
                     continue
 
@@ -780,7 +802,7 @@ class SubprocessBackend(BaseSandboxBackend):
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 shutil.copy2(file_path, dest_path)
-            except Exception as e:
+            except (OSError, shutil.Error) as e:
                 logger.error(f"[Sandbox Gateway] Failed to copy '{rel_path}' to workspace: {e}")
                 continue
 
@@ -788,7 +810,7 @@ class SubprocessBackend(BaseSandboxBackend):
         for rel_path, target_path in deletion_candidates.items():
             try:
                 target_path.unlink(missing_ok=True)
-            except Exception as e:
+            except OSError as e:
                 logger.error(f"[Sandbox Gateway] Failed to delete local file '{rel_path}': {e}")
                 continue
 
@@ -959,11 +981,15 @@ class SubprocessBackend(BaseSandboxBackend):
                                     chunk.decode("utf-8", errors="replace"),
                                     labels[path],
                                 )
-                            except Exception:
-                                pass
+                            except Exception as exc:  # noqa: BLE001 -- user callback
+                                logger.warning(
+                                    "[Subprocess] Output callback failed stream={} error={}",
+                                    labels[path],
+                                    type(exc).__name__,
+                                )
                 try:
                     await asyncio.wait_for(stream_stop.wait(), timeout=0.1)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
 
             if on_output:
@@ -979,8 +1005,12 @@ class SubprocessBackend(BaseSandboxBackend):
                                 chunk.decode("utf-8", errors="replace"),
                                 labels[path],
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:  # noqa: BLE001 -- user callback
+                            logger.warning(
+                                "[Subprocess] Final output callback failed stream={} error={}",
+                                labels[path],
+                                type(exc).__name__,
+                            )
 
         stream_task = asyncio.create_task(stream_output_files())
 
@@ -1005,7 +1035,7 @@ class SubprocessBackend(BaseSandboxBackend):
                     if decoded.startswith(marker):
                         exit_code = int(decoded.removeprefix(marker))
                         break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             timed_out = True
             await self._terminate_and_reap_process(process)
             exit_code = 124
@@ -1147,7 +1177,7 @@ class SubprocessBackend(BaseSandboxBackend):
                                         "Gateway publication callback is missing"
                                     )
                                 await gateway_publish()
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001 -- publication boundary
                             return ExecutionResult(
                                 success=False,
                                 stdout=stdout_str,
@@ -1197,7 +1227,7 @@ class SubprocessBackend(BaseSandboxBackend):
                             "is not available."
                         ),
                     )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- persistent execution boundary
             return ExecutionResult(
                 success=False,
                 stdout="",
@@ -1294,8 +1324,12 @@ class SubprocessBackend(BaseSandboxBackend):
                         try:
                             text = chunk.decode("utf-8", errors="replace")
                             await on_output(text, label)
-                        except Exception:
-                            pass
+                        except Exception as exc:  # noqa: BLE001 -- user callback
+                            logger.warning(
+                                "[Subprocess] Output callback failed stream={} error={}",
+                                label,
+                                type(exc).__name__,
+                            )
 
             task1 = asyncio.create_task(read_stream(proc.stdout, stdout_data, "stdout"))
             task2 = asyncio.create_task(read_stream(proc.stderr, stderr_data, "stderr"))
@@ -1303,7 +1337,7 @@ class SubprocessBackend(BaseSandboxBackend):
             is_timeout = False
             try:
                 await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 is_timeout = True
                 await self._terminate_and_reap_process(proc)
 
@@ -1320,14 +1354,19 @@ class SubprocessBackend(BaseSandboxBackend):
             try:
                 pip_stop_event.set()
                 await pip_watcher_task
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001 -- watcher cleanup retains outcome.
+                logger.exception("[Subprocess] Pip watcher failed before publication")
 
             # Safe verification and merge of output files (run for both bwrap and fallback execution)
             try:
-                if publication_owner == "gateway" and before_gateway_publish is not None:
-                    if not await before_gateway_publish():
-                        raise RuntimeError("Sandbox publication ownership could not be verified")
+                if (
+                    publication_owner == "gateway"
+                    and before_gateway_publish is not None
+                    and not await before_gateway_publish()
+                ):
+                    raise RuntimeError(
+                        "Sandbox publication ownership could not be verified"
+                    )
                 await self._verify_and_merge_outputs(
                     staging_path,
                     work_path,
@@ -1338,7 +1377,7 @@ class SubprocessBackend(BaseSandboxBackend):
                     if gateway_publish is None:
                         raise RuntimeError("Gateway publication callback is missing")
                     await gateway_publish()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- publication boundary
                 return ExecutionResult(
                     success=False,
                     stdout=stdout_str,
@@ -1367,7 +1406,7 @@ class SubprocessBackend(BaseSandboxBackend):
                 duration_ms=duration_ms,
                 error=None if exit_code == 0 else f"Exit code: {exit_code}"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- execution boundary normalizes failure
             duration_ms = int((time.time() - start_time) * 1000)
             logger.exception("[Subprocess] Execution error")
             return ExecutionResult(
@@ -1383,7 +1422,7 @@ class SubprocessBackend(BaseSandboxBackend):
             if proc is not None and proc.returncode is None:
                 try:
                     await self._terminate_and_reap_process(proc)
-                except Exception:
+                except Exception:  # noqa: BLE001 -- best-effort process cleanup
                     logger.exception("[Subprocess] Failed to reap sandbox process during cleanup")
 
             # Stop the pip watcher task
@@ -1391,28 +1430,34 @@ class SubprocessBackend(BaseSandboxBackend):
                 try:
                     pip_stop_event.set()
                     await pip_watcher_task
-                except Exception:
-                    pass
+                except Exception:  # noqa: BLE001 -- watcher cleanup retains outcome.
+                    logger.exception("[Subprocess] Pip watcher failed during cleanup")
             # Clean up temp script inside staging if not done
             if 'script_path' in locals():
                 try:
                     script_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug(
+                        "[Subprocess] Temporary script cleanup failed error={}",
+                        type(exc).__name__,
+                    )
             # Clean up staging folder
             if 'staging_path' in locals():
                 try:
                     if staging_path.exists():
                         shutil.rmtree(staging_path)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug(
+                        "[Subprocess] Staging cleanup failed error={}",
+                        type(exc).__name__,
+                    )
 
 
 async def close_subprocess_sandbox_run(run_id: str) -> None:
     """Release all local sandbox resources associated with one Agent loop."""
     try:
         await SubprocessBackend.close_run(run_id)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- cleanup must continue to workspace release
         logger.exception(
             "[Subprocess] Failed to close Agent-loop sandbox for run {}",
             run_id,
@@ -1420,7 +1465,7 @@ async def close_subprocess_sandbox_run(run_id: str) -> None:
     finally:
         try:
             await close_run_workspace(run_id)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- independent workspace cleanup
             logger.exception(
                 "[Subprocess] Failed to discard Agent-loop workspace for run {}",
                 run_id,

@@ -75,7 +75,7 @@ class E2bBackend(BaseSandboxBackend):
             # Try to list sandboxes to verify API is accessible
             await e2b_lib.AsyncSandbox.list(api_key=self.config.api_key)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 -- health normalizes SDK failures.
             return False
 
     async def execute(
@@ -135,7 +135,9 @@ class E2bBackend(BaseSandboxBackend):
 
             exit_code = result.exit_code
             if not isinstance(exit_code, int):
-                raise RuntimeError("E2B response did not include an exit code")
+                raise RuntimeError(  # noqa: TRY004 -- malformed provider result
+                    "E2B response did not include an exit code"
+                )
             duration_ms = int((time.time() - start_time) * 1000)
 
             return ExecutionResult(
