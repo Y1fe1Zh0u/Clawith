@@ -722,6 +722,29 @@ LEGACY_VISION_MAINTENANCE_DOTTED_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_VISION_MAINTENANCE_IDENTITIES
 )
+LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_IDENTITIES = (
+    Path("app/dao/activity_dao"),
+    Path("app/dao/agent_metrics_dao"),
+    Path("app/models/activity_log"),
+    Path("app/models/audit"),
+)
+LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_IDENTITIES
+)
+LEGACY_OBSERVABILITY_AUDIT_DAO_EXPORTS = ("activity_dao", "agent_metrics_dao")
+LEGACY_OBSERVABILITY_AUDIT_FORBIDDEN_FACTS = frozenset(
+    {
+        "class:AgentActivityLog",
+        "class:AuditLog",
+        "class:DailyTokenUsage",
+        "class:EnterpriseInfo",
+        "table:agent_activity_logs",
+        "table:audit_logs",
+        "table:daily_token_usage",
+        "table:enterprise_info",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2853,6 +2876,54 @@ def _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(
     )
 
 
+def _assert_deleted_observability_audit_persistence(backend_root: Path) -> None:
+    for identity in LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy observability/audit persistence module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy observability/audit persistence package was reintroduced: {identity}"
+            )
+
+
+def _assert_deleted_observability_audit_dao_exports(backend_root: Path) -> None:
+    _assert_deleted_dao_package_exports(
+        backend_root,
+        authority="observability/audit",
+        exports=LEGACY_OBSERVABILITY_AUDIT_DAO_EXPORTS,
+    )
+
+
+def _assert_tests_do_not_reference_deleted_observability_audit_persistence(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="observability/audit persistence",
+        deleted_identities=LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_DOTTED_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_observability_audit_facts(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_OBSERVABILITY_AUDIT_FORBIDDEN_FACTS & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application restores legacy observability/audit persistence facts: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
 def _assert_email_provider_is_decoupled_from_legacy_storage(
     backend_root: Path,
 ) -> None:
@@ -4451,9 +4522,9 @@ def test_backend_test_dynamic_reference_to_token_tracker_fails_guard(
 @pytest.mark.parametrize(
     "test_source",
     [
-        "from app.models.activity_log import DailyTokenUsage\n",
+        "from app.modules.observability import __name__\n",
     ],
-    ids=["daily-usage-static-import"],
+    ids=["target-observability-module"],
 )
 def test_retained_token_reporting_reference_passes_token_tracker_guard(
     tmp_path: Path,
@@ -7603,6 +7674,98 @@ def test_backend_test_reference_of_deleted_vision_maintenance_authority_fails_gu
         match="test references deleted legacy vision/maintenance authority",
     ):
         _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(tmp_path)
+
+
+def test_legacy_observability_audit_persistence_is_absent() -> None:
+    _assert_deleted_observability_audit_persistence(BACKEND_ROOT)
+    _assert_deleted_observability_audit_dao_exports(BACKEND_ROOT)
+    _assert_tests_do_not_reference_deleted_observability_audit_persistence(BACKEND_ROOT)
+    _assert_application_does_not_restore_observability_audit_facts(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_observability_audit_persistence_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_observability_audit_persistence(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_DOTTED_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_observability_audit_persistence_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_observability_persistence.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="persistence authority"):
+        _assert_tests_do_not_reference_deleted_observability_audit_persistence(tmp_path)
+
+
+@pytest.mark.parametrize("export", LEGACY_OBSERVABILITY_AUDIT_DAO_EXPORTS)
+def test_reintroduced_observability_audit_dao_export_fails_guard(
+    tmp_path: Path,
+    export: str,
+) -> None:
+    dao_init = tmp_path / DAO_PACKAGE_INIT
+    dao_init.parent.mkdir(parents=True)
+    dao_init.write_text(f"from app.dao import {export}\n", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="package export"):
+        _assert_deleted_observability_audit_dao_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class AgentActivityLog: ...\n",
+        "class DailyTokenUsage: ...\n",
+        "class AuditLog: ...\n",
+        "class EnterpriseInfo: ...\n",
+        'class Restored:\n    __tablename__ = "agent_activity_logs"\n',
+        'class Restored:\n    __tablename__ = "daily_token_usage"\n',
+        'class Restored:\n    __tablename__ = "audit_logs"\n',
+        'class Restored:\n    __tablename__ = "enterprise_info"\n',
+    ],
+)
+def test_restored_observability_audit_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/modules/observability/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="persistence facts"):
+        _assert_application_does_not_restore_observability_audit_facts(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
