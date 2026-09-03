@@ -101,6 +101,14 @@ LEGACY_AGENT_REINTRODUCTIONS = [
     for representation in ("module", "package")
 ]
 LEGACY_AGENT_DAO_EXPORTS = ("agent_dao", "agent_access_dao")
+LEGACY_AGENT_RUN_EVENT_DAO_IMPORT_IDENTITY = Path("app/dao/agent_run_event_dao")
+LEGACY_AGENT_RUN_EVENT_DAO_REINTRODUCTIONS = [
+    (LEGACY_AGENT_RUN_EVENT_DAO_IMPORT_IDENTITY, representation)
+    for representation in ("module", "package")
+]
+LEGACY_AGENT_RUN_EVENT_DAO_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_AGENT_RUN_EVENT_DAO_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
 LEGACY_IDENTITY_TENANT_IMPORT_IDENTITIES = (
     Path("app/models/user"),
     Path("app/models/tenant"),
@@ -729,6 +737,34 @@ def _assert_deleted_legacy_agent_dao_exports(backend_root: Path) -> None:
         backend_root,
         authority="Agent",
         exports=LEGACY_AGENT_DAO_EXPORTS,
+    )
+
+
+def _assert_deleted_legacy_agent_run_event_dao_authority(
+    backend_root: Path,
+) -> None:
+    identity = LEGACY_AGENT_RUN_EVENT_DAO_IMPORT_IDENTITY
+    module = (backend_root / identity).with_suffix(".py")
+    package = backend_root / identity
+    if module.is_file():
+        raise DeletedAuthorityViolation(
+            "deleted legacy Agent Run Event DAO compatibility module was "
+            f"reintroduced: {identity}"
+        )
+    if package.is_dir():
+        raise DeletedAuthorityViolation(
+            "deleted legacy Agent Run Event DAO compatibility package was "
+            f"reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_agent_run_event_dao(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Agent Run Event DAO compatibility",
+        deleted_identities=(LEGACY_AGENT_RUN_EVENT_DAO_DOTTED_IMPORT_IDENTITY,),
     )
 
 
@@ -2015,6 +2051,14 @@ def test_legacy_agent_dao_package_exports_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_agent_dao_exports(BACKEND_ROOT)
 
 
+def test_legacy_agent_run_event_dao_compatibility_authority_is_absent() -> None:
+    _assert_deleted_legacy_agent_run_event_dao_authority(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_agent_run_event_dao() -> None:
+    _assert_tests_do_not_reference_deleted_agent_run_event_dao(BACKEND_ROOT)
+
+
 def test_legacy_identity_tenant_authorities_are_absent_from_target_tree() -> None:
     _assert_deleted_legacy_identity_tenant_authorities(BACKEND_ROOT)
 
@@ -2165,6 +2209,103 @@ def test_reintroduced_legacy_agent_dao_package_export_fails_the_guard(
         match="deleted legacy Agent DAO package export",
     ):
         _assert_deleted_legacy_agent_dao_exports(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_AGENT_RUN_EVENT_DAO_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_AGENT_RUN_EVENT_DAO_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_agent_run_event_dao_compatibility_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=(
+            "deleted legacy Agent Run Event DAO compatibility "
+            f"{representation} was reintroduced"
+        ),
+    ):
+        _assert_deleted_legacy_agent_run_event_dao_authority(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.dao.agent_run_event_dao\n",
+        "from app.dao import agent_run_event_dao\n",
+        "from app.dao.agent_run_event_dao import agent_run_dao\n",
+    ],
+    ids=["module-import", "package-import", "symbol-import"],
+)
+def test_backend_test_static_reference_to_agent_run_event_dao_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_agent_run_event_dao.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Agent Run Event DAO compatibility",
+    ):
+        _assert_tests_do_not_reference_deleted_agent_run_event_dao(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        'module = importlib.import_module("app.dao.agent_run_event_dao")\n',
+        'dao_path = "app.dao.agent_run_event_dao.agent_run_dao"\n',
+    ],
+    ids=["dynamic-module-import", "dotted-symbol-reference"],
+)
+def test_backend_test_dynamic_reference_to_agent_run_event_dao_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_agent_run_event_dao_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Agent Run Event DAO compatibility",
+    ):
+        _assert_tests_do_not_reference_deleted_agent_run_event_dao(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.dao.agent_run_dao import agent_run_dao\n",
+        'dao_path = "app.dao.agent_run_dao.agent_run_dao"\n',
+    ],
+    ids=["run-dao-static-import", "run-dao-dotted-reference"],
+)
+def test_agent_run_dao_reference_passes_agent_run_event_dao_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_agent_run_dao_reference.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_agent_run_event_dao(tmp_path)
 
 
 @pytest.mark.parametrize(

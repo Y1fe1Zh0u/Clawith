@@ -360,6 +360,16 @@ This minimum deletion preserves `backend/app/api/advanced.py`, `backend/seed.py`
 
 The deleted-authority guard makes both removed Agent Template import identities absent as modules and same-named packages, prevents restoration of the exact `agent_template_dao` package export under the static `app.dao` policy, and rejects ordinary Backend-test imports and dotted dynamic references. Fresh S3 Agent Template tests must exercise the approved owner contract rather than recreate the old DAO or seeder fixtures.
 
+The legacy Agent Run Event DAO compatibility seam is removed as its own minimum category:
+
+- `backend/app/dao/agent_run_event_dao.py`
+
+The file defined no DAO or query behavior. It only re-exported the `agent_run_dao` object from `backend/app/dao/agent_run_dao.py`, while `app.dao` did not export the compatibility module and no current runtime or test imported it. The duplicate import identity is deleted rather than preserved as a compatibility path.
+
+This minimum deletion preserves `backend/app/dao/agent_run_dao.py`, its `app.dao` package export, the `AgentRunEvent` model, its queries, callers, tests, migrations, and all remaining Run authority for later Run-owner disposition. Removing the unused compatibility module does not decide or advance that later disposition.
+
+The deleted-authority guard makes `app.dao.agent_run_event_dao` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve static and dotted references to `app.dao.agent_run_dao`; there was no `agent_run_event_dao` package export to remove or guard.
+
 The legacy AgentBay authority is removed as its own minimum category:
 
 - `backend/app/api/agentbay_control.py`
