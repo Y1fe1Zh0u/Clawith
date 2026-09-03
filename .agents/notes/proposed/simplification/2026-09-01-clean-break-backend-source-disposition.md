@@ -396,6 +396,10 @@ This minimum deletion preserves the empty target `modules/okr` package, the gene
 
 The deleted-authority guard makes all six removed OKR import identities absent as modules and same-named packages and rejects ordinary Backend-test static imports and dotted dynamic references. A definition-level AST scan across all application Python rejects restoration of the exact `OKRObjective`, `OKRKeyResult`, `OKRAlignment`, `OKRProgressLog`, `WorkReport`, `MemberDailyReport`, `CompanyReport`, and `OKRSettings` classes or their eight table mappings under alternate paths. Positive fixtures preserve only the target `modules/okr` package, an unrelated `OKRPolicy` target declaration, and generic `validate_timezone_name` use. Fresh OKR tests must exercise reviewed and approved Product and owner contracts rather than rename the deleted model, API, service, helper, or dedicated test.
 
+The legacy timezone resolution policy is removed from `backend/app/services/timezone_utils.py`. `COMMON_TIMEZONES`, the implicit `Asia/Shanghai` default, Agent-to-Tenant fallback queries, the synchronous object resolver, and the UTC-fallback clock helper had no current application or test consumer after the Agent and OKR authority deletions. They are deleted instead of preserving an apparent owner for target timezone choices or importing deleted Agent, Tenant, and DAO authorities.
+
+The module retains only the independently pure `validate_timezone_name` helper used by `backend/app/schemas/schemas.py`. It validates caller-supplied IANA names without selecting a default or resolving owner policy. Focused tests preserve its accepted IANA names, invalid and empty-name error, and non-string `TypeError`; any future timezone default or effective-timezone resolution requires an approved owning contract and current consumer.
+
 The legacy Token Tracker is removed as its own minimum category:
 
 - `backend/app/services/token_tracker.py`
