@@ -370,6 +370,16 @@ This minimum deletion preserves `backend/app/dao/agent_run_dao.py`, its `app.dao
 
 The deleted-authority guard makes `app.dao.agent_run_event_dao` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve static and dotted references to `app.dao.agent_run_dao`; there was no `agent_run_event_dao` package export to remove or guard.
 
+The legacy OKR Agent relationship Hook is removed as its own minimum category:
+
+- `backend/app/services/okr_agent_hook.py`
+
+The Hook queried the deleted Agent and Organization relationship aggregates to bind new Organization members and company-visible Agents to a system Agent named `OKR Agent`. No current runtime, startup path, package export, or test imported or registered the Hook, so it had no effective execution path. Its implicit relationship mutation and startup-style backfill are deleted rather than adapted.
+
+This minimum deletion preserves the OKR models, API, daily collection, reporting, scheduler, tests, Alembic revisions, Frontend, and all later OKR product obligations. Those retained surfaces do not authorize restoring the deleted relationship aggregate, implicit membership binding, system-Agent lookup, or backfill Hook. OKR remains a deferred S3 owner whose Product and owner contracts decide any future Agent integration.
+
+The deleted-authority guard makes `app.services.okr_agent_hook` absent as a module and same-named package and rejects ordinary Backend-test static imports and dotted dynamic references. Positive fixtures preserve static and dotted references to retained OKR services.
+
 The legacy AgentBay authority is removed as its own minimum category:
 
 - `backend/app/api/agentbay_control.py`
