@@ -47,7 +47,7 @@ app/runtime/   Run-owned Runner and Loop execution mechanics only.
 app/api/       HTTP and WebSocket transport adapters.
 app/schemas/   Request, response, and transport validation models.
 app/models/    SQLAlchemy persistence models.
-app/dao/       Database access and query ownership.
+app/dao/       Static zero-byte namespace; no modules, repositories, or exports.
 app/services/  Product services, Runtime capabilities, background execution,
                and external integrations.
 app/core/      Cross-cutting security, permissions, errors, events, logging, and
@@ -132,7 +132,7 @@ Tests for registration, cancellation, shutdown, and cleanup must observe the own
 
 API handlers are transport adapters. They parse and validate request data, establish the authenticated and authorized caller, pass explicit inputs to the owning service or command-intake boundary, and map the result to the transport response. Do not put business orchestration, ORM queries, Runtime node calls, checkpoint mutation, or private lifecycle control into an API handler.
 
-`app.dao` package exports are static. Do not define, bind, or install a module-level `__getattr__` in `app/dao/__init__.py`, including through `globals()` mutation or module-scope `setattr`; deleted DAO exports must remain enforceable by ordinary source inspection rather than a dynamic package hook.
+[`app.dao`](app/dao/AGENTS.md) is an empty static namespace. `app/dao/__init__.py` remains zero-byte, and `app/dao/` contains no Python modules, repositories, exports, or dynamic package hooks. Each owner keeps persistence inside its private `app/modules/<owner>/` boundary and exposes typed public services to other owners.
 
 Design shared service contracts for all current consumers. Keep transport-, UI-, channel-, and provider-specific behavior in the owning adapter or consumer. Do not widen a public service for one internal caller; keep single-consumer capabilities private until a real shared contract exists.
 

@@ -38,7 +38,7 @@ The target branch no longer contains the legacy Agent execution authority. The r
 
 `backend/app/runtime/` remains the target Runner/Loop implementation boundary. Product APIs, services, models, migrations, and tests that still import the removed authority remain only as staged deletion evidence for their own later owner or deletion-category commits; they do not restore or replace the removed authority. The separate deletion categories below, including quota, product adapters, migrations, and dependencies, remain pending.
 
-The `app.dao` package export boundary is intentionally static: `app/dao/__init__.py` may use explicit imports, assignments, and `__all__`, but it may not define, bind, or install a module-level `__getattr__`, including through `globals()` mutation or module-scope `setattr`. One shared guard enforces that package policy, while the category guards independently reject their exact deleted DAO export names. Nested local bindings and inert string or attribute references that cannot install a package hook remain outside this boundary.
+The target `app.dao` boundary is an empty static namespace: `app/dao/__init__.py` remains zero-byte, and the directory contains no Python modules, repositories, exports, or dynamic package hooks. Each target owner keeps its ORM models and repositories private under `app/modules/<owner>/`; cross-owner consumers use typed public services. One shared guard enforces the empty initializer and absence of the retired generic DAO modules, while category guards independently reject their exact deleted identities, definitions, and export names.
 
 The target branch also no longer contains the old Context authority:
 
