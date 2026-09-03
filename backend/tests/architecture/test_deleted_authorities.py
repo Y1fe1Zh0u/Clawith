@@ -4,6 +4,7 @@ import ast
 import re
 import shlex
 import symtable
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -728,6 +729,37 @@ LEGACY_VISION_MAINTENANCE_DOTTED_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_VISION_MAINTENANCE_IDENTITIES
 )
+LEGACY_ORPHAN_MAINTENANCE_IDENTITIES = (
+    Path("remove_old_tool"),
+    Path("update_schema"),
+    Path("scripts/backfill_chat_message_tenant_id"),
+)
+LEGACY_ORPHAN_MAINTENANCE_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_ORPHAN_MAINTENANCE_IDENTITIES
+)
+LEGACY_ORPHAN_MAINTENANCE_INVOCATIONS = (
+    "remove_old_tool.py",
+    "update_schema.py",
+    "backfill_chat_message_tenant_id.py",
+    "-m remove_old_tool",
+    "-m update_schema",
+    "-m scripts.backfill_chat_message_tenant_id",
+    "-m backend.remove_old_tool",
+    "-m backend.update_schema",
+    "-m backend.scripts.backfill_chat_message_tenant_id",
+)
+LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS = frozenset(
+    {
+        "remove_old_tool",
+        "update_schema",
+        "scripts.backfill_chat_message_tenant_id",
+        "backend.remove_old_tool",
+        "backend.update_schema",
+        "backend.scripts.backfill_chat_message_tenant_id",
+    }
+)
+LEGACY_MAINTENANCE_EXECUTABLE_SUFFIXES = frozenset({".sh", ".toml", ".yaml", ".yml"})
 LEGACY_OBSERVABILITY_AUDIT_PERSISTENCE_IDENTITIES = (
     Path("app/dao/activity_dao"),
     Path("app/dao/agent_metrics_dao"),
@@ -3019,6 +3051,199 @@ def _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(
         authority="vision/maintenance",
         deleted_identities=LEGACY_VISION_MAINTENANCE_DOTTED_IDENTITIES,
     )
+
+
+def _assert_deleted_orphan_maintenance_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_ORPHAN_MAINTENANCE_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted orphan maintenance module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted orphan maintenance package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_orphan_maintenance(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="orphan maintenance",
+        deleted_identities=LEGACY_ORPHAN_MAINTENANCE_DOTTED_IDENTITIES,
+    )
+
+
+def _assert_no_orphan_maintenance_executable_invocations(
+    repository_root: Path,
+) -> None:
+    def executable_config_values(value: object) -> list[str]:
+        commands: list[str] = []
+        if isinstance(value, list):
+            for item in value:
+                commands.extend(executable_config_values(item))
+            return commands
+        if not isinstance(value, dict):
+            return commands
+        for raw_key, nested in value.items():
+            key = str(raw_key).casefold()
+            if key in {"command", "run", "script"}:
+                if isinstance(nested, str):
+                    commands.append(nested)
+                elif isinstance(nested, list) and all(
+                    isinstance(item, str) for item in nested
+                ):
+                    commands.append(shlex.join(nested))
+                continue
+            if key == "scripts" and isinstance(nested, dict):
+                commands.extend(
+                    item
+                    for item in nested.values()
+                    if isinstance(item, str)
+                )
+                continue
+            commands.extend(executable_config_values(nested))
+        return commands
+
+    def restored_invocations(command_line: str) -> list[str]:
+        try:
+            tokens = _shell_tokens(command_line)
+        except ValueError:
+            tokens = re.findall(r"-m|[A-Za-z0-9_./:-]+", command_line)
+        if not tokens:
+            return []
+        restored: set[str] = set()
+
+        segments: list[list[str]] = [[]]
+        for token in tokens:
+            if token in {"&", "&&", ";", "|", "||"}:
+                if segments[-1]:
+                    segments.append([])
+                continue
+            segments[-1].append(token)
+
+        forbidden_files = {
+            "backfill_chat_message_tenant_id.py",
+            "remove_old_tool.py",
+            "update_schema.py",
+        }
+        wrappers = {"!", "command", "do", "env", "exec", "export", "if", "then"}
+
+        for segment in segments:
+            command_tokens = list(segment)
+            while command_tokens and (
+                _SHELL_ASSIGNMENT.match(command_tokens[0])
+                or command_tokens[0] in wrappers
+            ):
+                command_tokens.pop(0)
+            if not command_tokens:
+                continue
+
+            if Path(command_tokens[0]).name == "uv":
+                try:
+                    run_index = command_tokens.index("run")
+                except ValueError:
+                    continue
+                command_tokens = command_tokens[run_index + 1 :]
+                while command_tokens and command_tokens[0].startswith("-"):
+                    command_tokens.pop(0)
+            if not command_tokens:
+                continue
+
+            command_token = command_tokens[0].strip("[],'\"")
+            command = Path(command_token).name
+            command_entrypoint = command_token.split(":", 1)[0]
+            if command_entrypoint in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS:
+                restored.add(command_token)
+                continue
+            if command in forbidden_files:
+                restored.add(command)
+                continue
+
+            is_python = command.startswith("python")
+            is_shell = command in {"bash", "sh"}
+            if not is_python and not is_shell:
+                continue
+
+            arguments = command_tokens[1:]
+            if is_python and "-m" in arguments:
+                module_index = arguments.index("-m")
+                if module_index + 1 < len(arguments):
+                    module = arguments[module_index + 1]
+                    if module in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS:
+                        restored.add(f"-m {module}")
+                continue
+            if "-c" in arguments:
+                if is_shell:
+                    command_index = arguments.index("-c")
+                    if command_index + 1 < len(arguments):
+                        restored.update(restored_invocations(arguments[command_index + 1]))
+                continue
+
+            script = next(
+                (
+                    token.strip("[],'\"")
+                    for token in arguments
+                    if not token.startswith("-")
+                ),
+                None,
+            )
+            if script is not None and Path(script).name in forbidden_files:
+                restored.add(Path(script).name)
+        return sorted(restored)
+
+    def yaml_command_values(source: str) -> list[str]:
+        try:
+            return executable_config_values(yaml.safe_load(source))
+        except yaml.YAMLError:
+            commands: list[str] = []
+            lines = source.splitlines()
+            field_pattern = re.compile(
+                r"^(?P<indent>\s*)(?:-\s*)?(?:command|run|script)\s*:\s*(?P<value>.*)$"
+            )
+            index = 0
+            while index < len(lines):
+                match = field_pattern.match(lines[index])
+                if match is None:
+                    index += 1
+                    continue
+                base_indent = len(match.group("indent"))
+                value = match.group("value").strip()
+                nested: list[str] = []
+                index += 1
+                while index < len(lines):
+                    candidate = lines[index]
+                    if candidate.strip() and len(candidate) - len(candidate.lstrip()) <= base_indent:
+                        break
+                    nested.append(candidate.strip())
+                    index += 1
+                commands.append(" ".join(([value] if value else []) + nested))
+            return commands
+
+    ignored_parts = {".git", ".venv", "artifacts", "node_modules"}
+    for source_path in sorted(repository_root.rglob("*")):
+        if not source_path.is_file():
+            continue
+        if source_path.suffix not in LEGACY_MAINTENANCE_EXECUTABLE_SUFFIXES:
+            continue
+        if ignored_parts & set(source_path.parts):
+            continue
+        source = source_path.read_text(encoding="utf-8")
+        if source_path.suffix == ".sh":
+            command_values = source.replace("\\\n", " ").splitlines()
+        elif source_path.suffix == ".toml":
+            command_values = executable_config_values(tomllib.loads(source))
+        else:
+            command_values = yaml_command_values(source)
+        for command_index, command_value in enumerate(command_values, start=1):
+            restored = restored_invocations(command_value)
+            if restored:
+                raise DeletedAuthorityViolation(
+                    "shell or YAML restores orphan maintenance invocation: "
+                    f"{source_path.relative_to(repository_root)}:{command_index} -> "
+                    f"{', '.join(restored)}"
+                )
 
 
 def _assert_deleted_observability_audit_persistence(backend_root: Path) -> None:
@@ -8089,6 +8314,145 @@ def test_backend_test_reference_of_deleted_vision_maintenance_authority_fails_gu
         match="test references deleted legacy vision/maintenance authority",
     ):
         _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(tmp_path)
+
+
+def test_orphan_maintenance_authorities_and_invocations_are_absent() -> None:
+    _assert_deleted_orphan_maintenance_authorities(BACKEND_ROOT)
+    _assert_tests_do_not_reference_deleted_orphan_maintenance(BACKEND_ROOT)
+    _assert_no_orphan_maintenance_executable_invocations(BACKEND_ROOT.parent)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_ORPHAN_MAINTENANCE_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_orphan_maintenance_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_orphan_maintenance_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_ORPHAN_MAINTENANCE_DOTTED_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_orphan_maintenance_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_maintenance.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="maintenance authority"):
+        _assert_tests_do_not_reference_deleted_orphan_maintenance(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    LEGACY_ORPHAN_MAINTENANCE_INVOCATIONS,
+)
+def test_restored_orphan_maintenance_shell_or_yaml_invocation_fails_guard(
+    tmp_path: Path,
+    invocation: str,
+) -> None:
+    workflow = tmp_path / ".github/workflows/maintenance.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(f"steps:\n  - run: uv run python {invocation}\n", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="maintenance invocation"):
+        _assert_no_orphan_maintenance_executable_invocations(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "source"),
+    [
+        (
+            Path("scripts/legacy.sh"),
+            "uv run python backend/remove_old_tool.py\n",
+        ),
+        (
+            Path("pyproject.toml"),
+            '[project.scripts]\nlegacy-schema = "update_schema:main"\n',
+        ),
+        (
+            Path("deploy/job.yaml"),
+            "job:\n  command: python scripts/backfill_chat_message_tenant_id.py --apply\n",
+        ),
+    ],
+)
+def test_restored_orphan_maintenance_executable_field_fails_guard(
+    tmp_path: Path,
+    relative_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / relative_path
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="maintenance invocation"):
+        _assert_no_orphan_maintenance_executable_invocations(tmp_path)
+
+
+def test_current_migration_and_script_fixtures_pass_orphan_maintenance_guards(
+    tmp_path: Path,
+) -> None:
+    current_sources = {
+        Path("backend/alembic/versions/001_current_schema.py"): "revision = '001'\n",
+        Path("backend/scripts/current_backfill.py"): "def main(): ...\n",
+        Path(".github/workflows/migrate.yml"): (
+            "description: remove_old_tool.py and update_schema.py are retired\n"
+            "steps:\n"
+            "  - name: backfill_chat_message_tenant_id.py is obsolete\n"
+            "    run: echo remove_old_tool.py is retired\n"
+            "  - run: uv run alembic upgrade head\n"
+        ),
+        Path("backend/pyproject.toml"): (
+            "[project]\n"
+            'description = "update_schema.py is not an executable entry"\n'
+            "[tool.current]\n"
+            'note = "backfill_chat_message_tenant_id.py remains deleted"\n'
+        ),
+        Path("scripts/validate.sh"): (
+            "# python backend/remove_old_tool.py is intentionally absent\n"
+            "echo update_schema.py is retired\n"
+            "rg remove_old_tool.py backend\n"
+            "grep -R backfill_chat_message_tenant_id.py backend\n"
+            "test ! -f update_schema.py\n"
+            "uv run python backend/scripts/validate_goal_gates.py\n"
+        ),
+        Path("backend/tests/test_current_script.py"): (
+            "from app.infrastructure.database import Base\n"
+        ),
+    }
+    for relative_path, source in current_sources.items():
+        source_path = tmp_path / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source, encoding="utf-8")
+    _assert_deleted_orphan_maintenance_authorities(tmp_path / "backend")
+    _assert_tests_do_not_reference_deleted_orphan_maintenance(tmp_path / "backend")
+    _assert_no_orphan_maintenance_executable_invocations(tmp_path)
 
 
 def test_legacy_observability_audit_persistence_is_absent() -> None:
