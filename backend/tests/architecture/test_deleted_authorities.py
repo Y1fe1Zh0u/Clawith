@@ -799,6 +799,39 @@ LEGACY_LOGGING_CONFIG_FORBIDDEN_DEFINITIONS = frozenset(
         "function:set_trace_id",
     }
 )
+LEGACY_SECURITY_DAO_IDENTITIES = (
+    Path("app/core/security"),
+    Path("app/dao/base"),
+    Path("app/dao/query_dao"),
+)
+LEGACY_SECURITY_DAO_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_SECURITY_DAO_IDENTITIES
+)
+LEGACY_SECURITY_DAO_FORBIDDEN_DEFINITIONS = frozenset(
+    {
+        "assigned:ROLE_HIERARCHY",
+        "assigned:query_dao",
+        "assigned:security",
+        "class:BaseDAO",
+        "class:QueryDAO",
+        "class:TenantScopedBaseDAO",
+        "function:create_access_token",
+        "function:decode_access_token",
+        "function:decrypt_data",
+        "function:encrypt_data",
+        "function:get_authenticated_user",
+        "function:get_current_admin",
+        "function:get_current_user",
+        "function:hash_password",
+        "function:hash_password_async",
+        "function:identity_membership_query",
+        "function:require_role",
+        "function:tenant_context",
+        "function:verify_password",
+        "function:verify_password_async",
+    }
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -3115,6 +3148,59 @@ def _assert_application_does_not_restore_logging_config_definitions(
         if restored:
             raise DeletedAuthorityViolation(
                 "application restores legacy logging configuration definitions: "
+                f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
+            )
+
+
+def _assert_deleted_legacy_security_dao_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_SECURITY_DAO_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Security/DAO module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy Security/DAO package was reintroduced: {identity}"
+            )
+
+
+def _assert_target_dao_package_is_empty(backend_root: Path) -> None:
+    package_init = backend_root / DAO_PACKAGE_INIT
+    if not package_init.is_file():
+        raise DeletedAuthorityViolation(
+            f"target DAO package initializer is missing: {DAO_PACKAGE_INIT}"
+        )
+    if package_init.read_text(encoding="utf-8") != "":
+        raise DeletedAuthorityViolation(
+            f"target DAO package initializer must remain empty: {DAO_PACKAGE_INIT}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_security_dao_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Security/DAO",
+        deleted_identities=LEGACY_SECURITY_DAO_DOTTED_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_security_dao_definitions(
+    backend_root: Path,
+) -> None:
+    app_root = backend_root / "app"
+    if not app_root.is_dir():
+        return
+    for source_path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        restored = sorted(
+            LEGACY_SECURITY_DAO_FORBIDDEN_DEFINITIONS
+            & _source_contract_facts(tree)
+        )
+        if restored:
+            raise DeletedAuthorityViolation(
+                "application restores legacy Security/DAO definitions: "
                 f"{source_path.relative_to(backend_root)} -> {', '.join(restored)}"
             )
 
@@ -8169,7 +8255,6 @@ def test_adjacent_core_modules_pass_logging_config_identity_guard(
     for relative_path in (
         Path("app/core/email.py"),
         Path("app/core/events.py"),
-        Path("app/core/security.py"),
     ):
         source_path = tmp_path / relative_path
         source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -8202,7 +8287,6 @@ def test_backend_test_reference_of_deleted_logging_config_fails_guard(
     [
         "from app.core.email import force_ipv4\n",
         "from app.core.events import get_redis\n",
-        'module = importlib.import_module("app.core.security")\n',
     ],
 )
 def test_adjacent_core_reference_passes_logging_config_test_guard(
@@ -8251,6 +8335,111 @@ def test_adjacent_logging_definition_passes_logging_config_guard(
         encoding="utf-8",
     )
     _assert_application_does_not_restore_logging_config_definitions(tmp_path)
+
+
+def test_legacy_security_dao_authorities_are_absent() -> None:
+    _assert_deleted_legacy_security_dao_authorities(BACKEND_ROOT)
+    _assert_target_dao_package_is_empty(BACKEND_ROOT)
+    _assert_tests_do_not_reference_deleted_security_dao_authorities(BACKEND_ROOT)
+    _assert_application_does_not_restore_security_dao_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_SECURITY_DAO_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_legacy_security_dao_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="was reintroduced"):
+        _assert_deleted_legacy_security_dao_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "package_source",
+    [
+        "from app.dao.base import BaseDAO\n",
+        "query_dao = object()\n",
+        '__all__ = ["query_dao"]\n',
+    ],
+)
+def test_nonempty_legacy_dao_package_initializer_fails_guard(
+    tmp_path: Path,
+    package_source: str,
+) -> None:
+    package_init = tmp_path / DAO_PACKAGE_INIT
+    package_init.parent.mkdir(parents=True)
+    package_init.write_text(package_source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="must remain empty"):
+        _assert_target_dao_package_is_empty(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_security_dao_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_SECURITY_DAO_DOTTED_IDENTITIES[0]
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_security_dao.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="Security/DAO authority"):
+        _assert_tests_do_not_reference_deleted_security_dao_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class BaseDAO: ...\n",
+        "class TenantScopedBaseDAO: ...\n",
+        "class QueryDAO: ...\n",
+        "def decrypt_data(value, key): ...\n",
+        "def create_access_token(): ...\n",
+        "async def get_current_user(): ...\n",
+        "def tenant_context(value): ...\n",
+        "query_dao = object()\n",
+    ],
+)
+def test_restored_security_dao_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/infrastructure/restored_legacy.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+    with pytest.raises(DeletedAuthorityViolation, match="Security/DAO definitions"):
+        _assert_application_does_not_restore_security_dao_definitions(tmp_path)
+
+
+def test_explicit_sandbox_secret_decoder_passes_security_dao_guard(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "app/services/sandbox/config.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "def decode_sandbox_secret(value): return value\n",
+        encoding="utf-8",
+    )
+    _assert_deleted_legacy_security_dao_authorities(tmp_path)
+    _assert_application_does_not_restore_security_dao_definitions(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:

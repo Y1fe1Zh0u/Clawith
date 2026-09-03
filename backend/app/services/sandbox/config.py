@@ -1,8 +1,10 @@
 """Sandbox configuration models."""
 
-from collections.abc import Mapping
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -58,9 +60,9 @@ class SandboxConfig(BaseModel):
     )
 
     # Proxy options
-    http_proxy: Optional[str] = None
-    https_proxy: Optional[str] = None
-    no_proxy: Optional[str] = None
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    no_proxy: str | None = None
 
     # Language mapping for API sandboxes
     # Maps our internal language names to API-specific language IDs
@@ -78,13 +80,16 @@ class SandboxConfig(BaseModel):
     def from_dict(
         cls,
         config: Mapping[str, object],
-        fallback_config: Optional["SandboxConfig"] = None,
-    ) -> "SandboxConfig":
+        fallback_config: SandboxConfig | None = None,
+        *,
+        secret_decoder: Callable[[str], str] | None = None,
+    ) -> SandboxConfig:
         """从 dict 构建 SandboxConfig，支持字段级 fallback。
 
         Args:
             config: 工具配置 dict
             fallback_config: 回退配置（通常是环境变量配置）
+            secret_decoder: 调用方提供的已配置密钥解码函数
 
         Returns:
             SandboxConfig 实例
@@ -111,13 +116,12 @@ class SandboxConfig(BaseModel):
                     raise SandboxConfigurationError(
                         f"Configured {key} must be an encrypted string"
                     )
+                if secret_decoder is None:
+                    raise SandboxConfigurationError(
+                        f"Configured {key} requires an explicit secret decoder"
+                    )
                 try:
-                    from app.config import get_settings
-                    from app.core.security import decrypt_data
-
-                    settings = get_settings()
-                    decrypted = decrypt_data(value, settings.SECRET_KEY)
-                    value = decrypted
+                    value = secret_decoder(value)
                 except Exception as exc:
                     raise SandboxConfigurationError(
                         f"Configured {key} could not be decrypted"

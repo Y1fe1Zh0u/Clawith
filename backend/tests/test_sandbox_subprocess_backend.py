@@ -332,28 +332,28 @@ def test_sandbox_config_rejects_invalid_configured_type(sandbox_type) -> None:
         SandboxConfig.from_dict({"sandbox_type": sandbox_type})
 
 
-def test_sandbox_config_rejects_configured_secret_decryption_failure(
-    monkeypatch,
-) -> None:
-    def fail_decrypt(_value, _secret):
-        raise ValueError("invalid ciphertext")
+def test_sandbox_config_rejects_configured_secret_without_decoder() -> None:
+    with pytest.raises(SandboxConfigurationError, match="explicit secret decoder"):
+        SandboxConfig.from_dict({"api_key": "ciphertext"})
 
-    monkeypatch.setattr("app.core.security.decrypt_data", fail_decrypt)
+
+def test_sandbox_config_rejects_configured_secret_decryption_failure() -> None:
+    def fail_decrypt(_value: str) -> str:
+        raise ValueError("invalid ciphertext")
 
     with pytest.raises(SandboxConfigurationError, match="could not be decrypted"):
         SandboxConfig.from_dict(
             {"api_key": "broken-ciphertext"},
             SandboxConfig(api_key="fallback-key"),
+            secret_decoder=fail_decrypt,
         )
 
 
-def test_sandbox_config_accepts_decrypted_configured_secret(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "app.core.security.decrypt_data",
-        lambda value, _secret: f"decrypted:{value}",
+def test_sandbox_config_accepts_decrypted_configured_secret() -> None:
+    config = SandboxConfig.from_dict(
+        {"api_key": "ciphertext"},
+        secret_decoder=lambda value: f"decrypted:{value}",
     )
-
-    config = SandboxConfig.from_dict({"api_key": "ciphertext"})
 
     assert config.api_key == "decrypted:ciphertext"
 
