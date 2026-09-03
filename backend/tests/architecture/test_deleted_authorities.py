@@ -430,6 +430,25 @@ LEGACY_GROUP_PARTICIPANT_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_GROUP_PARTICIPANT_IMPORT_IDENTITIES
 )
+LEGACY_SCHEDULE_IMPORT_IDENTITIES = (
+    Path("app/models/schedule"),
+    Path("app/api/schedules"),
+    Path("app/services/scheduler"),
+    Path("app/scripts/migrate_schedules_to_triggers"),
+)
+LEGACY_SCHEDULE_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_SCHEDULE_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_SCHEDULE_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_SCHEDULE_IMPORT_IDENTITIES
+)
+LEGACY_SCHEDULE_DEFINITION_ROOTS = (Path("app"),)
+LEGACY_SCHEDULE_FORBIDDEN_DEFINITIONS = frozenset(
+    {"class:AgentSchedule", "table:agent_schedules"}
+)
 LEGACY_AUTONOMY_APPROVAL_IMPORT_IDENTITIES = (
     Path("app/services/autonomy_service"),
 )
@@ -1793,6 +1812,57 @@ def _assert_tests_do_not_reference_deleted_group_participant_authorities(
         authority="Group/Participant",
         deleted_identities=LEGACY_GROUP_PARTICIPANT_DOTTED_IMPORT_IDENTITIES,
     )
+
+
+def _assert_deleted_legacy_schedule_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_SCHEDULE_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Schedule authority module was reintroduced: "
+                f"{identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                "deleted legacy Schedule authority package was reintroduced: "
+                f"{identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_schedule_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="Schedule",
+        deleted_identities=LEGACY_SCHEDULE_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_application_does_not_restore_schedule_definitions(
+    backend_root: Path,
+) -> None:
+    source_paths: set[Path] = set()
+    for relative_root in LEGACY_SCHEDULE_DEFINITION_ROOTS:
+        source_root = backend_root / relative_root
+        if source_root.is_dir():
+            source_paths.update(source_root.rglob("*.py"))
+
+    for source_path in sorted(source_paths):
+        relative_path = source_path.relative_to(backend_root)
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        restored_facts = sorted(
+            LEGACY_SCHEDULE_FORBIDDEN_DEFINITIONS & _source_contract_facts(tree)
+        )
+        if restored_facts:
+            raise DeletedAuthorityViolation(
+                "application source restores legacy Schedule definitions: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
+            )
 
 
 def _assert_deleted_legacy_autonomy_approval_authority(
@@ -4585,6 +4655,150 @@ def test_retained_group_adjacent_reference_passes_group_participant_guard(
     test_path.write_text(test_source, encoding="utf-8")
 
     _assert_tests_do_not_reference_deleted_group_participant_authorities(tmp_path)
+
+
+def test_legacy_schedule_authorities_are_absent() -> None:
+    _assert_deleted_legacy_schedule_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_schedule_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_schedule_authorities(BACKEND_ROOT)
+
+
+def test_application_does_not_restore_legacy_schedule_definitions() -> None:
+    _assert_application_does_not_restore_schedule_definitions(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_SCHEDULE_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_SCHEDULE_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_schedule_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy Schedule authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_schedule_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "import app.models.schedule\n",
+        "from app.api.schedules import router\n",
+        'module = importlib.import_module("app.services.scheduler")\n',
+        'monkeypatch.setattr("app.scripts.migrate_schedules_to_triggers.run", fake)\n',
+    ],
+    ids=[
+        "model-import",
+        "api-symbol-import",
+        "dynamic-service-import",
+        "dotted-migration-reference",
+    ],
+)
+def test_backend_test_reference_of_deleted_schedule_authority_fails_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_restored_schedule.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy Schedule authority",
+    ):
+        _assert_tests_do_not_reference_deleted_schedule_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class AgentSchedule: ...\n",
+        'class RenamedSchedule:\n    __tablename__ = "agent_schedules"\n',
+    ],
+    ids=["class-name", "table-name"],
+)
+def test_restored_schedule_definition_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/modules/trigger/restored.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application source restores legacy Schedule definitions",
+    ):
+        _assert_application_does_not_restore_schedule_definitions(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        "from app.modules.trigger import __name__\n",
+        "from app.modules.heartbeat import __name__\n",
+        "from app.services.trigger_runtime.intake import TriggerRuntimeIntake\n",
+        "from app.services.heartbeat_runtime import enqueue_heartbeat_runtime\n",
+        "from app.services.heartbeat import heartbeat_loop\n",
+        "from app.services.feishu_group_targets import resolve_feishu_group_target\n",
+        "from app.services.business_calendar import is_business_day\n",
+        "from app.services.timezone_utils import get_agent_timezone_sync\n",
+    ],
+    ids=[
+        "target-trigger-module",
+        "target-heartbeat-module",
+        "trigger-runtime",
+        "heartbeat-runtime",
+        "heartbeat-service",
+        "feishu-group-targets",
+        "business-calendar",
+        "timezone-utils",
+    ],
+)
+def test_retained_trigger_and_heartbeat_reference_passes_schedule_guard(
+    tmp_path: Path,
+    test_source: str,
+) -> None:
+    test_path = tmp_path / "tests/test_retained_trigger_heartbeat.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(test_source, encoding="utf-8")
+
+    _assert_tests_do_not_reference_deleted_schedule_authorities(tmp_path)
+
+
+def test_target_trigger_and_heartbeat_definitions_pass_schedule_guard(
+    tmp_path: Path,
+) -> None:
+    safe_sources = {
+        Path("app/modules/trigger/model.py"): (
+            'class AgentTrigger:\n    __tablename__ = "agent_triggers"\n'
+        ),
+        Path("app/modules/heartbeat/service.py"): "class HeartbeatPolicy: ...\n",
+    }
+    for relative_path, source in safe_sources.items():
+        source_path = tmp_path / relative_path
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(source, encoding="utf-8")
+
+    _assert_application_does_not_restore_schedule_definitions(tmp_path)
 
 
 def test_legacy_autonomy_approval_authority_is_absent() -> None:

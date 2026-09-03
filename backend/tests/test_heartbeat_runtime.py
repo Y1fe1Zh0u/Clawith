@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-import uuid
 
 import pytest
-
-from app.services import heartbeat as heartbeat_service
 from app.config import Settings
 from app.models.agent import Agent
 from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
+
+from app.services import heartbeat as heartbeat_service
 from app.services.heartbeat_runtime import (
     HeartbeatRuntimeIntakeError,
     enqueue_heartbeat_runtime,
     enqueue_oneshot_runtime,
-    enqueue_schedule_runtime,
     heartbeat_source_execution_id,
-    schedule_occurrence_id,
 )
 
 
@@ -108,12 +106,10 @@ async def test_runtime_heartbeat_pins_claimed_occurrence_and_caller_transaction(
 
 
 def test_default_heartbeat_prompt_does_not_advertise_hardcoded_tools() -> None:
-    prompt = "\n".join(
-        (
-            heartbeat_service.DEFAULT_HEARTBEAT_INSTRUCTION,
-            heartbeat_service.PRIVATE_AGENT_HEARTBEAT_APPEND,
-            heartbeat_service.CUSTOM_HEARTBEAT_GUARDRAILS,
-        )
+    prompt = (
+        f"{heartbeat_service.DEFAULT_HEARTBEAT_INSTRUCTION}\n"
+        f"{heartbeat_service.PRIVATE_AGENT_HEARTBEAT_APPEND}\n"
+        f"{heartbeat_service.CUSTOM_HEARTBEAT_GUARDRAILS}"
     )
 
     for hardcoded_tool in (
@@ -257,21 +253,10 @@ def test_heartbeat_occurrence_rejects_naive_timestamp() -> None:
     with pytest.raises(HeartbeatRuntimeIntakeError) as raised:
         heartbeat_source_execution_id(
             uuid.uuid4(),
-            datetime(2026, 7, 13, 18, 45),
+            datetime(2026, 7, 13, 18, 45),  # noqa: DTZ001
         )
 
     assert raised.value.code == "invalid_heartbeat_occurrence"
-
-
-def test_schedule_occurrence_identity_is_stable_across_timezone_views() -> None:
-    schedule_id = uuid.uuid4()
-    utc_occurrence = datetime(2026, 7, 14, 3, 30, tzinfo=UTC)
-    local_occurrence = utc_occurrence.astimezone(timezone(timedelta(hours=8)))
-
-    assert schedule_occurrence_id(
-        schedule_id,
-        utc_occurrence,
-    ) == schedule_occurrence_id(schedule_id, local_occurrence)
 
 
 @pytest.mark.asyncio
@@ -312,39 +297,3 @@ async def test_oneshot_registration_uses_a_unique_background_occurrence() -> Non
     assert command.payload["triggered_by_user_id"] == str(user_id)
     assert command.requested_model_turn_limit == 40
     assert "requested_max_steps" not in command.payload
-
-
-@pytest.mark.asyncio
-async def test_schedule_registration_pins_the_schedule_occurrence() -> None:
-    agent = _agent()
-    schedule_id = uuid.uuid4()
-    occurrence_id = uuid.uuid4()
-    handle = RunHandle(
-        tenant_id=agent.tenant_id,
-        run_id=uuid.uuid4(),
-        thread_id=str(uuid.uuid4()),
-        command_id=uuid.uuid4(),
-        runtime_type="langgraph",
-        created=True,
-    )
-
-    with patch(
-        "app.services.heartbeat_runtime.RuntimeCommandIntake.start_run",
-        new=AsyncMock(return_value=handle),
-    ) as start_run:
-        result = await enqueue_schedule_runtime(
-            _Session(),  # type: ignore[arg-type]
-            agent=agent,
-            schedule_id=schedule_id,
-            occurrence_id=occurrence_id,
-            instruction="  Review the weekly pipeline  ",
-            settings_override=_settings(enabled=True),
-        )
-
-    assert result == handle
-    command = start_run.await_args.args[0]
-    assert command.source_type == "heartbeat"
-    assert command.source_id == str(schedule_id)
-    assert command.source_execution_id == f"schedule:{schedule_id}:{occurrence_id}"
-    assert command.goal == "[自动调度任务] Review the weekly pipeline"
-    assert command.payload["background_mode"] == "schedule"

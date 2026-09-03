@@ -13,7 +13,6 @@ from app.services.agent_runtime.adapter import RuntimeCommandIntake
 from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
 from app.services.agent_runtime.state import JsonObject
-from app.services.feishu_group_targets import resolve_feishu_group_target
 
 
 class HeartbeatRuntimeIntakeError(RuntimeError):
@@ -40,24 +39,6 @@ def heartbeat_source_execution_id(
         .replace("+00:00", "Z")
     )
     return f"heartbeat:{agent_id}:{timestamp}"
-
-
-def schedule_occurrence_id(
-    schedule_id: uuid.UUID,
-    occurrence_at: datetime,
-) -> uuid.UUID:
-    """Derive one stable identity for an automatically claimed cron slot."""
-    if occurrence_at.tzinfo is None or occurrence_at.utcoffset() is None:
-        raise HeartbeatRuntimeIntakeError(
-            "invalid_schedule_occurrence",
-            "Schedule occurrence timestamp must be timezone-aware",
-        )
-    timestamp = (
-        occurrence_at.astimezone(UTC)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
-    )
-    return uuid.uuid5(schedule_id, f"schedule-occurrence:{timestamp}")
 
 
 def _require_background_agent(agent: Agent, *, mode: str) -> uuid.UUID:
@@ -200,75 +181,9 @@ async def enqueue_oneshot_runtime(
     )
 
 
-async def enqueue_schedule_runtime(
-    db: AsyncSession,
-    *,
-    agent: Agent,
-    schedule_id: uuid.UUID,
-    occurrence_id: uuid.UUID,
-    instruction: str,
-    delivery_target_id: uuid.UUID | None = None,
-    settings_override: Settings | None = None,
-) -> RunHandle | None:
-    """Register one cron schedule occurrence on the shared background Runtime."""
-    runtime_settings = settings_override or get_settings()
-    decision = decide_runtime_v2(
-        agent_id=agent.id,
-        source_type="heartbeat",
-        settings=runtime_settings,
-    )
-    if not decision.use_v2:
-        return None
-    tenant_id = _require_background_agent(agent, mode="schedule")
-    normalized_instruction = instruction.strip()
-    if not normalized_instruction:
-        raise HeartbeatRuntimeIntakeError(
-            "schedule_instruction_missing",
-            "Runtime schedule instruction is empty",
-        )
-    source_execution_id = f"schedule:{schedule_id}:{occurrence_id}"
-    delivery_target = None
-    if delivery_target_id is not None:
-        delivery_target = (
-            await resolve_feishu_group_target(
-                db,
-                agent_id=agent.id,
-                target_recipient_id=delivery_target_id,
-            )
-        ).delivery_target()
-    return await RuntimeCommandIntake(
-        db,
-        settings=runtime_settings,
-    ).start_run(
-        StartRunCommand(
-            tenant_id=tenant_id,
-            agent_id=agent.id,
-            source_type="heartbeat",
-            source_id=str(schedule_id),
-            source_execution_id=source_execution_id,
-            goal=f"[自动调度任务] {normalized_instruction}",
-            run_kind="background",
-            model_id=agent.primary_model_id,
-            delivery_status="pending" if delivery_target else "not_required",
-            delivery_target=delivery_target,
-            idempotency_key=f"start:{source_execution_id}",
-            payload={
-                "background_mode": "schedule",
-                "schedule_id": str(schedule_id),
-                "schedule_occurrence_id": str(occurrence_id),
-                "schedule_instruction": normalized_instruction,
-                "delivery_target_id": str(delivery_target_id) if delivery_target_id else None,
-            },
-            origin_user_id=agent.creator_id,
-        )
-    )
-
-
 __all__ = [
     "HeartbeatRuntimeIntakeError",
     "enqueue_heartbeat_runtime",
     "enqueue_oneshot_runtime",
-    "enqueue_schedule_runtime",
     "heartbeat_source_execution_id",
-    "schedule_occurrence_id",
 ]

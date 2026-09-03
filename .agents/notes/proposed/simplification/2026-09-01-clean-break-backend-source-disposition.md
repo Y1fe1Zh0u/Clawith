@@ -461,6 +461,23 @@ This minimum deletion preserves Channel configuration, outbound delivery, protoc
 
 The deleted-authority guard makes all eleven old Group/Participant import identities absent as modules and same-named packages, prevents static restoration of `group_dao` and `participant_dao`, and relies on the repository-wide static `app.dao` rule to reject dynamic package export hooks. It rejects ordinary Backend-test imports and dotted dynamic references to the deleted identities. Positive fixtures preserve Channel user and Feishu group-target adapters, generic realtime routing, storage and Workspace mechanics, Trigger Runtime, and the Messages API. Fresh Group tests must exercise the eventual approved target owner rather than recreate the deleted aggregate or its cross-owner orchestration.
 
+The legacy Schedule authority is removed as one complete category:
+
+- `backend/app/models/schedule.py`
+- `backend/app/api/schedules.py`
+- `backend/app/services/scheduler.py`
+- `backend/app/scripts/migrate_schedules_to_triggers.py`
+- the schedule-only `schedule_occurrence_id` and `enqueue_schedule_runtime` branches from `backend/app/services/heartbeat_runtime.py`
+- `backend/tests/test_schedule_runtime_intake.py`, `backend/tests/test_schedule_scheduler.py`, and `backend/tests/test_schedule_scheduler_startup.py`, plus the schedule-only assertions in `backend/tests/test_heartbeat_runtime.py`
+
+Together these sources owned the mutable `AgentSchedule` row and `agent_schedules` table mapping, schedule CRUD and manual execution API, in-process cron polling and claim loop, Schedule-to-Trigger data conversion, Schedule-to-Heartbeat Runtime intake, application-startup scheduler registration, and their dedicated tests. They are deleted rather than adapted because Schedule is not a second target authority beside Trigger.
+
+Scheduled execution remains a required product capability under the target Trigger owner. After its owner contract is approved, Trigger must define cron configuration, due-occurrence claiming, Run initiation, execution result, delivery, cancellation, and recovery through its public contracts. This deletion neither selects those contracts nor preserves the legacy Schedule API, table, scheduler loop, occurrence identity, migration script, or Runtime payload as compatibility behavior.
+
+This minimum deletion preserves the empty target `modules/trigger` and `modules/heartbeat` packages, Trigger Runtime, Heartbeat service and Runtime intake, Feishu group-target resolution, business-calendar and timezone helpers, OKR scheduling, the legacy `agent_schedules` Alembic history, `seed.py`, `bootstrap_db.py`, dependency declarations including `croniter`, Frontend, and all Trigger and Heartbeat product obligations. The seed and bootstrap paths retain deliberate dangling imports of the removed Schedule model until their own source-disposition categories. Those staged consumers and migration records do not authorize restoring `AgentSchedule`, the `agent_schedules` application mapping, old Schedule modules, dedicated tests, or a compatibility shim.
+
+The deleted-authority guard makes all four old Schedule import identities absent as modules and same-named packages, rejects ordinary Backend-test static imports and dotted dynamic references, and scans all application Python definitions for restoration of the exact `AgentSchedule` class or `agent_schedules` table mapping under another path. Positive fixtures preserve target Trigger and Heartbeat modules, Trigger Runtime, Heartbeat service and Runtime intake, Feishu group-target resolution, business-calendar and timezone helpers, and target `AgentTrigger` or Heartbeat definitions. Fresh scheduled-execution tests must exercise the approved Trigger owner rather than rename the deleted Schedule fixtures.
+
 ### Delete without porting
 
 The following behavior and its dedicated source, schema, tests, configuration, and dependencies are removed:
