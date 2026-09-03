@@ -703,6 +703,10 @@ LEGACY_REALTIME_SERVICE_DOTTED_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_REALTIME_SERVICE_IDENTITIES
 )
+LEGACY_RESOURCE_DISCOVERY_IDENTITY = Path("app/services/resource_discovery")
+LEGACY_RESOURCE_DISCOVERY_DOTTED_IDENTITY = (
+    LEGACY_RESOURCE_DISCOVERY_IDENTITY.as_posix().replace("/", ".")
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2761,6 +2765,28 @@ def _assert_tests_do_not_reference_deleted_realtime_services(
         backend_root,
         authority="Realtime service",
         deleted_identities=LEGACY_REALTIME_SERVICE_DOTTED_IDENTITIES,
+    )
+
+
+def _assert_deleted_resource_discovery(backend_root: Path) -> None:
+    identity = LEGACY_RESOURCE_DISCOVERY_IDENTITY
+    if (backend_root / identity).with_suffix(".py").is_file():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy resource discovery module was reintroduced: {identity}"
+        )
+    if (backend_root / identity).is_dir():
+        raise DeletedAuthorityViolation(
+            f"deleted legacy resource discovery package was reintroduced: {identity}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_resource_discovery(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="resource discovery",
+        deleted_identities=(LEGACY_RESOURCE_DISCOVERY_DOTTED_IDENTITY,),
     )
 
 
@@ -7354,6 +7380,54 @@ def test_backend_test_reference_of_deleted_realtime_service_fails_guard(
         match="test references deleted legacy Realtime service authority",
     ):
         _assert_tests_do_not_reference_deleted_realtime_services(tmp_path)
+
+
+def test_legacy_resource_discovery_is_absent() -> None:
+    _assert_deleted_resource_discovery(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_resource_discovery() -> None:
+    _assert_tests_do_not_reference_deleted_resource_discovery(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_resource_discovery_fails_guard(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / LEGACY_RESOURCE_DISCOVERY_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy resource discovery {representation} was reintroduced",
+    ):
+        _assert_deleted_resource_discovery(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_resource_discovery_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_RESOURCE_DISCOVERY_DOTTED_IDENTITY
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_resource_discovery.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy resource discovery authority",
+    ):
+        _assert_tests_do_not_reference_deleted_resource_discovery(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
