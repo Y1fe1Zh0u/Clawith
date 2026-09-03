@@ -561,6 +561,32 @@ LEGACY_WORKSPACE_FORBIDDEN_DEFINITIONS = frozenset(
         "table:workspace_edit_locks",
     }
 )
+LEGACY_A2A_IMPORT_IDENTITIES = (Path("app/services/collaboration"),)
+LEGACY_A2A_REINTRODUCTIONS = [
+    (identity, representation)
+    for identity in LEGACY_A2A_IMPORT_IDENTITIES
+    for representation in ("module", "package")
+]
+LEGACY_A2A_DOTTED_IMPORT_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_A2A_IMPORT_IDENTITIES
+)
+LEGACY_A2A_ADVANCED_API_SOURCE = Path("app/api/advanced.py")
+LEGACY_A2A_ADVANCED_API_FORBIDDEN_FACTS = frozenset(
+    {
+        "class:DelegateRequest",
+        "class:InterAgentMessage",
+        "import:collaboration_service",
+        "reference:collaboration_service",
+        "reference:send_message_between_agents",
+        "function:list_collaborators",
+        "function:delegate_task",
+        "function:send_inter_agent_message",
+        "route:GET:/agents/{agent_id}/collaborators",
+        "route:POST:/agents/{agent_id}/collaborate/delegate",
+        "route:POST:/agents/{agent_id}/collaborate/message",
+    }
+)
 FEISHU_PROVIDER_TRANSPORT_SOURCE = Path("app/services/feishu_service.py")
 DINGTALK_PROVIDER_TRANSPORT_SOURCE = Path("app/services/dingtalk_service.py")
 LEGACY_FEISHU_AUTHORITY_METHODS = frozenset(
@@ -2274,6 +2300,54 @@ def _assert_application_does_not_restore_workspace_definitions(
                 "application source restores legacy Workspace definitions: "
                 f"{relative_path} -> {', '.join(restored_facts)}"
             )
+
+
+def _assert_deleted_legacy_a2a_authorities(backend_root: Path) -> None:
+    if len(LEGACY_A2A_IMPORT_IDENTITIES) != 1:
+        raise DeletedAuthorityViolation(
+            "legacy A2A authority inventory must contain exactly 1 identity"
+        )
+    for identity in LEGACY_A2A_IMPORT_IDENTITIES:
+        module = (backend_root / identity).with_suffix(".py")
+        package = backend_root / identity
+        if module.is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy A2A authority module was reintroduced: {identity}"
+            )
+        if package.is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy A2A authority package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_a2a_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="A2A",
+        deleted_identities=LEGACY_A2A_DOTTED_IMPORT_IDENTITIES,
+    )
+
+
+def _assert_advanced_api_does_not_restore_legacy_a2a(
+    backend_root: Path,
+) -> None:
+    source_path = backend_root / LEGACY_A2A_ADVANCED_API_SOURCE
+    if not source_path.is_file():
+        return
+    tree = ast.parse(
+        source_path.read_text(encoding="utf-8"),
+        filename=str(source_path),
+    )
+    restored_facts = sorted(
+        LEGACY_A2A_ADVANCED_API_FORBIDDEN_FACTS & _source_contract_facts(tree)
+    )
+    if restored_facts:
+        raise DeletedAuthorityViolation(
+            "retained advanced API restores legacy A2A collaboration facts: "
+            f"{LEGACY_A2A_ADVANCED_API_SOURCE} -> {', '.join(restored_facts)}"
+        )
 
 
 def _provider_transport_application_imports(tree: ast.Module) -> set[str]:
@@ -6017,6 +6091,157 @@ def test_retained_workspace_adjacent_reference_passes_guard(
     test_path.write_text(test_source, encoding="utf-8")
 
     _assert_tests_do_not_reference_deleted_workspace_authorities(tmp_path)
+
+
+def test_legacy_a2a_authority_is_absent_from_target_tree() -> None:
+    _assert_deleted_legacy_a2a_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_a2a_authority() -> None:
+    _assert_tests_do_not_reference_deleted_a2a_authorities(BACKEND_ROOT)
+
+
+def test_advanced_api_does_not_restore_legacy_a2a_collaboration() -> None:
+    _assert_advanced_api_does_not_restore_legacy_a2a(BACKEND_ROOT)
+
+
+def test_advanced_api_preserves_staged_template_and_metrics_endpoints() -> None:
+    source_path = BACKEND_ROOT / LEGACY_A2A_ADVANCED_API_SOURCE
+    tree = ast.parse(
+        source_path.read_text(encoding="utf-8"),
+        filename=str(source_path),
+    )
+    facts = _source_contract_facts(tree)
+    assert {
+        "class:TemplateCreate",
+        "class:TemplateOut",
+        "function:list_templates",
+        "function:get_template",
+        "function:create_template",
+        "function:delete_template",
+        "function:get_agent_metrics",
+        "route:GET:/templates",
+        "route:GET:/templates/{template_id}",
+        "route:POST:/templates",
+        "route:GET:/agents/{agent_id}/metrics",
+    } <= facts
+
+
+def test_target_a2a_package_remains_empty() -> None:
+    package_init = BACKEND_ROOT / "app/modules/a2a/__init__.py"
+    assert package_init.is_file()
+    assert package_init.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    LEGACY_A2A_REINTRODUCTIONS,
+    ids=[
+        f"{identity.as_posix()}-{representation}"
+        for identity, representation in LEGACY_A2A_REINTRODUCTIONS
+    ],
+)
+def test_reintroduced_legacy_a2a_identity_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy A2A authority {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_a2a_authorities(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_a2a_authority_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    identity = LEGACY_A2A_DOTTED_IMPORT_IDENTITIES[0]
+    source = (
+        f"from {identity} import CollaborationService\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_a2a.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy A2A authority",
+    ):
+        _assert_tests_do_not_reference_deleted_a2a_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class DelegateRequest: ...\n",
+        "class InterAgentMessage: ...\n",
+        "from app.services.collaboration import collaboration_service\n",
+        "async def list_collaborators(): ...\n",
+        "async def delegate_task(): ...\n",
+        "async def send_inter_agent_message(): ...\n",
+        '@router.get("/agents/{agent_id}/collaborators")\nasync def restored(): ...\n',
+        '@router.post("/agents/{agent_id}/collaborate/delegate")\nasync def restored(): ...\n',
+        '@router.post("/agents/{agent_id}/collaborate/message")\nasync def restored(): ...\n',
+        "result = service.send_message_between_agents()\n",
+    ],
+    ids=[
+        "delegate-request",
+        "inter-agent-message",
+        "collaboration-service-import",
+        "list-collaborators-handler",
+        "delegate-task-handler",
+        "send-message-handler",
+        "collaborators-route",
+        "delegate-route",
+        "message-route",
+        "send-message-service-call",
+    ],
+)
+def test_restored_advanced_api_a2a_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / LEGACY_A2A_ADVANCED_API_SOURCE
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="retained advanced API restores legacy A2A collaboration facts",
+    ):
+        _assert_advanced_api_does_not_restore_legacy_a2a(tmp_path)
+
+
+def test_target_a2a_and_unrelated_collaboration_terms_pass_legacy_guard(
+    tmp_path: Path,
+) -> None:
+    test_path = tmp_path / "tests/test_target_a2a.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text("from app.modules.a2a import __name__\n", encoding="utf-8")
+    advanced_source = tmp_path / LEGACY_A2A_ADVANCED_API_SOURCE
+    advanced_source.parent.mkdir(parents=True)
+    advanced_source.write_text(
+        '"""Collaboration-facing reporting APIs."""\n'
+        "class CollaborationSummary: ...\n"
+        "async def collaboration_summary(): ...\n",
+        encoding="utf-8",
+    )
+
+    _assert_tests_do_not_reference_deleted_a2a_authorities(tmp_path)
+    _assert_advanced_api_does_not_restore_legacy_a2a(tmp_path)
 
 
 def test_channel_provider_transports_are_isolated_from_legacy_authorities() -> None:

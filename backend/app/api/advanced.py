@@ -1,4 +1,4 @@
-"""Agent collaboration and template market API routes."""
+"""Agent template market and observability API routes."""
 
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -7,72 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dao import query_dao
 from app.core.permissions import check_agent_access
-from app.core.security import get_current_user, get_current_admin
-from app.dao import agent_metrics_dao, agent_template_dao, user_dao
+from app.core.security import get_current_admin, get_current_user
+from app.dao import agent_metrics_dao, agent_template_dao, query_dao, user_dao
 from app.database import get_db
 from app.models.user import User
-from app.services.collaboration import collaboration_service
 
 router = APIRouter(tags=["advanced"])
-
-
-# ─── Collaboration ──────────────────────────────────────
-
-class DelegateRequest(BaseModel):
-    to_agent_id: uuid.UUID
-    task_title: str
-    task_description: str = ""
-
-
-class InterAgentMessage(BaseModel):
-    to_agent_id: uuid.UUID
-    message: str
-    msg_type: str = "notify"  # notify | consult
-
-
-@router.get("/agents/{agent_id}/collaborators")
-async def list_collaborators(
-    agent_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """List agents that can collaborate with this agent."""
-    await check_agent_access(db, current_user, agent_id)
-    return await collaboration_service.list_collaborators(db, agent_id)
-
-
-@router.post("/agents/{agent_id}/collaborate/delegate")
-async def delegate_task(
-    agent_id: uuid.UUID,
-    data: DelegateRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Delegate a task from one agent to another."""
-    await check_agent_access(db, current_user, agent_id)
-    try:
-        result = await collaboration_service.delegate_task(
-            db, agent_id, data.to_agent_id, data.task_title, data.task_description
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/agents/{agent_id}/collaborate/message")
-async def send_inter_agent_message(
-    agent_id: uuid.UUID,
-    data: InterAgentMessage,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Send a message between agents."""
-    await check_agent_access(db, current_user, agent_id)
-    return await collaboration_service.send_message_between_agents(
-        db, agent_id, data.to_agent_id, data.message, data.msg_type
-    )
 
 
 # ─── Template Market ────────────────────────────────────
@@ -163,8 +104,8 @@ async def handover_agent(
     db: AsyncSession = Depends(get_db),
 ):
     """Transfer ownership of a digital employee to another user."""
-    from app.models.audit import AuditLog
     from app.core.permissions import is_agent_creator
+    from app.models.audit import AuditLog
 
     agent, _access = await check_agent_access(db, current_user, agent_id)
     if not is_agent_creator(current_user, agent):
