@@ -573,8 +573,11 @@ LEGACY_A2A_DOTTED_IMPORT_IDENTITIES = tuple(
     identity.as_posix().replace("/", ".")
     for identity in LEGACY_A2A_IMPORT_IDENTITIES
 )
-LEGACY_A2A_ADVANCED_API_SOURCE = Path("app/api/advanced.py")
-LEGACY_A2A_ADVANCED_API_FORBIDDEN_FACTS = frozenset(
+LEGACY_ADVANCED_API_IMPORT_IDENTITY = Path("app/api/advanced")
+LEGACY_ADVANCED_API_DOTTED_IMPORT_IDENTITY = (
+    LEGACY_ADVANCED_API_IMPORT_IDENTITY.as_posix().replace("/", ".")
+)
+LEGACY_ADVANCED_API_FORBIDDEN_FACTS = frozenset(
     {
         "class:DelegateRequest",
         "class:InterAgentMessage",
@@ -587,10 +590,6 @@ LEGACY_A2A_ADVANCED_API_FORBIDDEN_FACTS = frozenset(
         "route:GET:/agents/{agent_id}/collaborators",
         "route:POST:/agents/{agent_id}/collaborate/delegate",
         "route:POST:/agents/{agent_id}/collaborate/message",
-    }
-)
-STAGED_ADVANCED_API_REQUIRED_FACTS = frozenset(
-    {
         "class:HandoverRequest",
         "class:TemplateCreate",
         "class:TemplateOut",
@@ -2389,46 +2388,51 @@ def _assert_tests_do_not_reference_deleted_a2a_authorities(
     )
 
 
-def _assert_advanced_api_does_not_restore_legacy_a2a(
+def _assert_deleted_legacy_advanced_api(backend_root: Path) -> None:
+    module = (backend_root / LEGACY_ADVANCED_API_IMPORT_IDENTITY).with_suffix(".py")
+    package = backend_root / LEGACY_ADVANCED_API_IMPORT_IDENTITY
+    if module.is_file():
+        raise DeletedAuthorityViolation(
+            "deleted legacy advanced API module was reintroduced: "
+            f"{LEGACY_ADVANCED_API_IMPORT_IDENTITY}"
+        )
+    if package.is_dir():
+        raise DeletedAuthorityViolation(
+            "deleted legacy advanced API package was reintroduced: "
+            f"{LEGACY_ADVANCED_API_IMPORT_IDENTITY}"
+        )
+
+
+def _assert_tests_do_not_reference_deleted_advanced_api(
     backend_root: Path,
 ) -> None:
-    source_path = backend_root / LEGACY_A2A_ADVANCED_API_SOURCE
-    if not source_path.is_file():
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="advanced API",
+        deleted_identities=(LEGACY_ADVANCED_API_DOTTED_IMPORT_IDENTITY,),
+    )
+
+
+def _assert_application_apis_do_not_restore_legacy_advanced_facts(
+    backend_root: Path,
+) -> None:
+    api_root = backend_root / "app/api"
+    if not api_root.is_dir():
         return
-    tree = ast.parse(
-        source_path.read_text(encoding="utf-8"),
-        filename=str(source_path),
-    )
-    restored_facts = sorted(
-        LEGACY_A2A_ADVANCED_API_FORBIDDEN_FACTS & _source_contract_facts(tree)
-    )
-    if restored_facts:
-        raise DeletedAuthorityViolation(
-            "retained advanced API restores legacy A2A collaboration facts: "
-            f"{LEGACY_A2A_ADVANCED_API_SOURCE} -> {', '.join(restored_facts)}"
+    for source_path in sorted(api_root.rglob("*.py")):
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
         )
-
-
-def _assert_advanced_api_preserves_staged_non_a2a_facts(
-    backend_root: Path,
-) -> None:
-    source_path = backend_root / LEGACY_A2A_ADVANCED_API_SOURCE
-    if not source_path.is_file():
-        raise DeletedAuthorityViolation(
-            f"retained advanced API is missing: {LEGACY_A2A_ADVANCED_API_SOURCE}"
+        restored_facts = sorted(
+            LEGACY_ADVANCED_API_FORBIDDEN_FACTS & _source_contract_facts(tree)
         )
-    tree = ast.parse(
-        source_path.read_text(encoding="utf-8"),
-        filename=str(source_path),
-    )
-    missing_facts = sorted(
-        STAGED_ADVANCED_API_REQUIRED_FACTS - _source_contract_facts(tree)
-    )
-    if missing_facts:
-        raise DeletedAuthorityViolation(
-            "retained advanced API dropped staged non-A2A facts: "
-            f"{LEGACY_A2A_ADVANCED_API_SOURCE} -> {', '.join(missing_facts)}"
-        )
+        if restored_facts:
+            relative_path = source_path.relative_to(backend_root)
+            raise DeletedAuthorityViolation(
+                "application API restores legacy advanced facts: "
+                f"{relative_path} -> {', '.join(restored_facts)}"
+            )
 
 
 def _assert_email_provider_is_decoupled_from_legacy_storage(
@@ -6438,129 +6442,57 @@ def test_backend_tests_do_not_reference_deleted_a2a_authority() -> None:
     _assert_tests_do_not_reference_deleted_a2a_authorities(BACKEND_ROOT)
 
 
-def test_advanced_api_does_not_restore_legacy_a2a_collaboration() -> None:
-    _assert_advanced_api_does_not_restore_legacy_a2a(BACKEND_ROOT)
+def test_legacy_advanced_api_is_absent() -> None:
+    _assert_deleted_legacy_advanced_api(BACKEND_ROOT)
 
 
-def test_advanced_api_preserves_staged_non_a2a_endpoints() -> None:
-    _assert_advanced_api_preserves_staged_non_a2a_facts(BACKEND_ROOT)
+def test_backend_tests_do_not_reference_deleted_advanced_api() -> None:
+    _assert_tests_do_not_reference_deleted_advanced_api(BACKEND_ROOT)
 
 
-STAGED_ADVANCED_API_FIXTURE_SOURCE = """\
-class TemplateCreate: ...
-class TemplateOut: ...
-class HandoverRequest: ...
-
-@router.get("/templates")
-async def list_templates(): ...
-
-@router.get("/templates/{template_id}")
-async def get_template(): ...
-
-@router.post("/templates")
-async def create_template(): ...
-
-@router.delete("/templates/{template_id}")
-async def delete_template(): ...
-
-@router.post("/agents/{agent_id}/handover")
-async def handover_agent(): ...
-
-@router.get("/agents/{agent_id}/metrics")
-async def get_agent_metrics(): ...
-"""
+def test_application_apis_do_not_restore_legacy_advanced_facts() -> None:
+    _assert_application_apis_do_not_restore_legacy_advanced_facts(BACKEND_ROOT)
 
 
-@pytest.mark.parametrize(
-    ("required_fact", "source_fragment", "replacement"),
-    [
-        ("class:TemplateCreate", "class TemplateCreate", "class RemovedTemplateCreate"),
-        ("class:TemplateOut", "class TemplateOut", "class RemovedTemplateOut"),
-        (
-            "class:HandoverRequest",
-            "class HandoverRequest",
-            "class RemovedHandoverRequest",
-        ),
-        (
-            "function:list_templates",
-            "async def list_templates",
-            "async def removed_list_templates",
-        ),
-        (
-            "function:get_template",
-            "async def get_template",
-            "async def removed_get_template",
-        ),
-        (
-            "function:create_template",
-            "async def create_template",
-            "async def removed_create_template",
-        ),
-        (
-            "function:delete_template",
-            "async def delete_template",
-            "async def removed_delete_template",
-        ),
-        (
-            "function:handover_agent",
-            "async def handover_agent",
-            "async def removed_handover_agent",
-        ),
-        (
-            "function:get_agent_metrics",
-            "async def get_agent_metrics",
-            "async def removed_get_agent_metrics",
-        ),
-        ("route:GET:/templates", 'router.get("/templates")', 'router.get("/removed")'),
-        (
-            "route:GET:/templates/{template_id}",
-            'router.get("/templates/{template_id}")',
-            'router.get("/removed/{template_id}")',
-        ),
-        (
-            "route:POST:/templates",
-            'router.post("/templates")',
-            'router.post("/removed")',
-        ),
-        (
-            "route:DELETE:/templates/{template_id}",
-            'router.delete("/templates/{template_id}")',
-            'router.delete("/removed/{template_id}")',
-        ),
-        (
-            "route:POST:/agents/{agent_id}/handover",
-            'router.post("/agents/{agent_id}/handover")',
-            'router.post("/agents/{agent_id}/removed")',
-        ),
-        (
-            "route:GET:/agents/{agent_id}/metrics",
-            'router.get("/agents/{agent_id}/metrics")',
-            'router.get("/agents/{agent_id}/removed")',
-        ),
-    ],
-    ids=lambda value: value.replace(":", "-").replace("/", "-")[:72],
-)
-def test_removed_staged_advanced_api_fact_fails_guard(
+@pytest.mark.parametrize("representation", ["module", "package"])
+def test_reintroduced_legacy_advanced_api_fails_guard(
     tmp_path: Path,
-    required_fact: str,
-    source_fragment: str,
-    replacement: str,
+    representation: str,
 ) -> None:
-    source_path = tmp_path / LEGACY_A2A_ADVANCED_API_SOURCE
-    source_path.parent.mkdir(parents=True)
-    source_path.write_text(
-        STAGED_ADVANCED_API_FIXTURE_SOURCE.replace(
-            source_fragment,
-            replacement,
-            1,
-        ),
-        encoding="utf-8",
+    authority = tmp_path / LEGACY_ADVANCED_API_IMPORT_IDENTITY
+    if representation == "module":
+        authority.parent.mkdir(parents=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy advanced API {representation} was reintroduced",
+    ):
+        _assert_deleted_legacy_advanced_api(tmp_path)
+
+
+@pytest.mark.parametrize("reference_kind", ["static", "dotted"])
+def test_backend_test_reference_of_deleted_advanced_api_fails_guard(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {LEGACY_ADVANCED_API_DOTTED_IMPORT_IDENTITY}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{LEGACY_ADVANCED_API_DOTTED_IMPORT_IDENTITY}")\n'
     )
+    test_path = tmp_path / "tests/test_restored_advanced.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
 
-    with pytest.raises(DeletedAuthorityViolation) as exc_info:
-        _assert_advanced_api_preserves_staged_non_a2a_facts(tmp_path)
-
-    assert required_fact in str(exc_info.value)
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy advanced API authority",
+    ):
+        _assert_tests_do_not_reference_deleted_advanced_api(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
@@ -6622,6 +6554,41 @@ def test_backend_test_reference_of_deleted_a2a_authority_fails_guard(
 @pytest.mark.parametrize(
     "source",
     [
+        "class TemplateCreate: ...\n",
+        "class TemplateOut: ...\n",
+        "class HandoverRequest: ...\n",
+        "async def list_templates(): ...\n",
+        "async def get_template(): ...\n",
+        "async def create_template(): ...\n",
+        "async def delete_template(): ...\n",
+        "async def handover_agent(): ...\n",
+        "async def get_agent_metrics(): ...\n",
+        '@router.get("/templates")\nasync def restored(): ...\n',
+        '@router.get("/templates/{template_id}")\nasync def restored(): ...\n',
+        '@router.post("/templates")\nasync def restored(): ...\n',
+        '@router.delete("/templates/{template_id}")\nasync def restored(): ...\n',
+        '@router.post("/agents/{agent_id}/handover")\nasync def restored(): ...\n',
+        '@router.get("/agents/{agent_id}/metrics")\nasync def restored(): ...\n',
+    ],
+)
+def test_restored_residual_advanced_api_fact_fails_guard(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    source_path = tmp_path / "app/api/restored_residual.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="application API restores legacy advanced facts",
+    ):
+        _assert_application_apis_do_not_restore_legacy_advanced_facts(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
         "class DelegateRequest: ...\n",
         "class InterAgentMessage: ...\n",
         "from app.services.collaboration import collaboration_service\n",
@@ -6650,15 +6617,15 @@ def test_restored_advanced_api_a2a_fact_fails_guard(
     tmp_path: Path,
     source: str,
 ) -> None:
-    source_path = tmp_path / LEGACY_A2A_ADVANCED_API_SOURCE
+    source_path = tmp_path / "app/api/restored_advanced.py"
     source_path.parent.mkdir(parents=True)
     source_path.write_text(source, encoding="utf-8")
 
     with pytest.raises(
         DeletedAuthorityViolation,
-        match="retained advanced API restores legacy A2A collaboration facts",
+        match="application API restores legacy advanced facts",
     ):
-        _assert_advanced_api_does_not_restore_legacy_a2a(tmp_path)
+        _assert_application_apis_do_not_restore_legacy_advanced_facts(tmp_path)
 
 
 def test_target_a2a_and_unrelated_collaboration_terms_pass_legacy_guard(
@@ -6667,7 +6634,7 @@ def test_target_a2a_and_unrelated_collaboration_terms_pass_legacy_guard(
     test_path = tmp_path / "tests/test_target_a2a.py"
     test_path.parent.mkdir(parents=True)
     test_path.write_text("from app.modules.a2a import __name__\n", encoding="utf-8")
-    advanced_source = tmp_path / LEGACY_A2A_ADVANCED_API_SOURCE
+    advanced_source = tmp_path / "app/api/collaboration_reporting.py"
     advanced_source.parent.mkdir(parents=True)
     advanced_source.write_text(
         '"""Collaboration-facing reporting APIs."""\n'
@@ -6677,7 +6644,7 @@ def test_target_a2a_and_unrelated_collaboration_terms_pass_legacy_guard(
     )
 
     _assert_tests_do_not_reference_deleted_a2a_authorities(tmp_path)
-    _assert_advanced_api_does_not_restore_legacy_a2a(tmp_path)
+    _assert_application_apis_do_not_restore_legacy_advanced_facts(tmp_path)
 
 
 def test_email_provider_is_decoupled_from_legacy_storage() -> None:
