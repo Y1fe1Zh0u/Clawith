@@ -712,6 +712,16 @@ LEGACY_SYSTEM_EMAIL_SERVICE_DOTTED_IDENTITY = (
     LEGACY_SYSTEM_EMAIL_SERVICE_IDENTITY.as_posix().replace("/", ".")
 )
 LEGACY_SYSTEM_EMAIL_TEST_PATH = Path("tests/test_system_email.py")
+LEGACY_VISION_MAINTENANCE_IDENTITIES = (
+    Path("app/services/vision_inject"),
+    Path("app/scripts/backfill_department_paths"),
+    Path("app/scripts/cleanup_duplicate_feishu_users"),
+    Path("app/scripts/disable_plaza_social_tools"),
+)
+LEGACY_VISION_MAINTENANCE_DOTTED_IDENTITIES = tuple(
+    identity.as_posix().replace("/", ".")
+    for identity in LEGACY_VISION_MAINTENANCE_IDENTITIES
+)
 EMAIL_PROVIDER_SERVICE_SOURCE = Path("app/services/email_service.py")
 EMAIL_PROVIDER_FORBIDDEN_STORAGE_IMPORTS = frozenset(
     {"app.services.storage", "app.services.storage_runtime"}
@@ -2818,6 +2828,28 @@ def _assert_tests_do_not_reference_deleted_system_email_service(
         backend_root,
         authority="System Email service",
         deleted_identities=(LEGACY_SYSTEM_EMAIL_SERVICE_DOTTED_IDENTITY,),
+    )
+
+
+def _assert_deleted_vision_maintenance_authorities(backend_root: Path) -> None:
+    for identity in LEGACY_VISION_MAINTENANCE_IDENTITIES:
+        if (backend_root / identity).with_suffix(".py").is_file():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy vision/maintenance module was reintroduced: {identity}"
+            )
+        if (backend_root / identity).is_dir():
+            raise DeletedAuthorityViolation(
+                f"deleted legacy vision/maintenance package was reintroduced: {identity}"
+            )
+
+
+def _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(
+    backend_root: Path,
+) -> None:
+    _assert_tests_do_not_reference_deleted_authorities(
+        backend_root,
+        authority="vision/maintenance",
+        deleted_identities=LEGACY_VISION_MAINTENANCE_DOTTED_IDENTITIES,
     )
 
 
@@ -5866,7 +5898,7 @@ def test_unrelated_dynamic_test_reference_passes_agentbay_guard(tmp_path: Path) 
     test_path = tmp_path / "tests/test_unrelated_agentbay_reference.py"
     test_path.parent.mkdir(parents=True)
     test_path.write_text(
-        'module = importlib.import_module("app.services.vision_inject")\n',
+        'module = importlib.import_module("app.services.email_service")\n',
         encoding="utf-8",
     )
 
@@ -7508,6 +7540,69 @@ def test_backend_test_reference_of_deleted_system_email_service_fails_guard(
         match="test references deleted legacy System Email service authority",
     ):
         _assert_tests_do_not_reference_deleted_system_email_service(tmp_path)
+
+
+def test_legacy_vision_maintenance_authorities_are_absent() -> None:
+    _assert_deleted_vision_maintenance_authorities(BACKEND_ROOT)
+
+
+def test_backend_tests_do_not_reference_deleted_vision_maintenance_authorities() -> None:
+    _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(BACKEND_ROOT)
+
+
+@pytest.mark.parametrize(
+    ("identity", "representation"),
+    [
+        (identity, representation)
+        for identity in LEGACY_VISION_MAINTENANCE_IDENTITIES
+        for representation in ("module", "package")
+    ],
+)
+def test_reintroduced_vision_maintenance_authority_fails_guard(
+    tmp_path: Path,
+    identity: Path,
+    representation: str,
+) -> None:
+    authority = tmp_path / identity
+    if representation == "module":
+        authority.parent.mkdir(parents=True, exist_ok=True)
+        authority.with_suffix(".py").write_text("", encoding="utf-8")
+    else:
+        authority.mkdir(parents=True, exist_ok=True)
+        (authority / "__init__.py").write_text("", encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match=f"deleted legacy vision/maintenance {representation} was reintroduced",
+    ):
+        _assert_deleted_vision_maintenance_authorities(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("identity", "reference_kind"),
+    [
+        (identity, reference_kind)
+        for identity in LEGACY_VISION_MAINTENANCE_DOTTED_IDENTITIES
+        for reference_kind in ("static", "dotted")
+    ],
+)
+def test_backend_test_reference_of_deleted_vision_maintenance_authority_fails_guard(
+    tmp_path: Path,
+    identity: str,
+    reference_kind: str,
+) -> None:
+    source = (
+        f"import {identity}\n"
+        if reference_kind == "static"
+        else f'module = importlib.import_module("{identity}")\n'
+    )
+    test_path = tmp_path / "tests/test_restored_vision_maintenance.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(source, encoding="utf-8")
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="test references deleted legacy vision/maintenance authority",
+    ):
+        _assert_tests_do_not_reference_deleted_vision_maintenance_authorities(tmp_path)
 
 
 def test_target_a2a_package_remains_empty() -> None:
