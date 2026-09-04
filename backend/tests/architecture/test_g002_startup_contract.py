@@ -188,6 +188,25 @@ def _shell_execution_facts(source: str) -> set[str]:
     return facts
 
 
+def _dynamic_shell_sink_commands(source: str) -> set[tuple[str, ...]]:
+    sinks: set[tuple[str, ...]] = set()
+    for tokens in _expanded_shell_segments(source):
+        commands = [
+            token
+            for token in tokens
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token, re.DOTALL)
+            and token not in {"if", "then"}
+        ]
+        if not commands:
+            continue
+        if any(
+            (Path(token).name or token) in {"bash", "sh", "eval", "source", "."}
+            for token in commands
+        ):
+            sinks.add(tuple(commands))
+    return sinks
+
+
 def _yaml_executable_commands(source: str) -> list[str]:
     parsed = yaml.safe_load(source)
     commands: list[str] = []
@@ -349,16 +368,18 @@ def _validate_setup_source(source: str) -> None:
         _executable_expansion_lines(source)
         - SETUP_ALLOWED_EXECUTABLE_EXPANSIONS
     )
+    dynamic_sinks = _dynamic_shell_sink_commands(source)
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
         value
         for value in ("$ROOT/.env", "create_all", "seed.py", "AGENT_RUNTIME")
         if value in source
     )
-    if missing or forbidden or unsafe_substitutions or "/clawith?" in source:
+    if missing or forbidden or unsafe_substitutions or dynamic_sinks or "/clawith?" in source:
         raise StartupContractError(
             "invalid setup contract "
-            f"missing={missing} forbidden={forbidden} substitutions={sorted(unsafe_substitutions)}"
+            f"missing={missing} forbidden={forbidden} substitutions={sorted(unsafe_substitutions)} "
+            f"shell_sinks={sorted(dynamic_sinks)}"
         )
 
 
@@ -382,6 +403,7 @@ def _validate_restart_source(source: str) -> None:
         _executable_expansion_lines(source)
         - RESTART_ALLOWED_EXECUTABLE_EXPANSIONS
     )
+    dynamic_sinks = _dynamic_shell_sink_commands(source)
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
         value
@@ -404,6 +426,7 @@ def _validate_restart_source(source: str) -> None:
         missing
         or forbidden
         or unsafe_substitutions
+        or dynamic_sinks
         or source.count(command) != 1
         or source.index("Missing backend/.env") > source.index(command)
         or source.index(command) > source.index("/api/health")
@@ -411,7 +434,8 @@ def _validate_restart_source(source: str) -> None:
         raise StartupContractError(
             "invalid restart contract "
             f"missing={missing} forbidden={forbidden} "
-            f"substitutions={sorted(unsafe_substitutions)}"
+            f"substitutions={sorted(unsafe_substitutions)} "
+            f"shell_sinks={sorted(dynamic_sinks)}"
         )
 
 
@@ -634,6 +658,8 @@ def _validate_operator_document(source: str) -> None:
             "operator document contains an unapproved executable shell expansion"
         )
     facts = _shell_execution_facts(fenced)
+    allowed_shell_commands = {("bash", "setup.sh"), ("bash", "restart.sh")}
+    unsafe_shell_sinks = _dynamic_shell_sink_commands(fenced) - allowed_shell_commands
     for tokens in _expanded_shell_segments(fenced):
         if not tokens:
             continue
@@ -658,9 +684,10 @@ def _validate_operator_document(source: str) -> None:
         "legacy-database",
         "root-dotenv",
     }
-    if forbidden:
+    if forbidden or unsafe_shell_sinks:
         raise StartupContractError(
-            f"operator document contains executable legacy instructions: {sorted(forbidden)}"
+            "operator document contains executable legacy instructions: "
+            f"facts={sorted(forbidden)} shell_sinks={sorted(unsafe_shell_sinks)}"
         )
 
 
@@ -719,6 +746,14 @@ def test_setup_and_restart_match_health_only_contract() -> None:
         "cat >(alembic upgrade head)",
         "OUT=$(alembic $(printf upgrade) head)",
         'OUT="$(alembic $(printf upgrade) head)"',
+        "printf 'alembic upgrade head\\n' | bash",
+        "eval 'alembic upgrade head'",
+        "source /tmp/legacy-setup.sh",
+        ". /tmp/legacy-setup.sh",
+        "printf payload | command bash",
+        "printf payload | /usr/bin/env bash",
+        "printf payload | nice bash",
+        "printf payload | xargs bash",
         "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable",
     ],
 )
@@ -738,6 +773,14 @@ def test_setup_contract_rejects_legacy_behavior(forbidden: str) -> None:
         "kill -9 123",
         "OUT=$(alembic $(printf upgrade) head)",
         "readonly OUT=$(alembic $(printf upgrade) head)",
+        "printf 'alembic upgrade head\\n' | bash",
+        "eval 'alembic upgrade head'",
+        "source /tmp/legacy-restart.sh",
+        ". /tmp/legacy-restart.sh",
+        "printf payload | command bash",
+        "printf payload | /usr/bin/env bash",
+        "printf payload | nice bash",
+        "printf payload | xargs bash",
         "cat <(alembic upgrade head)",
         "cat >(alembic upgrade head)",
     ],
@@ -1876,6 +1919,16 @@ def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
         "```bash\nOUT=$(alembic $(printf upgrade) head)\n```",
         '```bash\nOUT="$(alembic $(printf upgrade) head)"\n```',
         '```bash\necho "$(alembic $(printf upgrade) head)"\n```',
+        "```bash\nprintf 'alembic upgrade head\\n' | bash\n```",
+        "```bash\neval 'alembic upgrade head'\n```",
+        "```bash\nsource /tmp/legacy.sh\n```",
+        "```bash\n. /tmp/legacy.sh\n```",
+        "```bash\n/bin/bash setup.sh\n```",
+        "```bash\nenv bash setup.sh\n```",
+        "```bash\nprintf payload | command bash\n```",
+        "```bash\nprintf payload | /usr/bin/env bash\n```",
+        "```bash\nprintf payload | nice bash\n```",
+        "```bash\nprintf payload | xargs bash\n```",
         "```bash\ncat <(alembic upgrade head)\n```",
         "```bash\ncat >(alembic upgrade head)\n```",
         "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
@@ -1902,5 +1955,13 @@ def test_operator_doc_guard_allows_inert_tilde_fenced_warning() -> None:
     source = (
         "# G002 health-only\n\n"
         "~~~text\nDo not run Alembic or Docker during G002.\n~~~\n"
+    )
+    _validate_operator_document(source)
+
+
+def test_operator_doc_guard_allows_exact_health_only_entry_commands() -> None:
+    source = (
+        "# G002 health-only\n\n"
+        "```bash\nbash setup.sh\nbash restart.sh\n```\n"
     )
     _validate_operator_document(source)
