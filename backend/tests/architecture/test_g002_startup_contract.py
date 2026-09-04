@@ -325,7 +325,9 @@ def _validate_setup_source(source: str) -> None:
         'BACKEND_ENV="$BACKEND_DIR/.env"',
         'BACKEND_ENV_EXAMPLE="$BACKEND_DIR/.env.example"',
         'TARGET_DATABASE="clawith_target"',
-        "uv sync",
+        "uv lock --check",
+        "uv sync --extra dev --frozen",
+        "uv sync --frozen",
     )
     missing = [value for value in required if value not in source]
     unsafe_substitutions = (
@@ -753,8 +755,10 @@ def test_startup_contract_checks_commands_after_inert_echo(
         _validate_restart_source(RESTART.read_text(encoding="utf-8") + bypass)
 
 
+@pytest.mark.parametrize("lock_current", [True, False], ids=["current-lock", "stale-lock"])
 def test_setup_synchronizes_backend_env_and_prepares_target_database(
     tmp_path: Path,
+    lock_current: bool,
 ) -> None:
     repository = tmp_path / "repo"
     backend = repository / "backend"
@@ -767,25 +771,36 @@ def test_setup_synchronizes_backend_env_and_prepares_target_database(
         BACKEND_ENV_EXAMPLE.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (backend / ".env").write_text(
+    original_backend_env = (
         "DEBUG=true\nLEGACY_RUNTIME=true\n"
-        "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith\n",
-        encoding="utf-8",
+        "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith\n"
     )
+    (backend / ".env").write_text(original_backend_env, encoding="utf-8")
     command_log = tmp_path / "commands.log"
     _write_executable(
         fake_bin / "psql",
         '#!/bin/sh\nprintf "psql %s\\n" "$*" >> "$COMMAND_LOG"\n',
     )
-    for command in ("createuser", "createdb", "uv"):
+    for command in ("createuser", "createdb"):
         _write_executable(
             fake_bin / command,
             f'#!/bin/sh\nprintf "{command} %s\\n" "$*" >> "$COMMAND_LOG"\n',
         )
+    _write_executable(
+        fake_bin / "uv",
+        """#!/bin/sh
+printf 'uv %s\n' "$*" >> "$COMMAND_LOG"
+if [ "$*" = "lock --check" ] && [ "${FAIL_LOCK:-0}" = 1 ]; then
+  exit 29
+fi
+exit 0
+""",
+    )
     environment = os.environ.copy()
     environment.update(
         {
             "COMMAND_LOG": str(command_log),
+            "FAIL_LOCK": "0" if lock_current else "1",
             "PATH": f"{fake_bin}:{environment['PATH']}",
             "USER": "test-admin",
         }
@@ -800,15 +815,23 @@ def test_setup_synchronizes_backend_env_and_prepares_target_database(
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
     backend_env = (backend / ".env").read_text(encoding="utf-8")
+    commands = command_log.read_text(encoding="utf-8")
+    if not lock_current:
+        assert completed.returncode == 29, completed.stderr
+        assert backend_env == original_backend_env
+        assert commands == "uv lock --check\n"
+        assert not (repository / ".env").exists()
+        return
+
+    assert completed.returncode == 0, completed.stderr
     assert "DEBUG=true" in backend_env
     assert "LEGACY_RUNTIME" not in backend_env
     assert f"/{TARGET_DATABASE}?ssl=disable" in backend_env
     assert not (repository / ".env").exists()
-    commands = command_log.read_text(encoding="utf-8")
     assert f"createdb --host localhost --port 5432 --username test-admin --owner clawith {TARGET_DATABASE}" in commands
-    assert "uv sync --extra dev" in commands
+    assert "uv lock --check" in commands
+    assert "uv sync --extra dev --frozen" in commands
 
 
 def test_restart_fails_before_start_when_backend_env_is_missing(tmp_path: Path) -> None:

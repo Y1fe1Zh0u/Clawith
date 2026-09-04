@@ -31,6 +31,9 @@ if [ ! -f "$BACKEND_ENV_EXAMPLE" ]; then
     exit 1
 fi
 
+cd "$BACKEND_DIR"
+uv lock --check
+
 TARGET_DATABASE_URL="postgresql+asyncpg://${TARGET_ROLE}:${TARGET_ROLE}@${PG_HOST}:${PG_PORT}/${TARGET_DATABASE}?ssl=disable"
 TEMP_ENV="$(mktemp "$BACKEND_DIR/.env.tmp.XXXXXX")"
 trap 'rm -f "$TEMP_ENV"' EXIT
@@ -69,11 +72,10 @@ if ! "${PSQL_ADMIN[@]}" --tuples-only --no-align --command "SELECT 1 FROM pg_dat
 fi
 echo "Prepared PostgreSQL database: $TARGET_DATABASE"
 
-cd "$BACKEND_DIR"
 if [ "$INSTALL_DEV" = true ]; then
-    uv sync --extra dev
+    uv sync --extra dev --frozen
 else
-    uv sync
+    uv sync --frozen
 fi
 
 echo "G002 setup complete. No schema migration or product bootstrap was run."
