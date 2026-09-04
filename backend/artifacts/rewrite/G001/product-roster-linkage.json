@@ -2,8 +2,8 @@
   "goal": "G001",
   "validation": "product-roster-and-linkage",
   "command": "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json --check-product-roster-and-linkage",
-  "verified_source_head": "bdface8bdb9277551fad55db610ed273bfb442d1",
-  "verified_at": "2026-09-03T09:51:32Z",
+  "verified_source_head": "0b716cf7e3c7d29627c49d37064c4160986d0832",
+  "verified_at": "2026-09-04T03:02:16Z",
   "exit_code": 0,
   "result": "goal-gate validation passed: G000-G009 cumulative contract and product roster/linkage are valid"
 }
