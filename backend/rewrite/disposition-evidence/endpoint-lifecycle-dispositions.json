@@ -3,7 +3,7 @@
   "authorities": [
     {
       "path": ".agents/notes/proposed/simplification/2026-09-01-clean-break-backend-source-disposition.md",
-      "sha256": "099060d2a06e73f9ba9f7a347584e081fb7b37de6af1d5b5f347809af07008ae"
+      "sha256": "b0ff77b5fbd396acf07bdb01998ffa1217c4b2fd0664f5ef0373422a83d97de5"
     },
     {
       "path": "backend/rewrite/backend-capability-coverage-matrix.md",
