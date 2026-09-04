@@ -1,8 +1,8 @@
-# Draft Backend Capability Coverage Matrix
+# Accepted Backend Capability Coverage Matrix
 
 This matrix freezes current mounted Backend capability and lifecycle coverage before the clean rewrite. It preserves product behavior requirements, not route compatibility. Before deleting each current API, implementation inspects Frontend and dynamic/external consumers to capture required behavior and then verifies the replacement target contract.
 
-Status: draft — Phase 0 expands every router to endpoint-level disposition and adds consumer evidence plus a planned replacement/removal gate. Target-tree replacement is blocked until every endpoint and lifecycle reaches `disposition_approved`; full product contracts remain per-module gates.
+Status: accepted — Phase 0 recorded endpoint-level disposition, consumer evidence, and a planned replacement/removal gate for every frozen endpoint and lifecycle row. The 401 accepted decisions are the current G002 source-disposition authority; full product contracts remain per-module gates.
 
 ## Mounted API surfaces
 

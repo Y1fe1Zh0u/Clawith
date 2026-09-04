@@ -233,6 +233,26 @@ def test_build_is_deterministic_and_preserves_review_fields(tmp_path: Path) -> N
     assert second == third
     assert rendered == manifest_path.read_text(encoding="utf-8")
     assert second["entries"][0]["planned_gate"] == "kept"
+    assert second["target"]["persistence_namespace"] == "clawith_target"
+
+
+def test_manifest_rejects_target_namespace_divergence_from_settings(
+    tmp_path: Path,
+) -> None:
+    source = _fixture_source(tmp_path / "source")
+    manifest_path = tmp_path / "rewrite/coverage.json"
+    manifest = rewrite_inventory.build_manifest(manifest_path, source)
+    manifest["target"]["persistence_namespace"] = "clawith_target_rewrite"
+
+    with pytest.raises(
+        rewrite_inventory.InventoryError,
+        match="target persistence namespace must match Settings: clawith_target",
+    ):
+        rewrite_inventory.validate_manifest(
+            manifest,
+            manifest_path,
+            validate_artifact_hashes=False,
+        )
 
 
 def test_build_refuses_to_prune_a_reviewed_frozen_inventory(tmp_path: Path) -> None:
@@ -596,7 +616,7 @@ def test_reference_environment_requires_distinct_persistence(
 ) -> None:
     manifest = {
         "reference": {"persistence_namespace": "legacy"},
-        "target": {"persistence_namespace": "target"},
+        "target": {"persistence_namespace": "clawith_target"},
     }
     black_box = {
         "persistence_namespace": "legacy",
@@ -627,7 +647,7 @@ def test_release_preflight_requires_all_terminal_and_never_removes_path(
         "tracked_content_hash": content_hash,
         "worktree": str(worktree),
     }
-    manifest["target"] = {"persistence_namespace": "target"}
+    manifest["target"] = {"persistence_namespace": "clawith_target"}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(rewrite_inventory.InventoryError, match="nonterminal="):

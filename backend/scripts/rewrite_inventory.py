@@ -21,6 +21,8 @@ from typing import Any
 from check_owner_contracts import ContractError as OwnerContractError
 from check_owner_contracts import validate_manifest as validate_owner_contract_manifest
 
+from app.infrastructure.config import TARGET_DATABASE_NAME
+
 SCHEMA_VERSION = 1
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 KINDS = {"bootstrap", "connector", "http", "lifecycle", "websocket"}
@@ -461,7 +463,7 @@ def build_manifest(manifest_path: Path, source_root: Path) -> dict[str, Any]:
                 "worktree": None,
             },
         ),
-        "target": existing.get("target", {"persistence_namespace": "clawith_target_rewrite"}),
+        "target": existing.get("target", {"persistence_namespace": TARGET_DATABASE_NAME}),
         "entries": rows,
     }
     validate_manifest(manifest, manifest_path, validate_artifact_hashes=False)
@@ -594,6 +596,10 @@ def validate_manifest(
 ) -> tuple[int, int, int]:
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise InventoryError(f"unsupported coverage schema: {manifest.get('schema_version')}")
+    if manifest.get("target", {}).get("persistence_namespace") != TARGET_DATABASE_NAME:
+        raise InventoryError(
+            f"target persistence namespace must match Settings: {TARGET_DATABASE_NAME}"
+        )
     rows = manifest.get("entries")
     if not isinstance(rows, list):
         raise InventoryError("coverage entries must be a list")
@@ -859,6 +865,10 @@ def _isolated_namespace(manifest: dict[str, Any], black_box: dict[str, Any]) -> 
     fixture_namespace = black_box.get("persistence_namespace")
     if not all(isinstance(value, str) and value for value in (reference_namespace, target_namespace, fixture_namespace)):
         raise InventoryError("reference, target, and black-box persistence namespaces are required")
+    if target_namespace != TARGET_DATABASE_NAME:
+        raise InventoryError(
+            f"target persistence namespace must match Settings: {TARGET_DATABASE_NAME}"
+        )
     if reference_namespace != fixture_namespace or reference_namespace == target_namespace:
         raise InventoryError("reference black-box persistence namespace is not isolated")
     return reference_namespace

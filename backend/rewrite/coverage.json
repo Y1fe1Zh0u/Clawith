@@ -13243,6 +13243,6 @@
   "schema_version": 1,
   "source_digest": "9c43458234f80c21cec8d3ddb16d4783a4c86eebbceccf835324077644071b63",
   "target": {
-    "persistence_namespace": "clawith_target_rewrite"
+    "persistence_namespace": "clawith_target"
   }
 }
