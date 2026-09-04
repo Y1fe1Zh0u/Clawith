@@ -78,13 +78,28 @@ SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS = {
     'existing="$(grep -m 1 "^${key}=" "$BACKEND_ENV" || true)"',
 }
 
+RESTART_ALLOWED_COMMAND_SUBSTITUTIONS = {
+    'ROOT="$(cd "$(dirname "$0")" && pwd)"',
+    'evidence_pid="$(sed -n \'s/^pid=//p\' "$PROCESS_FILE")"',
+    'evidence_start="$(sed -n \'s/^start=//p\' "$PROCESS_FILE")"',
+    'evidence_startup_id="$(sed -n \'s/^startup_id=//p\' "$PROCESS_FILE")"',
+    '[ "$(process_start_identity "$owned_pid")" = "$owned_start" ] || return 1',
+    'command_line="$(process_command "$owned_pid")"',
+    'for _ in $(seq 1 "$STOP_ATTEMPTS"); do',
+    'command_line="$(process_command "$pending_pid")"',
+    'startup_id="$("$PYTHON_BIN" -c \'import secrets; print(secrets.token_hex(16))\')"',
+    'backend_start="$(process_start_identity "$backend_pid")"',
+    'TEMP_PROCESS_FILE="$(mktemp "$STATE_DIR/backend.process.tmp.XXXXXX")"',
+    'for _ in $(seq 1 "$HEALTH_ATTEMPTS"); do',
+    'health_response="$(curl --fail --silent --max-time 1 "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" || true)"',
+}
 
-def _assignment_command_substitutions(source: str) -> set[str]:
+
+def _command_substitution_lines(source: str) -> set[str]:
     return {
         line.strip()
         for line in source.replace("\\\n", " ").splitlines()
-        if re.match(r"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=", line.strip())
-        and ("$(" in line or "`" in line)
+        if "$(" in line or "`" in line
     }
 
 
@@ -330,10 +345,7 @@ def _validate_setup_source(source: str) -> None:
         "uv sync --frozen",
     )
     missing = [value for value in required if value not in source]
-    unsafe_substitutions = (
-        _assignment_command_substitutions(source)
-        - SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS
-    )
+    unsafe_substitutions = _command_substitution_lines(source) - SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
         value
@@ -363,6 +375,10 @@ def _validate_restart_source(source: str) -> None:
         "backend.unsettled.*.process",
     )
     missing = [value for value in required if value not in source]
+    unsafe_substitutions = (
+        _command_substitution_lines(source)
+        - RESTART_ALLOWED_COMMAND_SUBSTITUTIONS
+    )
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
         value
@@ -384,12 +400,15 @@ def _validate_restart_source(source: str) -> None:
     if (
         missing
         or forbidden
+        or unsafe_substitutions
         or source.count(command) != 1
         or source.index("Missing backend/.env") > source.index(command)
         or source.index(command) > source.index("/api/health")
     ):
         raise StartupContractError(
-            f"invalid restart contract missing={missing} forbidden={forbidden}"
+            "invalid restart contract "
+            f"missing={missing} forbidden={forbidden} "
+            f"substitutions={sorted(unsafe_substitutions)}"
         )
 
 
@@ -606,10 +625,10 @@ def _validate_operator_document(source: str) -> None:
     if legacy_database.search(source):
         raise StartupContractError("operator document references the legacy database")
     fenced = _markdown_fenced_commands(source)
-    unsafe_substitutions = _assignment_command_substitutions(fenced)
+    unsafe_substitutions = _command_substitution_lines(fenced)
     if unsafe_substitutions:
         raise StartupContractError(
-            "operator document contains executable assignment command substitution"
+            "operator document contains executable command substitution"
         )
     facts = _shell_execution_facts(fenced)
     for tokens in _expanded_shell_segments(fenced):
@@ -692,6 +711,7 @@ def test_setup_and_restart_match_health_only_contract() -> None:
         "python backend/seed.py",
         "docker compose up -d",
         "OUT=$(alembic upgrade head)",
+        "readonly OUT=$(alembic $(printf upgrade) head)",
         "OUT=$(alembic $(printf upgrade) head)",
         'OUT="$(alembic $(printf upgrade) head)"',
         "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable",
@@ -711,6 +731,8 @@ def test_setup_contract_rejects_legacy_behavior(forbidden: str) -> None:
         "npm run dev",
         "AGENT_RUNTIME_V2_ENABLED=true",
         "kill -9 123",
+        "OUT=$(alembic $(printf upgrade) head)",
+        "readonly OUT=$(alembic $(printf upgrade) head)",
     ],
 )
 def test_restart_contract_rejects_non_health_startup(forbidden: str) -> None:
@@ -1846,6 +1868,7 @@ def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
         "```bash\nOUT=$(alembic upgrade head)\n```",
         "```bash\nOUT=$(alembic $(printf upgrade) head)\n```",
         '```bash\nOUT="$(alembic $(printf upgrade) head)"\n```',
+        '```bash\necho "$(alembic $(printf upgrade) head)"\n```',
         "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
     ],
 )

@@ -200,7 +200,7 @@ fi
 stop_owned_process
 
 cd "$BACKEND_DIR"
-startup_id="$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))')"
+startup_id="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(16))')"
 pending_startup_id="$startup_id"
 nohup bash -c 'trap - INT TERM; exec "$@"' g002-backend \
     env STARTUP_INSTANCE_ID="$startup_id" \
