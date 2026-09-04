@@ -12,6 +12,9 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 VERSION_PATH = BACKEND_ROOT / "VERSION"
 ENV_FILE_PATH = BACKEND_ROOT / ".env"
 TARGET_DATABASE_NAME = "clawith_target"
+DATABASE_IDENTITY_QUERY_KEYS = frozenset(
+    {"database", "dbname", "dsn", "host", "password", "port", "user", "username"}
+)
 
 
 def reveal_database_url(value: SecretStr) -> URL:
@@ -72,6 +75,16 @@ class Settings(BaseSettings):
         if url.database != TARGET_DATABASE_NAME:
             raise ValueError(
                 f"DATABASE_URL database must be exactly {TARGET_DATABASE_NAME}"
+            )
+        identity_overrides = sorted(
+            key
+            for key in url.query
+            if key.casefold() in DATABASE_IDENTITY_QUERY_KEYS
+        )
+        if identity_overrides:
+            raise ValueError(
+                "DATABASE_URL query may not override connection identity fields: "
+                + ", ".join(identity_overrides)
             )
         return value
 

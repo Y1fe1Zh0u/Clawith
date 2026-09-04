@@ -15,7 +15,12 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app import application
 from app.infrastructure import config, database
-from app.infrastructure.config import TARGET_DATABASE_NAME, Settings, reveal_database_url
+from app.infrastructure.config import (
+    DATABASE_IDENTITY_QUERY_KEYS,
+    TARGET_DATABASE_NAME,
+    Settings,
+    reveal_database_url,
+)
 from app.infrastructure.database import Base, DatabaseResources
 from app.main import app as asgi_app
 
@@ -153,6 +158,24 @@ def test_target_configuration_rejects_non_target_database_names(
     assert database_url not in diagnostic
 
 
+@pytest.mark.parametrize("query_key", sorted(DATABASE_IDENTITY_QUERY_KEYS))
+def test_target_configuration_rejects_database_identity_query_overrides(
+    query_key: str,
+) -> None:
+    password = "query-override-secret"
+    database_url = (
+        f"postgresql+asyncpg://clawith:{password}@localhost:5432/clawith_target"
+        f"?{query_key}=clawith"
+    )
+
+    with pytest.raises(ValidationError, match="connection identity") as captured:
+        _settings(DATABASE_URL=database_url)
+
+    diagnostic = f"{captured.value!s}\n{captured.value!r}"
+    assert password not in diagnostic
+    assert database_url not in diagnostic
+
+
 def test_os_environment_database_name_is_validated_before_app_composition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -164,6 +187,25 @@ def test_os_environment_database_name_is_validated_before_app_composition(
     config.get_settings.cache_clear()
     try:
         with pytest.raises(ValidationError, match=TARGET_DATABASE_NAME) as captured:
+            application.create_app()
+    finally:
+        config.get_settings.cache_clear()
+
+    assert password not in str(captured.value)
+
+
+def test_os_environment_query_override_is_rejected_before_app_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password = "os-query-secret"
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql+asyncpg://clawith:{password}@localhost:5432/"
+        "clawith_target?database=clawith",
+    )
+    config.get_settings.cache_clear()
+    try:
+        with pytest.raises(ValidationError, match="connection identity") as captured:
             application.create_app()
     finally:
         config.get_settings.cache_clear()
@@ -183,6 +225,24 @@ def test_dotenv_database_name_is_validated_without_secret_disclosure(
     )
 
     with pytest.raises(ValidationError, match=TARGET_DATABASE_NAME) as captured:
+        settings_factory(_env_file=env_file, APP_VERSION="test-version")
+
+    assert password not in str(captured.value)
+
+
+def test_dotenv_query_override_is_rejected_without_secret_disclosure(
+    tmp_path: Path,
+) -> None:
+    password = "dotenv-query-secret"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL="
+        f"postgresql+asyncpg://clawith:{password}@localhost:5432/"
+        "clawith_target?database=clawith\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match="connection identity") as captured:
         settings_factory(_env_file=env_file, APP_VERSION="test-version")
 
     assert password not in str(captured.value)
