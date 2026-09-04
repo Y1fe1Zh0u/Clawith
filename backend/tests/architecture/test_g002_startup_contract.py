@@ -1186,11 +1186,13 @@ def test_concurrent_restart_fails_without_touching_active_invocation(
 
 def test_restart_cleanup_preserves_replaced_shared_evidence(tmp_path: Path) -> None:
     term_log = tmp_path / "term.log"
+    ready_log = tmp_path / "ready.log"
     repository, _fake_bin, environment = _restart_fixture(
         tmp_path,
         uv_source=(
             "#!/bin/sh\n"
             "trap 'printf terminated > \"$TERM_LOG\"; exit 0' TERM\n"
+            "printf ready > \"$READY_LOG\"\n"
             "while :; do sleep 0.1; done\n"
         ),
         curl_source="#!/bin/sh\nsleep 0.1\nexit 1\n",
@@ -1198,6 +1200,7 @@ def test_restart_cleanup_preserves_replaced_shared_evidence(tmp_path: Path) -> N
     environment.update(
         {
             "CLAWITH_HEALTH_ATTEMPTS": "1000",
+            "READY_LOG": str(ready_log),
             "TERM_LOG": str(term_log),
         }
     )
@@ -1211,6 +1214,7 @@ def test_restart_cleanup_preserves_replaced_shared_evidence(tmp_path: Path) -> N
     )
     process_file = repository / ".data/backend.process"
     _wait_for_path(process_file)
+    _wait_for_path(ready_log)
     owned_pid = _read_process_pid(process_file)
     replacement = (
         f"pid={os.getpid()}\n"
