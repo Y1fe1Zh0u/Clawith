@@ -799,13 +799,14 @@ def _resolve_reference_worktree(
 
 
 def _resolve_reference_python(worktree: Path, override: Path | None) -> Path:
-    reference_python = override.resolve() if override else Path(sys.executable)
     if override is None:
-        return reference_python
-    try:
-        reference_python.relative_to(worktree)
-    except ValueError as exc:
-        raise InventoryError("reference Python override must be inside the reference worktree") from exc
+        return Path(sys.executable)
+    reference_python = override.parent.resolve() / override.name
+    expected_python = worktree / "backend/.venv/bin/python"
+    if reference_python != expected_python:
+        raise InventoryError(
+            "reference Python override must be the reference backend virtual environment"
+        )
     if not reference_python.is_file() or not os.access(reference_python, os.X_OK):
         raise InventoryError("reference Python override is not an executable file")
     return reference_python

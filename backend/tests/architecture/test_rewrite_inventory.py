@@ -574,23 +574,40 @@ def test_reference_python_override_must_be_an_executable_inside_worktree(
     tmp_path: Path,
 ) -> None:
     worktree = tmp_path / "reference"
-    python = worktree / ".venv/bin/python"
+    python = worktree / "backend/.venv/bin/python"
     python.parent.mkdir(parents=True)
-    python.write_text("#!/bin/sh\n", encoding="utf-8")
-    python.chmod(0o755)
+    python.symlink_to(Path(sys.executable))
 
     assert rewrite_inventory._resolve_reference_python(worktree, python) == python
 
     outside = tmp_path / "outside-python"
     outside.write_text("#!/bin/sh\n", encoding="utf-8")
     outside.chmod(0o755)
-    with pytest.raises(rewrite_inventory.InventoryError, match="inside"):
+    with pytest.raises(rewrite_inventory.InventoryError, match="virtual environment"):
         rewrite_inventory._resolve_reference_python(worktree, outside)
+    python.unlink()
+    python.mkdir()
     with pytest.raises(rewrite_inventory.InventoryError, match="executable file"):
-        rewrite_inventory._resolve_reference_python(
-            worktree,
-            worktree / ".venv/bin/missing",
-        )
+        rewrite_inventory._resolve_reference_python(worktree, python)
+
+
+def test_reference_python_override_normalizes_parent_alias_without_resolving_python(
+    tmp_path: Path,
+) -> None:
+    worktree = tmp_path / "reference"
+    python = worktree / "backend/.venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(Path(sys.executable))
+    alias = tmp_path / "reference-alias"
+    alias.symlink_to(worktree, target_is_directory=True)
+
+    resolved = rewrite_inventory._resolve_reference_python(
+        worktree.resolve(),
+        alias / "backend/.venv/bin/python",
+    )
+
+    assert resolved == python
+    assert resolved.is_symlink()
 
 
 def test_bind_reference_records_the_clean_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
