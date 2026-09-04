@@ -48,6 +48,20 @@ LEGACY_CI_SCRIPTS = (
     REPOSITORY_ROOT / ".github/scripts/ci_migration_test.sh",
     REPOSITORY_ROOT / ".github/scripts/ci_upgrade_test.sh",
 )
+OPERATOR_DOCS = (
+    REPOSITORY_ROOT / "README.md",
+    REPOSITORY_ROOT / "README_zh-CN.md",
+    REPOSITORY_ROOT / "README_ar.md",
+    REPOSITORY_ROOT / "README_es.md",
+    REPOSITORY_ROOT / "README_ja.md",
+    REPOSITORY_ROOT / "README_ko.md",
+    REPOSITORY_ROOT / "CONTRIBUTING.md",
+    REPOSITORY_ROOT / "backend/ALEMBIC_GUIDELINES.md",
+    REPOSITORY_ROOT / "helm/clawith/README.md",
+    REPOSITORY_ROOT / "helm/QUICKSTART.md",
+    REPOSITORY_ROOT / "helm/QUICKSTART_EN.md",
+    REPOSITORY_ROOT / "deploy/RELEASE_DEPLOYMENT.md",
+)
 
 
 class StartupContractError(RuntimeError):
@@ -408,6 +422,71 @@ def _validate_helm_template_quarantine(source: str) -> None:
             )
     if condition_stack:
         raise StartupContractError("Helm template has an unclosed control block")
+
+
+def _markdown_fenced_commands(source: str) -> str:
+    commands: list[str] = []
+    current: list[str] | None = None
+    for line in source.splitlines():
+        if line.startswith("```"):
+            if current is None:
+                current = []
+            else:
+                commands.append("\n".join(current))
+                current = None
+            continue
+        if current is not None:
+            current.append(line)
+    if current is not None:
+        raise StartupContractError("operator document has an unclosed code fence")
+    return "\n".join(commands)
+
+
+def _validate_operator_document(source: str) -> None:
+    if "G002" not in source or "health-only" not in source:
+        raise StartupContractError("operator document lacks the G002 health-only boundary")
+    legacy_database = re.compile(
+        r"postgresql\+asyncpg://[^\s`]+/clawith(?:[?\"'`\s]|$)"
+    )
+    if legacy_database.search(source):
+        raise StartupContractError("operator document references the legacy database")
+    fenced = _markdown_fenced_commands(source)
+    facts = _shell_execution_facts(fenced)
+    for line in fenced.splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
+        lexer.commenters = "#"
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        command = Path(tokens[0]).name
+        if command == "helm" and len(tokens) > 1 and tokens[1] in {"install", "upgrade"}:
+            facts.add("helm-product")
+        if command in {"npm", "vite"}:
+            facts.add("frontend-product")
+        if command == "cp" and tokens[1:] == [".env.example", ".env"]:
+            facts.add("root-dotenv")
+        if command == "psql" and any(
+            tokens[index : index + 2] == ["-d", "clawith"]
+            for index in range(len(tokens) - 1)
+        ):
+            facts.add("legacy-database")
+    forbidden = facts & {
+        "alembic",
+        "checkpoint-installer",
+        "docker",
+        "frontend-product",
+        "helm-product",
+        "legacy-database",
+        "root-dotenv",
+    }
+    if forbidden:
+        raise StartupContractError(
+            f"operator document contains executable legacy instructions: {sorted(forbidden)}"
+        )
 
 
 def _inject_drone_commands(source: str, commands: list[str]) -> str:
@@ -1057,3 +1136,50 @@ def test_helm_quarantine_allows_inert_comments_without_resources() -> None:
     _validate_helm_template_quarantine(
         "# kind: Secret\n# not .Values.g002Deferred\n"
     )
+
+
+def test_all_operator_docs_are_quarantined_to_g002_health_only() -> None:
+    for document in OPERATOR_DOCS:
+        _validate_operator_document(document.read_text(encoding="utf-8"))
+
+
+def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
+    source = (BACKEND_ROOT / "alembic.ini").read_text(encoding="utf-8")
+    assert "until the reviewed G008 target baseline" in source
+    assert "localhost:5432/clawith_target" in source
+    assert "localhost:5432/clawith\n" not in source
+
+
+@pytest.mark.parametrize(
+    "instructions",
+    [
+        "```bash\ndocker compose up -d\n```",
+        "```bash\nhelm install clawith ./helm/clawith\n```",
+        "```bash\nnpm run dev\n```",
+        "```bash\ncp .env.example .env\n```",
+        "```bash\npsql -d clawith\n```",
+        (
+            "```bash\n"
+            "MIG=alem\n"
+            'MIG="${MIG}bic"\n'
+            '"$MIG" upgrade head\n'
+            "```"
+        ),
+        "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
+    ],
+)
+def test_operator_doc_guard_rejects_executable_legacy_instructions(
+    instructions: str,
+) -> None:
+    source = f"# G002 health-only\n\n{instructions}\n"
+    with pytest.raises(StartupContractError):
+        _validate_operator_document(source)
+
+
+def test_operator_doc_guard_allows_inert_legacy_prose() -> None:
+    source = (
+        "# G002 health-only\n\n"
+        "Do not run Alembic, Docker, Helm, or the legacy checkpoint installer.\n"
+        "The isolated database is `clawith_target`.\n"
+    )
+    _validate_operator_document(source)
