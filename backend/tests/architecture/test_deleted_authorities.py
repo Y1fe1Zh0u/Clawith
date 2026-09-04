@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
+import subprocess
 import symtable
 import tomllib
 from pathlib import Path
@@ -1075,10 +1076,62 @@ LEGACY_TEMPLATE_AUTONOMY_FIELD = "default_autonomy_policy"
 DELETED_AUTHORITY_GUARD_TEST = Path("tests/architecture/test_deleted_authorities.py")
 DYNAMIC_MODULE_EXPORT_HOOK = "__getattr__"
 DAO_PACKAGE_INIT = Path("app/dao/__init__.py")
+REMOVED_ORPHAN_DIRECT_DEPENDENCIES = frozenset(
+    {
+        "anyascii",
+        "azure-identity",
+        "croniter",
+        "dingtalk-stream",
+        "discord-py",
+        "langgraph",
+        "langgraph-checkpoint-postgres",
+        "markdown",
+        "passlib",
+        "pillow",
+        "pymupdf",
+        "pynacl",
+        "pycryptodome",
+        "pypinyin",
+        "psycopg",
+        "python-jose",
+        "python-multipart",
+        "redis",
+        "trafilatura",
+        "wecom-aibot-sdk-python",
+        "wuying-agentbay-sdk",
+    }
+)
 
 
 class DeletedAuthorityViolation(RuntimeError):
     """A deleted Backend authority is present in the target tree."""
+
+
+def _normalized_dependency_name(requirement: str) -> str:
+    name = re.split(r"[<>=!~;@\[]", requirement, maxsplit=1)[0].strip()
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _declared_dependency_names(source: str) -> set[str]:
+    data = tomllib.loads(source)
+    project = data.get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for group in project.get("optional-dependencies", {}).values():
+        requirements.extend(group)
+    for group in data.get("dependency-groups", {}).values():
+        requirements.extend(group)
+    return {_normalized_dependency_name(requirement) for requirement in requirements}
+
+
+def _assert_removed_orphan_dependencies_absent(backend_root: Path) -> None:
+    dependency_names = _declared_dependency_names(
+        (backend_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    restored = sorted(REMOVED_ORPHAN_DIRECT_DEPENDENCIES & dependency_names)
+    if restored:
+        raise DeletedAuthorityViolation(
+            f"deleted-owner direct dependencies restored: {restored}"
+        )
 
 
 def _is_globals_call(node: ast.expr) -> bool:
@@ -10356,3 +10409,61 @@ def test_invalid_agent_template_metadata_fails_closed(
 
     with pytest.raises(DeletedAuthorityViolation, match=expected_error):
         _assert_agent_templates_do_not_restore_autonomy_policy(tmp_path)
+
+
+def test_deleted_owner_direct_dependencies_are_absent() -> None:
+    _assert_removed_orphan_dependencies_absent(BACKEND_ROOT)
+
+
+def test_backend_dependency_lock_is_tracked_and_current() -> None:
+    repository_root = BACKEND_ROOT.parent
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "backend/uv.lock"],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert tracked.returncode == 0, "backend/uv.lock must be tracked"
+
+    current = subprocess.run(
+        ["uv", "lock", "--check"],
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert current.returncode == 0, current.stderr
+
+
+@pytest.mark.parametrize("dependency", sorted(REMOVED_ORPHAN_DIRECT_DEPENDENCIES))
+def test_restored_deleted_owner_direct_dependency_fails_guard(
+    tmp_path: Path,
+    dependency: str,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "fixture"\nversion = "0"\ndependencies = ["{dependency}>=1"]\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        DeletedAuthorityViolation,
+        match="deleted-owner direct dependencies restored",
+    ):
+        _assert_removed_orphan_dependencies_absent(tmp_path)
+
+
+def test_retained_dependency_fixture_passes_deleted_owner_guard(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """[project]
+name = "fixture"
+version = "0"
+dependencies = ["lxml-html-clean>=0.4", "aioboto3>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+""",
+        encoding="utf-8",
+    )
+
+    _assert_removed_orphan_dependencies_absent(tmp_path)
