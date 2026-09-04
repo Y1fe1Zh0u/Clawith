@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from secrets import token_hex
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +36,10 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="Clawith", min_length=1)
     APP_VERSION: str = Field(default_factory=_read_version, min_length=1)
     DEBUG: bool = False
+    STARTUP_INSTANCE_ID: str = Field(
+        default_factory=lambda: token_hex(16),
+        pattern=r"^[0-9a-f]{32}$",
+    )
     DATABASE_URL: SecretStr = Field(
         default=SecretStr(
             "postgresql+asyncpg://clawith:clawith@localhost:5432/clawith_target"

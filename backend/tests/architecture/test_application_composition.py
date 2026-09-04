@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -87,7 +88,12 @@ def test_main_exposes_only_the_minimal_health_route(monkeypatch: pytest.MonkeyPa
         response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": asgi_app.version}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["version"] == asgi_app.version
+    assert body["process_pid"] == os.getpid()
+    assert len(body["startup_id"]) == 32
+    assert set(body["startup_id"]) <= set("0123456789abcdef")
     route_paths = [cast(RouteWithPath, route).path for route in asgi_app.routes]
     assert {path for path in route_paths if path.startswith("/api/")} == {
         "/api/health"
@@ -115,6 +121,8 @@ def test_create_app_owns_database_resources_for_its_complete_lifespan(
         assert client.get("/api/health").json() == {
             "status": "ok",
             "version": "test-version",
+            "process_pid": os.getpid(),
+            "startup_id": settings.STARTUP_INSTANCE_ID,
         }
         assert resources.close_calls == 0
 

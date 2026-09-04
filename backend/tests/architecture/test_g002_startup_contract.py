@@ -241,12 +241,15 @@ def _validate_setup_source(source: str) -> None:
 
 
 def _validate_restart_source(source: str) -> None:
-    command = "uv run uvicorn app.main:app"
+    command = '"$UVICORN_BIN" app.main:app'
     required = (
         'BACKEND_ENV="$BACKEND_DIR/.env"',
+        'UVICORN_BIN="$BACKEND_DIR/.venv/bin/uvicorn"',
         "--workers 1",
         "/api/health",
         "Missing backend/.env",
+        "process_pid",
+        "startup_id",
     )
     missing = [value for value in required if value not in source]
     forbidden = sorted(_shell_execution_facts(source))
@@ -317,13 +320,18 @@ def _restart_fixture(
 ) -> tuple[Path, Path, dict[str, str]]:
     repository = tmp_path / "repo"
     backend = repository / "backend"
+    backend_bin = backend / ".venv/bin"
     fake_bin = tmp_path / "bin"
-    backend.mkdir(parents=True)
+    backend_bin.mkdir(parents=True)
     fake_bin.mkdir()
     restart = repository / "restart.sh"
     restart.write_text(RESTART.read_text(encoding="utf-8"), encoding="utf-8")
     (backend / ".env").write_text("DATABASE_URL=target\n", encoding="utf-8")
-    _write_executable(fake_bin / "uv", uv_source)
+    _write_executable(backend_bin / "uvicorn", uv_source)
+    _write_executable(
+        backend_bin / "python",
+        "#!/bin/sh\nprintf '0123456789abcdef0123456789abcdef\n'\n",
+    )
     _write_executable(fake_bin / "curl", curl_source)
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
@@ -587,8 +595,9 @@ def test_setup_synchronizes_backend_env_and_prepares_target_database(
 ) -> None:
     repository = tmp_path / "repo"
     backend = repository / "backend"
+    backend_bin = backend / ".venv/bin"
     fake_bin = tmp_path / "bin"
-    backend.mkdir(parents=True)
+    backend_bin.mkdir(parents=True)
     fake_bin.mkdir()
     (repository / "setup.sh").write_text(SETUP.read_text(encoding="utf-8"), encoding="utf-8")
     (backend / ".env.example").write_text(
@@ -659,20 +668,31 @@ def test_restart_fails_before_start_when_backend_env_is_missing(tmp_path: Path) 
 def test_restart_starts_one_worker_and_checks_health(tmp_path: Path) -> None:
     repository = tmp_path / "repo"
     backend = repository / "backend"
+    backend_bin = backend / ".venv/bin"
     fake_bin = tmp_path / "bin"
-    backend.mkdir(parents=True)
+    backend_bin.mkdir(parents=True)
     fake_bin.mkdir()
     restart = repository / "restart.sh"
     restart.write_text(RESTART.read_text(encoding="utf-8"), encoding="utf-8")
     (backend / ".env").write_text("DATABASE_URL=target\n", encoding="utf-8")
     command_log = tmp_path / "restart-commands.log"
     _write_executable(
-        fake_bin / "uv",
-        '#!/bin/sh\nprintf "uv %s\\n" "$*" >> "$COMMAND_LOG"\nsleep 5\n',
+        backend_bin / "uvicorn",
+        '#!/bin/sh\nprintf "uvicorn %s\\n" "$*" >> "$COMMAND_LOG"\nsleep 5\n',
+    )
+    _write_executable(
+        backend_bin / "python",
+        "#!/bin/sh\nprintf '0123456789abcdef0123456789abcdef\n'\n",
     )
     _write_executable(
         fake_bin / "curl",
-        '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "$COMMAND_LOG"\nprintf \'{"status":"ok"}\\n\'\n',
+        (
+            '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "$COMMAND_LOG"\n'
+            'pid="$(sed -n \'s/^pid=//p\' ../.data/backend.process)"\n'
+            'startup="$(sed -n \'s/^startup_id=//p\' ../.data/backend.process)"\n'
+            'printf \'{"status":"ok","process_pid":%s,"startup_id":"%s"}\\n\' '
+            '"$pid" "$startup"\n'
+        ),
     )
     environment = os.environ.copy()
     environment.update(
@@ -696,7 +716,7 @@ def test_restart_starts_one_worker_and_checks_health(tmp_path: Path) -> None:
     try:
         assert completed.returncode == 0, completed.stderr
         commands = command_log.read_text(encoding="utf-8")
-        assert commands.count("uv run uvicorn app.main:app") == 1
+        assert commands.count("uvicorn app.main:app") == 1
         assert "--workers 1" in commands
         assert "/api/health" in commands
     finally:
@@ -784,6 +804,54 @@ def test_restart_timeout_stops_owned_child_and_removes_evidence(tmp_path: Path) 
             "while :; do sleep 0.1; done\n"
         ),
         curl_source="#!/bin/sh\nexit 1\n",
+    )
+    environment.update(
+        {
+            "CLAWITH_HEALTH_ATTEMPTS": "1",
+            "TERM_LOG": str(term_log),
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "timed out" in completed.stderr
+    assert term_log.read_text(encoding="utf-8") == "terminated"
+    assert not (repository / ".data/backend.process").exists()
+
+
+@pytest.mark.parametrize("spoof", ["wrong-pid", "wrong-startup"])
+def test_restart_rejects_health_from_another_process(
+    tmp_path: Path,
+    spoof: str,
+) -> None:
+    term_log = tmp_path / "term.log"
+    if spoof == "wrong-pid":
+        response = (
+            "printf '{\"status\":\"ok\",\"process_pid\":999999,"
+            "\"startup_id\":\"0123456789abcdef0123456789abcdef\"}\\n'\n"
+        )
+    else:
+        response = (
+            "pid=\"$(sed -n 's/^pid=//p' ../.data/backend.process)\"\n"
+            "printf '{\"status\":\"ok\",\"process_pid\":%s,"
+            "\"startup_id\":\"ffffffffffffffffffffffffffffffff\"}\\n' \"$pid\"\n"
+        )
+    repository, _fake_bin, environment = _restart_fixture(
+        tmp_path,
+        uv_source=(
+            "#!/bin/sh\n"
+            "trap 'printf terminated > \"$TERM_LOG\"; exit 0' TERM\n"
+            "while :; do sleep 0.1; done\n"
+        ),
+        curl_source=f"#!/bin/sh\n{response}",
     )
     environment.update(
         {

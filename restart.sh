@@ -11,7 +11,9 @@ BACKEND_HOST="${CLAWITH_BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${CLAWITH_BACKEND_PORT:-8008}"
 HEALTH_ATTEMPTS="${CLAWITH_HEALTH_ATTEMPTS:-50}"
 STOP_ATTEMPTS="${CLAWITH_STOP_ATTEMPTS:-50}"
-PROCESS_MARKER="uvicorn app.main:app"
+UVICORN_BIN="$BACKEND_DIR/.venv/bin/uvicorn"
+PYTHON_BIN="$BACKEND_DIR/.venv/bin/python"
+PROCESS_MARKER="$UVICORN_BIN app.main:app"
 cleanup_armed=false
 pending_pid=""
 pending_start=""
@@ -120,9 +122,15 @@ if [ ! -f "$BACKEND_ENV" ]; then
     echo "Missing backend/.env. Run bash setup.sh first." >&2
     exit 1
 fi
-for command in uv curl ps; do
+for command in curl ps; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command is unavailable: $command" >&2
+        exit 1
+    fi
+done
+for executable in "$UVICORN_BIN" "$PYTHON_BIN"; do
+    if [ ! -x "$executable" ]; then
+        echo "Required Backend executable is unavailable: $executable" >&2
         exit 1
     fi
 done
@@ -131,8 +139,10 @@ mkdir -p "$STATE_DIR"
 stop_owned_process
 
 cd "$BACKEND_DIR"
+startup_id="$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))')"
 nohup bash -c 'trap - INT TERM; exec "$@"' g002-backend \
-    uv run uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --workers 1 \
+    env STARTUP_INSTANCE_ID="$startup_id" \
+    "$UVICORN_BIN" app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" --workers 1 \
     > "$LOG_FILE" 2>&1 &
 backend_pid=$!
 pending_pid="$backend_pid"
@@ -144,11 +154,15 @@ if [ -z "$backend_start" ]; then
 fi
 pending_start="$backend_start"
 TEMP_PROCESS_FILE="$(mktemp "$STATE_DIR/backend.process.tmp.XXXXXX")"
-printf 'pid=%s\nstart=%s\n' "$backend_pid" "$backend_start" > "$TEMP_PROCESS_FILE"
+printf 'pid=%s\nstart=%s\nstartup_id=%s\n' \
+    "$backend_pid" "$backend_start" "$startup_id" > "$TEMP_PROCESS_FILE"
 mv "$TEMP_PROCESS_FILE" "$PROCESS_FILE"
 
 for _ in $(seq 1 "$HEALTH_ATTEMPTS"); do
-    if curl --fail --silent --max-time 1 "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" | grep -q '"status":"ok"'; then
+    health_response="$(curl --fail --silent --max-time 1 "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" || true)"
+    if printf '%s' "$health_response" | grep -q '"status":"ok"' \
+        && printf '%s' "$health_response" | grep -q "\"process_pid\":${backend_pid}" \
+        && printf '%s' "$health_response" | grep -q "\"startup_id\":\"${startup_id}\""; then
         cleanup_armed=false
         trap - EXIT INT TERM
         echo "G002 target backend health check passed: http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"

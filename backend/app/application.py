@@ -1,5 +1,6 @@
 """Final application composition root."""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -33,7 +34,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     @application.get("/api/health", tags=["health"])
-    async def health_check() -> dict[str, str]:
-        return {"status": "ok", "version": application_settings.APP_VERSION}
+    async def health_check() -> dict[str, str | int]:
+        return {
+            "status": "ok",
+            "version": application_settings.APP_VERSION,
+            "process_pid": os.getpid(),
+            "startup_id": application_settings.STARTUP_INSTANCE_ID,
+        }
 
     return application
