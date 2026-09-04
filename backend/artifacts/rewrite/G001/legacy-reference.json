@@ -1,9 +1,9 @@
 {
   "goal": "G001",
   "validation": "immutable-reference",
-  "command": "uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json",
-  "verified_source_head": "821f928592f706a2cbab3ebe3d8ab5dc6dae7f52",
-  "verified_at": "2026-09-04T08:19:11Z",
+  "command": "bash ../scripts/check-g001-reference.sh",
+  "verified_source_head": "69c60b8732f27c6ae75d095a2c1a92ced88a2476",
+  "verified_at": "2026-09-04T09:18:55Z",
   "exit_code": 0,
   "reference_head": "8ed4ae2f",
   "reference_clean": true,
