@@ -3128,6 +3128,101 @@ def _assert_no_orphan_maintenance_executable_invocations(
             "remove_old_tool.py",
             "update_schema.py",
         }
+        uv_options_with_value = {
+            "--allow-insecure-host",
+            "--cache-dir",
+            "--color",
+            "--config-file",
+            "--config-setting",
+            "--config-settings-package",
+            "--default-index",
+            "--directory",
+            "--env-file",
+            "--exclude-newer",
+            "--exclude-newer-package",
+            "--extra",
+            "--extra-index-url",
+            "--find-links",
+            "--fork-strategy",
+            "--group",
+            "--index",
+            "--index-strategy",
+            "--index-url",
+            "--keyring-provider",
+            "--link-mode",
+            "--no-binary-package",
+            "--no-build-isolation-package",
+            "--no-build-package",
+            "--no-extra",
+            "--no-group",
+            "--only-group",
+            "--package",
+            "--prerelease",
+            "--project",
+            "--python",
+            "--python-platform",
+            "--refresh-package",
+            "--reinstall-package",
+            "--resolution",
+            "--upgrade-package",
+            "--with",
+            "--with-editable",
+            "--with-requirements",
+            "-C",
+            "-P",
+            "-f",
+            "-i",
+            "-p",
+            "-w",
+        }
+        uv_flag_options = {
+            "--active",
+            "--all-extras",
+            "--all-groups",
+            "--all-packages",
+            "--compile-bytecode",
+            "--exact",
+            "--frozen",
+            "--isolated",
+            "--locked",
+            "--managed-python",
+            "--native-tls",
+            "--no-binary",
+            "--no-build",
+            "--no-build-isolation",
+            "--no-cache",
+            "--no-config",
+            "--no-default-groups",
+            "--no-dev",
+            "--no-editable",
+            "--no-env-file",
+            "--no-index",
+            "--no-managed-python",
+            "--no-progress",
+            "--no-project",
+            "--no-python-downloads",
+            "--no-sources",
+            "--no-sync",
+            "--offline",
+            "--only-dev",
+            "--quiet",
+            "--refresh",
+            "--reinstall",
+            "--upgrade",
+            "--verbose",
+            "-U",
+            "-n",
+            "-q",
+            "-v",
+        }
+        python_options_with_value = {"--check-hash-based-pycs", "-W", "-X"}
+        python_long_flags = {
+            "--help",
+            "--help-all",
+            "--help-env",
+            "--help-xoptions",
+            "--version",
+        }
         wrappers = {"!", "command", "do", "env", "exec", "export", "if", "then"}
 
         for segment in segments:
@@ -3140,6 +3235,15 @@ def _assert_no_orphan_maintenance_executable_invocations(
             if not command_tokens:
                 continue
 
+            segment_has_legacy_reference = any(
+                Path(token.strip("[],'\"")).name in forbidden_files
+                or token.strip("[],'\"").split(":", 1)[0]
+                in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS
+                for token in command_tokens
+            )
+            if not segment_has_legacy_reference:
+                continue
+
             if Path(command_tokens[0]).name == "uv":
                 try:
                     run_index = command_tokens.index("run")
@@ -3147,7 +3251,39 @@ def _assert_no_orphan_maintenance_executable_invocations(
                     continue
                 command_tokens = command_tokens[run_index + 1 :]
                 while command_tokens and command_tokens[0].startswith("-"):
-                    command_tokens.pop(0)
+                    option = command_tokens.pop(0)
+                    option_name = option.split("=", 1)[0]
+                    if option in {"-m", "--module"}:
+                        if (
+                            command_tokens
+                            and command_tokens[0]
+                            in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS
+                        ):
+                            restored.add(f"-m {command_tokens[0]}")
+                        command_tokens = []
+                        break
+                    if option in {"-s", "--gui-script", "--script"}:
+                        if (
+                            command_tokens
+                            and Path(command_tokens[0]).name in forbidden_files
+                        ):
+                            restored.add(Path(command_tokens[0]).name)
+                        command_tokens = []
+                        break
+                    if option_name in uv_flag_options or re.fullmatch(
+                        r"-(?:q+|v+)", option
+                    ):
+                        continue
+                    if option_name in uv_options_with_value:
+                        if "=" not in option:
+                            if not command_tokens:
+                                restored.add(f"unparsed uv option {option}")
+                                break
+                            command_tokens.pop(0)
+                        continue
+                    restored.add(f"unparsed uv option {option}")
+                    command_tokens = []
+                    break
             if not command_tokens:
                 continue
 
@@ -3167,19 +3303,48 @@ def _assert_no_orphan_maintenance_executable_invocations(
                 continue
 
             arguments = command_tokens[1:]
-            if is_python and "-m" in arguments:
-                module_index = arguments.index("-m")
-                if module_index + 1 < len(arguments):
-                    module = arguments[module_index + 1]
-                    if module in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS:
-                        restored.add(f"-m {module}")
-                continue
-            if "-c" in arguments:
-                if is_shell:
-                    command_index = arguments.index("-c")
-                    if command_index + 1 < len(arguments):
-                        restored.update(restored_invocations(arguments[command_index + 1]))
-                continue
+            while arguments and arguments[0].startswith("-"):
+                option = arguments.pop(0)
+                if option == "--":
+                    break
+                if is_python and option == "-m":
+                    if (
+                        arguments
+                        and arguments[0] in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS
+                    ):
+                        restored.add(f"-m {arguments[0]}")
+                    arguments = []
+                    break
+                if option == "-c":
+                    if arguments and is_shell:
+                        restored.update(restored_invocations(arguments[0]))
+                    elif arguments and any(
+                        legacy in arguments[0]
+                        for legacy in LEGACY_ORPHAN_MAINTENANCE_ENTRYPOINTS
+                    ):
+                        restored.add("python -c legacy maintenance reference")
+                    arguments = []
+                    break
+                if is_python and (
+                    option in python_options_with_value
+                    or option.startswith(("-W", "-X"))
+                ):
+                    if option in python_options_with_value:
+                        if not arguments:
+                            restored.add(f"unparsed Python option {option}")
+                            break
+                        arguments.pop(0)
+                    continue
+                if is_python and (
+                    option in python_long_flags
+                    or re.fullmatch(r"-[bBdEhiIOPqRsuUvVx]+", option)
+                ):
+                    continue
+                if is_shell and option in {"-e", "-f", "-n", "-u", "-v", "-x"}:
+                    continue
+                restored.add(f"unparsed interpreter option {option}")
+                arguments = []
+                break
 
             script = next(
                 (
@@ -8401,6 +8566,22 @@ def test_restored_orphan_maintenance_shell_or_yaml_invocation_fails_guard(
             Path("deploy/job.yaml"),
             "job:\n  command: python scripts/backfill_chat_message_tenant_id.py --apply\n",
         ),
+        (
+            Path("deploy/extra.yaml"),
+            "job:\n  run: uv run --extra dev python backend/remove_old_tool.py\n",
+        ),
+        (
+            Path("deploy/project.yaml"),
+            "job:\n  run: uv run --project backend python update_schema.py\n",
+        ),
+        (
+            Path("scripts/python-x.sh"),
+            "python -X dev backend/remove_old_tool.py\n",
+        ),
+        (
+            Path("scripts/python-w.sh"),
+            "python -W ignore scripts/backfill_chat_message_tenant_id.py\n",
+        ),
     ],
 )
 def test_restored_orphan_maintenance_executable_field_fails_guard(
@@ -8440,6 +8621,7 @@ def test_current_migration_and_script_fixtures_pass_orphan_maintenance_guards(
             "rg remove_old_tool.py backend\n"
             "grep -R backfill_chat_message_tenant_id.py backend\n"
             "test ! -f update_schema.py\n"
+            "uv run --extra dev rg remove_old_tool.py backend\n"
             "uv run python backend/scripts/validate_goal_gates.py\n"
         ),
         Path("backend/tests/test_current_script.py"): (
