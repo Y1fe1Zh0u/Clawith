@@ -1,20 +1,20 @@
 # Agent Note: Clean-break history governance audit
 
-Status: implemented — preserves the audited local commit identities under one explicit historical exception
+Status: implemented — preserves audited local commit identities under two closed historical exceptions
 
 ## Problem
 
-The clean-break sequence after the immutable reference commit contains readable Lore fields that Git does not recognize as one native trailer block, and ten non-trivial G001/G002 commits did not update an owning Agent Note in the same commit. Rewriting the sequence would repair those historical records but would also replace more than seventy local commit identities and weaken the traceability already attached to review, test, and checkpoint evidence.
+The clean-break sequence after the immutable reference commit contains readable Lore fields that Git does not recognize as one native trailer block, and ten non-trivial G001/G002 commits did not update an owning Agent Note in the same commit. Rewriting the sequence would repair those historical records but would also replace more than seventy local commit identities and weaken the traceability already attached to review, test, and checkpoint evidence. G002 closeout later found one additional malformed Lore block in `04315255`; repairing it in place would replace 43 established descendant commit identities.
 
 This audit does not make the affected commits compliant with the [Lore protocol](../../../../AGENTS.md#lore-commit-protocol) or the [Agent Note alignment rules](../../README.md). It records the exact exception so current and future work does not mistake preserved history for retroactive compliance.
 
 ## Decision
 
-The repository preserves the existing SHAs in `8ed4ae2f..1f26bf5c`. The user approved this as a one-time historical exception on 2026-09-02. The exception covers only the 38 malformed Lore trailer blocks and the ten missing same-commit Agent Note updates listed below. It does not waive any code, architecture, test, security, or checkpoint requirement.
+The repository preserves the existing SHAs in `8ed4ae2f..1f26bf5c`. The user approved this as a one-time historical exception on 2026-09-02. The original exception covers only the 38 malformed Lore trailer blocks and the ten missing same-commit Agent Note updates listed below. G002 closeout preserves `04315255` as a second closed exception under the same no-history-rewrite decision. Neither exception waives any code, architecture, test, security, or checkpoint requirement.
 
 The technical G001 gates and their recorded results remain valid because preserving commit identities changes neither their trees nor the evidence produced by those gates. This decision does not convert source or test evidence into CI, deployment, or live-system evidence.
 
-Every commit created after this audit must separate the body from one contiguous trailer block with exactly one blank line. Individual trailers must not be separated by blank lines. Authors should provide the full message through a message file or Git trailer tooling and verify the result with `git show -s --format=%B <sha> | git interpret-trailers --parse`. No later change may cite this audit to introduce another malformed Lore block or another missing same-commit owning Note.
+Every commit created after this audit must separate the body from one contiguous trailer block with exactly one blank line. Individual trailers must not be separated by blank lines. Authors should provide the full message through a message file or Git trailer tooling and verify the result with `git show -s --format=%B <sha> | git interpret-trailers --parse`. Recording the already-created `04315255` defect does not reopen the original exception or authorize another malformed Lore block or missing same-commit owning Note.
 
 ## Malformed Lore trailer audit
 
@@ -61,6 +61,14 @@ The audited range contains 71 linear, non-merge commits after `8ed4ae2f` through
 
 The fields remain readable as ordinary commit-message text. Native trailer consumers do not receive the unparsed fields and must not infer that readable labels are equivalent to parsed trailers.
 
+## G002 closeout Lore exception
+
+Final G002 history verification found one additional malformed commit outside the original audited range:
+
+- `0431525597f3ed9bac10fbbf9b1ef30ebebcdde7` — Remove the unapproved legacy OKR authority (8 labeled; 1 parsed)
+
+The repository preserves this SHA because 43 later commits already reference the resulting history and evidence. This is a recorded noncompliance, not retroactive compliance. The exception contains no additional missing-Note case and ends at this one commit.
+
 ## Missing same-commit Agent Note audit
 
 The following ten non-trivial commits contain no path under `.agents/notes/` in their own tree diff even though each changes a decision governed by the Agent Note rules:
@@ -88,11 +96,11 @@ Later Notes and fixes can describe the current contract, but they cannot satisfy
 
 ## Consequences
 
-History-based tooling will parse incomplete Lore metadata for the 38 listed commits. Reviewers must consult this audit when a native trailer query disagrees with the readable message text; they must not synthesize missing parsed values.
+History-based tooling will parse incomplete Lore metadata for the 38 original commits and the one G002 closeout commit. Reviewers must consult this audit when a native trailer query disagrees with the readable message text; they must not synthesize missing parsed values.
 
 The ten listed commits permanently lack atomic code/Note alignment. Current owning Notes remain authoritative for current decisions, while these commits remain historical evidence of their own trees and messages. Neither source repairs the other's historical gap.
 
-This exception has a closed commit list and a closed end at `1f26bf5c`. A new malformed block or missing required Note is a current defect and remains blocking under the normal pre-push and review rules.
+The original exception has a closed end at `1f26bf5c`; the G002 closeout exception contains only `04315255`. A new malformed block or missing required Note is a current defect and remains blocking under the normal pre-push and review rules.
 
 ## Verification
 
@@ -116,4 +124,4 @@ for sha in 8cec3e3a ee56f5b8 0184b7f5 7abad63f bfffbe11 f9fbc3cb 983e1127 1b1300
 done
 ```
 
-The commit trees were not rewritten. This audit did not rerun G001 technical gates because the decision changes only historical governance documentation; it preserves, but does not independently reproduce, the existing technical evidence.
+The G002 closeout scan used the same labeled-versus-parsed comparison over `4530f306..689d89a4` and found exactly one mismatch, `04315255` (8 labeled; 1 parsed). `git rev-list --count 04315255..689d89a4` reported 43 descendants. The commit trees were not rewritten. This audit did not substitute history inspection for G001 or G002 technical gates; those gates have separate tracked checkpoint evidence.
