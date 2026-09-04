@@ -72,6 +72,22 @@ class StartupContractError(RuntimeError):
     pass
 
 
+SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS = {
+    'ROOT="$(cd "$(dirname "$0")" && pwd)"',
+    'TEMP_ENV="$(mktemp "$BACKEND_DIR/.env.tmp.XXXXXX")"',
+    'existing="$(grep -m 1 "^${key}=" "$BACKEND_ENV" || true)"',
+}
+
+
+def _assignment_command_substitutions(source: str) -> set[str]:
+    return {
+        line.strip()
+        for line in source.replace("\\\n", " ").splitlines()
+        if re.match(r"^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=", line.strip())
+        and ("$(" in line or "`" in line)
+    }
+
+
 def _expanded_shell_segments(source: str) -> list[list[str]]:
     assignments: dict[str, str] = {}
     expanded_segments: list[list[str]] = []
@@ -312,15 +328,20 @@ def _validate_setup_source(source: str) -> None:
         "uv sync",
     )
     missing = [value for value in required if value not in source]
+    unsafe_substitutions = (
+        _assignment_command_substitutions(source)
+        - SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS
+    )
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
         value
         for value in ("$ROOT/.env", "create_all", "seed.py", "AGENT_RUNTIME")
         if value in source
     )
-    if missing or forbidden or "/clawith?" in source:
+    if missing or forbidden or unsafe_substitutions or "/clawith?" in source:
         raise StartupContractError(
-            f"invalid setup contract missing={missing} forbidden={forbidden}"
+            "invalid setup contract "
+            f"missing={missing} forbidden={forbidden} substitutions={sorted(unsafe_substitutions)}"
         )
 
 
@@ -579,6 +600,11 @@ def _validate_operator_document(source: str) -> None:
     if legacy_database.search(source):
         raise StartupContractError("operator document references the legacy database")
     fenced = _markdown_fenced_commands(source)
+    unsafe_substitutions = _assignment_command_substitutions(fenced)
+    if unsafe_substitutions:
+        raise StartupContractError(
+            "operator document contains executable assignment command substitution"
+        )
     facts = _shell_execution_facts(fenced)
     for tokens in _expanded_shell_segments(fenced):
         if not tokens:
@@ -660,6 +686,8 @@ def test_setup_and_restart_match_health_only_contract() -> None:
         "python backend/seed.py",
         "docker compose up -d",
         "OUT=$(alembic upgrade head)",
+        "OUT=$(alembic $(printf upgrade) head)",
+        'OUT="$(alembic $(printf upgrade) head)"',
         "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable",
     ],
 )
@@ -1553,6 +1581,8 @@ def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
         "   ```bash\nalembic upgrade head\n   ```",
         "~~~bash\nalembic upgrade head\n~~~",
         "```bash\nOUT=$(alembic upgrade head)\n```",
+        "```bash\nOUT=$(alembic $(printf upgrade) head)\n```",
+        '```bash\nOUT="$(alembic $(printf upgrade) head)"\n```',
         "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
     ],
 )
