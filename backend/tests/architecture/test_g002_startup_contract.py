@@ -355,6 +355,10 @@ def _validate_restart_source(source: str) -> None:
         "Missing backend/.env",
         "process_pid",
         "startup_id",
+        'RESTART_LOCK="$STATE_DIR/backend.restart.lock"',
+        'mkdir "$RESTART_LOCK"',
+        "evidence_matches_pending",
+        "backend.unsettled.*.process",
     )
     missing = [value for value in required if value not in source]
     forbidden = sorted(_shell_execution_facts(source))
@@ -1101,6 +1105,238 @@ def test_restart_signal_stops_owned_child(
     assert process.returncode == expected_status, stderr
     assert term_log.read_text(encoding="utf-8") == "terminated"
     assert not process_file.exists()
+
+
+def test_concurrent_restart_fails_without_touching_active_invocation(
+    tmp_path: Path,
+) -> None:
+    term_log = tmp_path / "term.log"
+    repository, _fake_bin, environment = _restart_fixture(
+        tmp_path,
+        uv_source=(
+            "#!/bin/sh\n"
+            "trap 'printf terminated > \"$TERM_LOG\"; exit 0' TERM\n"
+            "while :; do sleep 0.1; done\n"
+        ),
+        curl_source="#!/bin/sh\nsleep 0.1\nexit 1\n",
+    )
+    environment.update(
+        {
+            "CLAWITH_HEALTH_ATTEMPTS": "1000",
+            "TERM_LOG": str(term_log),
+        }
+    )
+    first = subprocess.Popen(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    process_file = repository / ".data/backend.process"
+    restart_lock = repository / ".data/backend.restart.lock"
+    _wait_for_path(process_file)
+    _wait_for_path(restart_lock)
+    owned_pid = _read_process_pid(process_file)
+
+    second = subprocess.run(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert second.returncode == 1
+    assert "Another restart is already in progress" in second.stderr
+    assert first.poll() is None
+    assert _process_exists(owned_pid)
+    first.send_signal(signal.SIGTERM)
+    _stdout, stderr = first.communicate(timeout=5)
+    assert first.returncode == 143, stderr
+    assert term_log.read_text(encoding="utf-8") == "terminated"
+    assert not process_file.exists()
+    assert not restart_lock.exists()
+
+
+def test_restart_cleanup_preserves_replaced_shared_evidence(tmp_path: Path) -> None:
+    term_log = tmp_path / "term.log"
+    repository, _fake_bin, environment = _restart_fixture(
+        tmp_path,
+        uv_source=(
+            "#!/bin/sh\n"
+            "trap 'printf terminated > \"$TERM_LOG\"; exit 0' TERM\n"
+            "while :; do sleep 0.1; done\n"
+        ),
+        curl_source="#!/bin/sh\nsleep 0.1\nexit 1\n",
+    )
+    environment.update(
+        {
+            "CLAWITH_HEALTH_ATTEMPTS": "1000",
+            "TERM_LOG": str(term_log),
+        }
+    )
+    restart = subprocess.Popen(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    process_file = repository / ".data/backend.process"
+    _wait_for_path(process_file)
+    owned_pid = _read_process_pid(process_file)
+    replacement = (
+        f"pid={os.getpid()}\n"
+        "start=replacement-start\n"
+        "startup_id=replacement-startup\n"
+    )
+    process_file.write_text(replacement, encoding="utf-8")
+
+    restart.send_signal(signal.SIGTERM)
+    _stdout, stderr = restart.communicate(timeout=5)
+
+    assert restart.returncode == 143, stderr
+    assert not _process_exists(owned_pid)
+    assert term_log.read_text(encoding="utf-8") == "terminated"
+    assert process_file.read_text(encoding="utf-8") == replacement
+    assert not (repository / ".data/backend.restart.lock").exists()
+
+
+@pytest.mark.parametrize("evidence_state", ["missing", "foreign"])
+def test_restart_records_owned_unsettled_child_without_overwriting_foreign_evidence(
+    tmp_path: Path,
+    evidence_state: str,
+) -> None:
+    ready_log = tmp_path / "ready.log"
+    repository, _fake_bin, environment = _restart_fixture(
+        tmp_path,
+        uv_source=(
+            "#!/bin/sh\n"
+            "trap '' TERM\n"
+            "printf ready > \"$READY_LOG\"\n"
+            "while :; do sleep 0.1; done\n"
+        ),
+        curl_source="#!/bin/sh\nsleep 0.1\nexit 1\n",
+    )
+    environment.update(
+        {
+            "CLAWITH_HEALTH_ATTEMPTS": "1000",
+            "CLAWITH_STOP_ATTEMPTS": "1",
+            "READY_LOG": str(ready_log),
+        }
+    )
+    restart = subprocess.Popen(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    process_file = repository / ".data/backend.process"
+    _wait_for_path(process_file)
+    _wait_for_path(ready_log)
+    owned = process_file.read_text(encoding="utf-8")
+    owned_pid = _read_process_pid(process_file)
+    foreign = (
+        f"pid={os.getpid()}\n"
+        "start=foreign-start\n"
+        "startup_id=foreign-startup\n"
+    )
+    if evidence_state == "missing":
+        process_file.unlink()
+    else:
+        process_file.write_text(foreign, encoding="utf-8")
+
+    restart.send_signal(signal.SIGTERM)
+    _stdout, stderr = restart.communicate(timeout=5)
+
+    try:
+        assert restart.returncode == 1
+        assert _process_exists(owned_pid)
+        if evidence_state == "missing":
+            assert process_file.read_text(encoding="utf-8") == owned
+            assert "ownership evidence retained" in stderr
+        else:
+            assert process_file.read_text(encoding="utf-8") == foreign
+            [unsettled] = list(
+                (repository / ".data").glob("backend.unsettled.*.process")
+            )
+            assert unsettled.read_text(encoding="utf-8") == owned
+            assert "foreign evidence preserved" in stderr
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(owned_pid, signal.SIGKILL)
+
+
+def test_restart_fails_closed_on_unverifiable_stale_lock(tmp_path: Path) -> None:
+    repository, _fake_bin, environment = _restart_fixture(
+        tmp_path,
+        uv_source="#!/bin/sh\nexit 99\n",
+        curl_source="#!/bin/sh\nexit 99\n",
+    )
+    restart_lock = repository / ".data/backend.restart.lock"
+    restart_lock.mkdir(parents=True)
+
+    completed = subprocess.run(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "unverifiable stale lock" in completed.stderr
+    assert "manually removing that exact lock directory" in completed.stderr
+    assert restart_lock.is_dir()
+    assert not (repository / ".data/backend.process").exists()
+
+
+def test_restart_fails_before_signal_or_launch_when_unsettled_evidence_exists(
+    tmp_path: Path,
+) -> None:
+    launch_log = tmp_path / "launch.log"
+    repository, _fake_bin, environment = _restart_fixture(
+        tmp_path,
+        uv_source='#!/bin/sh\nprintf launched > "$LAUNCH_LOG"\nexit 99\n',
+        curl_source="#!/bin/sh\nexit 99\n",
+    )
+    environment["LAUNCH_LOG"] = str(launch_log)
+    state_dir = repository / ".data"
+    state_dir.mkdir()
+    process_file = state_dir / "backend.process"
+    process_file.write_text(
+        f"pid={os.getpid()}\nstart=foreign\nstartup_id=foreign\n",
+        encoding="utf-8",
+    )
+    unsettled = state_dir / "backend.unsettled.previous.process"
+    unsettled.write_text(
+        "pid=999999\nstart=previous\nstartup_id=previous\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["bash", str(repository / "restart.sh")],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "manual recovery before restart" in completed.stderr
+    assert _process_exists(os.getpid())
+    assert not launch_log.exists()
+    assert process_file.exists()
+    assert unsettled.exists()
+    assert not (state_dir / "backend.restart.lock").exists()
 
 
 def test_restart_retains_evidence_when_owned_child_cannot_stop(tmp_path: Path) -> None:
