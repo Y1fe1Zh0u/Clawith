@@ -33,7 +33,8 @@ export CLAWITH_TARGET_S3_PREFIX="clawith-target/"
 export CLAWITH_TARGET_STORAGE_LOCAL_ROOT="$ci_temp_root/persistence/target/storage"
 
 cd "$backend_root"
-uv sync --extra dev
+uv lock --check
+uv sync --extra dev --frozen
 uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json
 uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json --require-zero-unreviewed --require-zero-disposition-missing
 uv run --extra dev pytest tests/architecture/test_governance.py tests/architecture/test_module_boundaries.py

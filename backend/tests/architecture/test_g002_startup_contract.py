@@ -112,6 +112,11 @@ def _expanded_shell_segments(source: str) -> list[list[str]]:
 
 def _shell_execution_facts(source: str) -> set[str]:
     facts: set[str] = set()
+    substitutions = re.findall(r"\$\(([^()]*)\)|`([^`]*)`", source)
+    for dollar_substitution, backtick_substitution in substitutions:
+        nested = dollar_substitution or backtick_substitution
+        if nested:
+            facts.update(_shell_execution_facts(nested))
     for expanded_tokens in _expanded_shell_segments(source):
         commands = [
             token
@@ -191,6 +196,40 @@ REQUIRED_CUMULATIVE_GATE_COMMANDS = (
     "uv run --extra dev pyright app",
 )
 
+CUMULATIVE_CI_SCRIPT_PREAMBLE = (
+    "set -euo pipefail",
+    'repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
+    'backend_root="$repository_root/backend"',
+    'ci_temp_root="$(mktemp -d)"',
+    'reference_worktree="$ci_temp_root/legacy-reference"',
+    "cleanup() {",
+    "status=$?",
+    "trap - EXIT INT TERM",
+    'git -C "$repository_root" worktree remove --force "$reference_worktree" >/dev/null 2>&1 || true',
+    'git -C "$repository_root" worktree prune',
+    'rm -rf "$ci_temp_root"',
+    'exit "$status"',
+    "}",
+    "trap cleanup EXIT INT TERM",
+    "git -C \"$repository_root\" cat-file -e '8ed4ae2f^{commit}'",
+    'git -C "$repository_root" worktree add --detach "$reference_worktree" 8ed4ae2f',
+    'uv sync --project "$reference_worktree/backend" --extra dev',
+    'reference_python="$reference_worktree/backend/.venv/bin/python"',
+    'export CLAWITH_LEGACY_REFERENCE_AGENT_DATA_DIR="$ci_temp_root/persistence/legacy/agents"',
+    'export CLAWITH_LEGACY_REFERENCE_DATABASE_URL="postgresql+asyncpg://legacy:legacy@127.0.0.1:5432/clawith_legacy_reference"',
+    'export CLAWITH_LEGACY_REFERENCE_REDIS_URL="redis://127.0.0.1:6379/14"',
+    'export CLAWITH_LEGACY_REFERENCE_S3_PREFIX="clawith-legacy-reference/"',
+    'export CLAWITH_LEGACY_REFERENCE_STORAGE_LOCAL_ROOT="$ci_temp_root/persistence/legacy/storage"',
+    'export CLAWITH_TARGET_AGENT_DATA_DIR="$ci_temp_root/persistence/target/agents"',
+    'export CLAWITH_TARGET_DATABASE_URL="postgresql+asyncpg://target:target@127.0.0.1:5432/clawith_target"',
+    'export CLAWITH_TARGET_REDIS_URL="redis://127.0.0.1:6379/15"',
+    'export CLAWITH_TARGET_S3_PREFIX="clawith-target/"',
+    'export CLAWITH_TARGET_STORAGE_LOCAL_ROOT="$ci_temp_root/persistence/target/storage"',
+    'cd "$backend_root"',
+    "uv lock --check",
+    "uv sync --extra dev --frozen",
+)
+
 
 def _command_tokens(line: str) -> tuple[str, ...]:
     lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
@@ -203,28 +242,14 @@ def _validate_cumulative_ci_script(source: str) -> None:
     lines = source.splitlines()
     if not lines or lines[0] != "#!/bin/bash" or "set -euo pipefail" not in lines:
         raise StartupContractError("CI gate script lacks fail-closed Bash setup")
-    expected = tuple(_command_tokens(command) for command in REQUIRED_CUMULATIVE_GATE_COMMANDS)
-    actual: list[tuple[str, ...]] = []
-    gate_lines: list[int] = []
-    for line_number, line in enumerate(lines):
-        try:
-            tokens = _command_tokens(line)
-        except ValueError as exc:
-            raise StartupContractError("CI gate script contains invalid shell") from exc
-        if tokens[:2] == ("uv", "run"):
-            actual.append(tokens)
-            gate_lines.append(line_number)
-        if line == line.lstrip() and tokens[:1] == ("exit",):
-            raise StartupContractError("CI gate script can exit before cumulative gates finish")
-    if tuple(actual) != expected:
+    actual = tuple(
+        line.strip()
+        for line in lines
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    expected = CUMULATIVE_CI_SCRIPT_PREAMBLE + REQUIRED_CUMULATIVE_GATE_COMMANDS
+    if actual != expected:
         raise StartupContractError("CI gate script does not execute the exact cumulative gates in order")
-    first_gate, last_gate = gate_lines[0], gate_lines[-1]
-    for line in lines[first_gate : last_gate + 1]:
-        tokens = _command_tokens(line)
-        if not tokens:
-            continue
-        if tokens[0] in {"exit", "return", "break", "continue", "if", "case", "for", "while", "until"}:
-            raise StartupContractError("CI gate script can bypass a cumulative gate")
 
 
 def _yaml_continue_on_error(value: object) -> bool:
@@ -470,16 +495,29 @@ def _validate_helm_template_quarantine(source: str) -> None:
 def _markdown_fenced_commands(source: str) -> str:
     commands: list[str] = []
     current: list[str] | None = None
+    fence_character: str | None = None
+    fence_length = 0
     for line in source.splitlines():
-        if line.startswith("```"):
-            if current is None:
-                current = []
-            else:
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(?:[^`~]*)$", line)
+        if current is None and opening:
+            marker = opening.group(1)
+            fence_character = marker[0]
+            fence_length = len(marker)
+            current = []
+            continue
+        if current is not None and fence_character is not None:
+            closing = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}\s*",
+                line,
+            )
+            if closing:
                 commands.append("\n".join(current))
                 current = None
-            continue
-        if current is not None:
+                fence_character = None
+                fence_length = 0
+                continue
             current.append(line)
+            continue
     if current is not None:
         raise StartupContractError("operator document has an unclosed code fence")
     return "\n".join(commands)
@@ -574,6 +612,7 @@ def test_setup_and_restart_match_health_only_contract() -> None:
         "python -m app.scripts.setup_langgraph_checkpoints",
         "python backend/seed.py",
         "docker compose up -d",
+        "OUT=$(alembic upgrade head)",
         "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable",
     ],
 )
@@ -1218,6 +1257,34 @@ def test_ci_short_circuit_or_echo_cannot_supply_required_gate() -> None:
         )
 
 
+def test_ci_gate_script_rejects_an_arbitrary_non_gate_command() -> None:
+    drone = (REPOSITORY_ROOT / ".github/drone.yml").read_text(encoding="utf-8")
+    github = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(
+        encoding="utf-8"
+    )
+    ci_script = CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    poisoned = ci_script.replace(
+        REQUIRED_CUMULATIVE_GATE_COMMANDS[1],
+        f"{REQUIRED_CUMULATIVE_GATE_COMMANDS[1]}\nbash /tmp/legacy-deploy.sh",
+    )
+
+    with pytest.raises(StartupContractError, match="gate-only"):
+        _validate_ci_gate_sources(
+            drone,
+            github,
+            legacy_script_exists=False,
+            ci_script=poisoned,
+        )
+
+
+def test_ci_gate_script_rejects_skipping_the_lock_freshness_check() -> None:
+    source = CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    poisoned = source.replace("uv lock --check", "true # lock is probably current")
+
+    with pytest.raises(StartupContractError, match="exact cumulative gates"):
+        _validate_cumulative_ci_script(poisoned)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -1412,6 +1479,9 @@ def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
         ),
         "```bash\necho safe; alembic upgrade head\n```",
         "```bash\necho safe; python -m app.scripts.setup_langgraph_checkpoints\n```",
+        "   ```bash\nalembic upgrade head\n   ```",
+        "~~~bash\nalembic upgrade head\n~~~",
+        "```bash\nOUT=$(alembic upgrade head)\n```",
         "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
     ],
 )
@@ -1428,5 +1498,13 @@ def test_operator_doc_guard_allows_inert_legacy_prose() -> None:
         "# G002 health-only\n\n"
         "Do not run Alembic, Docker, Helm, or the legacy checkpoint installer.\n"
         "The isolated database is `clawith_target`.\n"
+    )
+    _validate_operator_document(source)
+
+
+def test_operator_doc_guard_allows_inert_tilde_fenced_warning() -> None:
+    source = (
+        "# G002 health-only\n\n"
+        "~~~text\nDo not run Alembic or Docker during G002.\n~~~\n"
     )
     _validate_operator_document(source)
