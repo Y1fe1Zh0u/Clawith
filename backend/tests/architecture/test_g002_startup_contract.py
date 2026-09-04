@@ -72,13 +72,13 @@ class StartupContractError(RuntimeError):
     pass
 
 
-SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS = {
+SETUP_ALLOWED_EXECUTABLE_EXPANSIONS = {
     'ROOT="$(cd "$(dirname "$0")" && pwd)"',
     'TEMP_ENV="$(mktemp "$BACKEND_DIR/.env.tmp.XXXXXX")"',
     'existing="$(grep -m 1 "^${key}=" "$BACKEND_ENV" || true)"',
 }
 
-RESTART_ALLOWED_COMMAND_SUBSTITUTIONS = {
+RESTART_ALLOWED_EXECUTABLE_EXPANSIONS = {
     'ROOT="$(cd "$(dirname "$0")" && pwd)"',
     'evidence_pid="$(sed -n \'s/^pid=//p\' "$PROCESS_FILE")"',
     'evidence_start="$(sed -n \'s/^start=//p\' "$PROCESS_FILE")"',
@@ -95,11 +95,11 @@ RESTART_ALLOWED_COMMAND_SUBSTITUTIONS = {
 }
 
 
-def _command_substitution_lines(source: str) -> set[str]:
+def _executable_expansion_lines(source: str) -> set[str]:
     return {
         line.strip()
         for line in source.replace("\\\n", " ").splitlines()
-        if "$(" in line or "`" in line
+        if any(marker in line for marker in ("$(", "`", "<(", ">("))
     }
 
 
@@ -345,7 +345,10 @@ def _validate_setup_source(source: str) -> None:
         "uv sync --frozen",
     )
     missing = [value for value in required if value not in source]
-    unsafe_substitutions = _command_substitution_lines(source) - SETUP_ALLOWED_ASSIGNMENT_SUBSTITUTIONS
+    unsafe_substitutions = (
+        _executable_expansion_lines(source)
+        - SETUP_ALLOWED_EXECUTABLE_EXPANSIONS
+    )
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
         value
@@ -376,8 +379,8 @@ def _validate_restart_source(source: str) -> None:
     )
     missing = [value for value in required if value not in source]
     unsafe_substitutions = (
-        _command_substitution_lines(source)
-        - RESTART_ALLOWED_COMMAND_SUBSTITUTIONS
+        _executable_expansion_lines(source)
+        - RESTART_ALLOWED_EXECUTABLE_EXPANSIONS
     )
     forbidden = sorted(_shell_execution_facts(source))
     forbidden.extend(
@@ -625,10 +628,10 @@ def _validate_operator_document(source: str) -> None:
     if legacy_database.search(source):
         raise StartupContractError("operator document references the legacy database")
     fenced = _markdown_fenced_commands(source)
-    unsafe_substitutions = _command_substitution_lines(fenced)
+    unsafe_substitutions = _executable_expansion_lines(fenced)
     if unsafe_substitutions:
         raise StartupContractError(
-            "operator document contains executable command substitution"
+            "operator document contains an unapproved executable shell expansion"
         )
     facts = _shell_execution_facts(fenced)
     for tokens in _expanded_shell_segments(fenced):
@@ -712,6 +715,8 @@ def test_setup_and_restart_match_health_only_contract() -> None:
         "docker compose up -d",
         "OUT=$(alembic upgrade head)",
         "readonly OUT=$(alembic $(printf upgrade) head)",
+        "cat <(alembic upgrade head)",
+        "cat >(alembic upgrade head)",
         "OUT=$(alembic $(printf upgrade) head)",
         'OUT="$(alembic $(printf upgrade) head)"',
         "DATABASE_URL=postgresql+asyncpg://clawith:clawith@localhost:5432/clawith?ssl=disable",
@@ -733,6 +738,8 @@ def test_setup_contract_rejects_legacy_behavior(forbidden: str) -> None:
         "kill -9 123",
         "OUT=$(alembic $(printf upgrade) head)",
         "readonly OUT=$(alembic $(printf upgrade) head)",
+        "cat <(alembic upgrade head)",
+        "cat >(alembic upgrade head)",
     ],
 )
 def test_restart_contract_rejects_non_health_startup(forbidden: str) -> None:
@@ -1869,6 +1876,8 @@ def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
         "```bash\nOUT=$(alembic $(printf upgrade) head)\n```",
         '```bash\nOUT="$(alembic $(printf upgrade) head)"\n```',
         '```bash\necho "$(alembic $(printf upgrade) head)"\n```',
+        "```bash\ncat <(alembic upgrade head)\n```",
+        "```bash\ncat >(alembic upgrade head)\n```",
         "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
     ],
 )
