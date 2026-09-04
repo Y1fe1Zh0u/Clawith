@@ -3862,6 +3862,12 @@ def _legacy_bootstrap_executable_facts(source: str) -> set[str]:
             facts.add("seed-script")
         if invokes_process and "app.scripts.bootstrap_db" in expanded_line:
             facts.add("bootstrap-module")
+        if command == "alembic" or (
+            invokes_process and re.search(r"(?:^|\s)alembic(?:\s|$)", expanded_line)
+        ):
+            facts.add("alembic")
+        if invokes_process and "app.scripts.setup_langgraph_checkpoints" in expanded_line:
+            facts.add("checkpoint-installer")
         if invokes_process and "create_all" in expanded_line:
             facts.add("create-all")
         if command in {"bash", "psql", "python", "python3", "sh"} and (
@@ -9464,6 +9470,8 @@ def test_backend_test_reference_of_deleted_bootstrap_authority_fails_guard(
         "python backend/seed.py\n",
         'SEED_COMMAND="python backend/seed.py"\nexec $SEED_COMMAND\n',
         "python -m app.scripts.bootstrap_db\n",
+        "uv run alembic upgrade head\n",
+        "python -m app.scripts.setup_langgraph_checkpoints\n",
         'python -c "Base.metadata.create_all()"\n',
         'psql "$DATABASE_URL" -c "ALTER TABLE users ADD COLUMN legacy INTEGER"\n',
         'mkdir -p "$AGENT_DATA_DIR/$agent_id/workspace"\n',
@@ -9474,6 +9482,8 @@ def test_backend_test_reference_of_deleted_bootstrap_authority_fails_guard(
         "seed-script",
         "assigned-seed-command",
         "bootstrap-module",
+        "alembic",
+        "checkpoint-installer",
         "create-all",
         "inline-schema-patch",
         "agent-workspace",
@@ -9495,15 +9505,17 @@ def test_restored_setup_or_startup_bootstrap_behavior_fails_guard(
         _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
 
 
-def test_target_alembic_and_application_startup_pass_bootstrap_guard(
+def test_target_health_startup_and_operator_alembic_pass_bootstrap_guard(
     tmp_path: Path,
 ) -> None:
     setup_script = tmp_path / "setup.sh"
     setup_script.write_text(
-        "alembic upgrade head\n"
         "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1\n",
         encoding="utf-8",
     )
+    operator_script = tmp_path / "scripts/operator_migration.sh"
+    operator_script.parent.mkdir(parents=True)
+    operator_script.write_text("uv run alembic current\n", encoding="utf-8")
 
     _assert_setup_and_startup_scripts_do_not_restore_legacy_bootstrap(tmp_path)
 
