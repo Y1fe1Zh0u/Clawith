@@ -3875,77 +3875,84 @@ def _legacy_bootstrap_executable_facts(source: str) -> set[str]:
     logical_lines = source.replace("\\\n", " ").splitlines()
     for line in logical_lines:
         tokens = _shell_tokens(line)
-        if not tokens:
-            continue
-
+        segments: list[list[str]] = [[]]
         for token in tokens:
-            assignment = _SHELL_ASSIGNMENT.match(token)
-            if assignment:
-                assignments[assignment.group(1)] = _expand_shell_assignments(
-                    assignment.group(2),
-                    assignments,
-                )
+            if token in {";", "&&", "||", "|", "&"}:
+                if segments[-1]:
+                    segments.append([])
+                continue
+            segments[-1].append(token)
+        for segment in segments:
+            expanded_tokens = [
+                _expand_shell_assignments(token, assignments) for token in segment
+            ]
+            for token in expanded_tokens:
+                assignment = _SHELL_ASSIGNMENT.match(token)
+                if assignment:
+                    assignments[assignment.group(1)] = assignment.group(2)
+            command_tokens = [
+                token
+                for token in expanded_tokens
+                if not _SHELL_ASSIGNMENT.match(token)
+                and token not in {"if", "then", "!", "exec", "env", "export"}
+            ]
+            if not command_tokens:
+                continue
 
-        expanded_line = _expand_shell_assignments(line, assignments)
-        expanded_tokens = _shell_tokens(expanded_line)
-        command_tokens = [
-            token
-            for token in expanded_tokens
-            if not _SHELL_ASSIGNMENT.match(token)
-            and token not in {"if", "then", "!", "exec", "env", "export"}
-        ]
-        if not command_tokens:
-            continue
+            command = Path(command_tokens[0]).name
+            has_redirection = any(
+                token in {">", ">>", "<", "<<"} for token in expanded_tokens
+            )
+            expanded_line = " ".join(expanded_tokens)
+            if command in {"echo", "printf"} and not has_redirection:
+                continue
 
-        command = Path(command_tokens[0]).name
-        has_redirection = any(
-            token in {">", ">>", "<", "<<"} for token in expanded_tokens
-        )
-        if command in {"echo", "printf"} and not has_redirection:
-            continue
+            invokes_process = command in {
+                "bash",
+                "python",
+                "python3",
+                "sh",
+                "uv",
+            } or command.startswith("python")
+            if (
+                (invokes_process or command == "seed.py")
+                and re.search(r"(?:^|[\s/])seed\.py(?:\s|$)", expanded_line)
+            ):
+                facts.add("seed-script")
+            if invokes_process and "app.scripts.bootstrap_db" in expanded_line:
+                facts.add("bootstrap-module")
+            if command == "alembic" or (
+                invokes_process
+                and re.search(r"(?:^|\s)alembic(?:\s|$)", expanded_line)
+            ):
+                facts.add("alembic")
+            if (
+                invokes_process
+                and "app.scripts.setup_langgraph_checkpoints" in expanded_line
+            ):
+                facts.add("checkpoint-installer")
+            if invokes_process and "create_all" in expanded_line:
+                facts.add("create-all")
+            if command in {"bash", "psql", "python", "python3", "sh"} and (
+                _LEGACY_DDL_REPAIR.search(expanded_line)
+            ):
+                facts.add("ddl-repair")
 
-        invokes_process = command in {
-            "bash",
-            "python",
-            "python3",
-            "sh",
-            "uv",
-        } or command.startswith("python")
-        if (
-            (invokes_process or command == "seed.py")
-            and re.search(r"(?:^|[\s/])seed\.py(?:\s|$)", expanded_line)
-        ):
-            facts.add("seed-script")
-        if invokes_process and "app.scripts.bootstrap_db" in expanded_line:
-            facts.add("bootstrap-module")
-        if command == "alembic" or (
-            invokes_process and re.search(r"(?:^|\s)alembic(?:\s|$)", expanded_line)
-        ):
-            facts.add("alembic")
-        if invokes_process and "app.scripts.setup_langgraph_checkpoints" in expanded_line:
-            facts.add("checkpoint-installer")
-        if invokes_process and "create_all" in expanded_line:
-            facts.add("create-all")
-        if command in {"bash", "psql", "python", "python3", "sh"} and (
-            _LEGACY_DDL_REPAIR.search(expanded_line)
-        ):
-            facts.add("ddl-repair")
-
-        mutates_paths = command in {"install", "mkdir", "tee", "touch"} or (
-            command in {"cat", "echo", "printf"} and has_redirection
-        )
-        if not mutates_paths:
-            continue
-        normalized_line = expanded_line.replace("\\", "/").casefold()
-        materializes_agent_tree = "agent_data_dir" in normalized_line and any(
-            segment in normalized_line
-            for segment in ("/workspace", "/memory", "/skills")
-        )
-        materializes_owned_file = any(
-            path in normalized_line for path in ("/memory.md", "/soul.md")
-        )
-        if materializes_agent_tree or materializes_owned_file:
-            facts.add("workspace-materialization")
+            mutates_paths = command in {"install", "mkdir", "tee", "touch"} or (
+                command in {"cat", "echo", "printf"} and has_redirection
+            )
+            if not mutates_paths:
+                continue
+            normalized_line = expanded_line.replace("\\", "/").casefold()
+            materializes_agent_tree = "agent_data_dir" in normalized_line and any(
+                path_segment in normalized_line
+                for path_segment in ("/workspace", "/memory", "/skills")
+            )
+            materializes_owned_file = any(
+                path in normalized_line for path in ("/memory.md", "/soul.md")
+            )
+            if materializes_agent_tree or materializes_owned_file:
+                facts.add("workspace-materialization")
     return facts
 
 
@@ -9527,6 +9534,7 @@ def test_backend_test_reference_of_deleted_bootstrap_authority_fails_guard(
         'SEED_COMMAND="python backend/seed.py"\nexec $SEED_COMMAND\n',
         "python -m app.scripts.bootstrap_db\n",
         "uv run alembic upgrade head\n",
+        "echo safe; uv run alembic upgrade head\n",
         "python -m app.scripts.setup_langgraph_checkpoints\n",
         'python -c "Base.metadata.create_all()"\n',
         'psql "$DATABASE_URL" -c "ALTER TABLE users ADD COLUMN legacy INTEGER"\n',
@@ -9539,6 +9547,7 @@ def test_backend_test_reference_of_deleted_bootstrap_authority_fails_guard(
         "assigned-seed-command",
         "bootstrap-module",
         "alembic",
+        "echo-then-alembic",
         "checkpoint-installer",
         "create-all",
         "inline-schema-patch",

@@ -71,9 +71,9 @@ class StartupContractError(RuntimeError):
     pass
 
 
-def _shell_execution_facts(source: str) -> set[str]:
-    facts: set[str] = set()
+def _expanded_shell_segments(source: str) -> list[list[str]]:
     assignments: dict[str, str] = {}
+    expanded_segments: list[list[str]] = []
     for line in source.replace("\\\n", " ").splitlines():
         lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
         lexer.commenters = "#"
@@ -82,31 +82,37 @@ def _shell_execution_facts(source: str) -> set[str]:
             tokens = list(lexer)
         except ValueError:
             continue
-        if not tokens:
-            continue
+        segments: list[list[str]] = [[]]
         for token in tokens:
-            match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", token, re.DOTALL)
-            if match:
-                value = match.group(2)
+            if token in {";", "&&", "||", "|", "&"}:
+                if segments[-1]:
+                    segments.append([])
+                continue
+            segments[-1].append(token)
+        for segment in segments:
+            if not segment:
+                continue
+            expanded: list[str] = []
+            for token in segment:
+                value = token
                 for name, assigned in assignments.items():
                     value = value.replace(f"${{{name}}}", assigned)
                     value = re.sub(rf"\${re.escape(name)}\b", assigned, value)
-                assignments[match.group(1)] = value
-        expanded = line
-        for name, assigned in assignments.items():
-            expanded = expanded.replace(f"${{{name}}}", assigned)
-            expanded = re.sub(rf"\${re.escape(name)}\b", assigned, expanded)
-        expanded_lexer = shlex.shlex(
-            expanded,
-            posix=True,
-            punctuation_chars="|&;<>",
-        )
-        expanded_lexer.commenters = "#"
-        expanded_lexer.whitespace_split = True
-        try:
-            expanded_tokens = list(expanded_lexer)
-        except ValueError:
-            continue
+                expanded.append(value)
+                match = re.fullmatch(
+                    r"([A-Za-z_][A-Za-z0-9_]*)=(.*)",
+                    value,
+                    re.DOTALL,
+                )
+                if match:
+                    assignments[match.group(1)] = match.group(2)
+            expanded_segments.append(expanded)
+    return expanded_segments
+
+
+def _shell_execution_facts(source: str) -> set[str]:
+    facts: set[str] = set()
+    for expanded_tokens in _expanded_shell_segments(source):
         commands = [
             token
             for token in expanded_tokens
@@ -116,9 +122,9 @@ def _shell_execution_facts(source: str) -> set[str]:
         if not commands:
             continue
         command = Path(commands[0]).name
-        if command in {"echo", "printf"}:
-            continue
         normalized = " ".join(expanded_tokens)
+        if command in {"echo", "printf"} and "$(" not in normalized and "`" not in normalized:
+            continue
         if command == "alembic" or re.search(r"(?:^|\s)alembic(?:\s|$)", normalized):
             facts.add("alembic")
         if "app.scripts.setup_langgraph_checkpoints" in normalized:
@@ -407,8 +413,19 @@ def _validate_ci_gate_sources(
 
 
 def _validate_helm_template_quarantine(source: str) -> None:
-    condition_stack: list[tuple[str, bool]] = []
+    condition_stack: list[tuple[bool, bool]] = []
     directive = re.compile(r"^\{\{-?\s*(if|range|with)\s+(.+?)\s*\}\}$")
+
+    def exact_deferred_guard(condition: str) -> bool:
+        normalized = " ".join(condition.split())
+        return bool(
+            re.fullmatch(r"not \.Values\.g002Deferred", normalized)
+            or re.fullmatch(
+                r"and \(not \.Values\.g002Deferred\)(?: \.Values\.[A-Za-z0-9_.]+)+",
+                normalized,
+            )
+        )
+
     for line_number, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
         if not stripped or stripped == "---" or stripped.startswith("#"):
@@ -416,14 +433,17 @@ def _validate_helm_template_quarantine(source: str) -> None:
         opened = directive.match(stripped)
         if opened:
             condition_stack.append(
-                (opened.group(2) if opened.group(1) == "if" else "", False)
+                (
+                    opened.group(1) == "if" and exact_deferred_guard(opened.group(2)),
+                    False,
+                )
             )
             continue
         if re.fullmatch(r"\{\{-?\s*else\s*\}\}", stripped):
             if not condition_stack:
                 raise StartupContractError("Helm template has an unmatched else")
-            condition, in_else = condition_stack[-1]
-            condition_stack[-1] = (condition, not in_else)
+            is_guard, in_else = condition_stack[-1]
+            condition_stack[-1] = (is_guard, not in_else)
             continue
         if re.fullmatch(r"\{\{-?\s*end\s*\}\}", stripped):
             if not condition_stack:
@@ -438,8 +458,7 @@ def _validate_helm_template_quarantine(source: str) -> None:
             ) is None:
             raise StartupContractError("Helm template syntax is not recognized")
         if not any(
-            "not .Values.g002Deferred" in condition and not in_else
-            for condition, in_else in condition_stack
+            is_guard and not in_else for is_guard, in_else in condition_stack
         ):
             raise StartupContractError(
                 f"Helm resource content is not quarantined at line {line_number}"
@@ -476,14 +495,7 @@ def _validate_operator_document(source: str) -> None:
         raise StartupContractError("operator document references the legacy database")
     fenced = _markdown_fenced_commands(source)
     facts = _shell_execution_facts(fenced)
-    for line in fenced.splitlines():
-        lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
-        lexer.commenters = "#"
-        lexer.whitespace_split = True
-        try:
-            tokens = list(lexer)
-        except ValueError:
-            continue
+    for tokens in _expanded_shell_segments(fenced):
         if not tokens:
             continue
         command = Path(tokens[0]).name
@@ -604,6 +616,23 @@ def test_startup_contract_rejects_split_token_migration_commands(
         _validate_setup_source(SETUP.read_text(encoding="utf-8") + split_command)
     with pytest.raises(StartupContractError):
         _validate_restart_source(RESTART.read_text(encoding="utf-8") + split_command)
+
+
+@pytest.mark.parametrize(
+    "forbidden_segment",
+    [
+        "uv run alembic upgrade head",
+        "python -m app.scripts.setup_langgraph_checkpoints",
+    ],
+)
+def test_startup_contract_checks_commands_after_inert_echo(
+    forbidden_segment: str,
+) -> None:
+    bypass = f"\necho safe; {forbidden_segment}\n"
+    with pytest.raises(StartupContractError):
+        _validate_setup_source(SETUP.read_text(encoding="utf-8") + bypass)
+    with pytest.raises(StartupContractError):
+        _validate_restart_source(RESTART.read_text(encoding="utf-8") + bypass)
 
 
 def test_setup_synchronizes_backend_env_and_prepares_target_database(
@@ -1336,6 +1365,9 @@ def test_helm_quarantine_rejects_comment_spoof_and_unguarded_resource() -> None:
         "{{- if not .Values.g002Deferred }} kind: Secret\n",
         "{{- unknown .Values.g002Deferred }}\nkind: Secret\n",
         "{{- if not .Values.g002Deferred }}\nkind: Secret\n",
+        "{{- if not .Values.g002DeferredBypass }}\nkind: Secret\n{{- end }}\n",
+        "{{- if or (not .Values.g002Deferred) true }}\nkind: Secret\n{{- end }}\n",
+        "{{- if and (not .Values.g002Deferred) true }}\nkind: Secret\n{{- end }}\n",
     ],
 )
 def test_helm_quarantine_rejects_else_inline_unknown_and_unclosed_templates(
@@ -1378,6 +1410,8 @@ def test_alembic_ini_uses_target_namespace_and_operator_warning() -> None:
             '"$MIG" upgrade head\n'
             "```"
         ),
+        "```bash\necho safe; alembic upgrade head\n```",
+        "```bash\necho safe; python -m app.scripts.setup_langgraph_checkpoints\n```",
         "DATABASE_URL=postgresql+asyncpg://user:secret@localhost:5432/clawith",
     ],
 )
