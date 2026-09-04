@@ -1,7 +1,7 @@
 goal: G002
 validation: pyright
 command: uv run --extra dev pyright app
-verified_source_head: 8534a24ecae729d3dbbfdfb8f3c33d4b72146164
-verified_at: 2026-09-04T03:12:41Z
+verified_source_head: 821f928592f706a2cbab3ebe3d8ab5dc6dae7f52
+verified_at: 2026-09-04T08:19:11Z
 exit_code: 0
 result: 0 errors, 0 warnings, 0 informations
