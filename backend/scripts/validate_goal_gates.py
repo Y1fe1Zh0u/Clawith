@@ -175,7 +175,7 @@ EXPECTED_VALIDATION_COMMANDS = {
         "owner-dag-and-wave-roster": "uv run python scripts/check_owner_contracts.py check --manifest rewrite/owner-contracts.json",
         "product-roster-and-linkage": "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json --check-product-roster-and-linkage",
         "strict-load-profile": "uv run python scripts/validate_load_profile.py tests/performance/profiles/backend_50.json",
-        "immutable-reference": "uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json",
+        "immutable-reference": "bash ../scripts/check-g001-reference.sh",
     },
     "G002": {
         "architecture": "uv run --extra dev pytest tests/architecture",
@@ -231,6 +231,7 @@ EXPECTED_REQUIRED_PATHS = {
         "backend/rewrite/product-contracts.json",
         "backend/rewrite/owner-dag.json",
         "backend/rewrite/legacy-black-box.json",
+        "scripts/check-g001-reference.sh",
         "backend/tests/performance/profiles/backend_50.json",
     ],
     "G002": [

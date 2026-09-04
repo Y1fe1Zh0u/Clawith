@@ -21,6 +21,7 @@ from app.infrastructure.config import ENV_FILE_PATH
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
 CI_GATE_SCRIPT = REPOSITORY_ROOT / "scripts/ci-g002-gates.sh"
+G001_REFERENCE_SCRIPT = REPOSITORY_ROOT / "scripts/check-g001-reference.sh"
 SHARED_CI_COMMAND = "bash scripts/ci-g002-gates.sh"
 SETUP = REPOSITORY_ROOT / "setup.sh"
 RESTART = REPOSITORY_ROOT / "restart.sh"
@@ -188,7 +189,7 @@ REQUIRED_CUMULATIVE_GATE_COMMANDS = (
     "uv run python scripts/check_owner_contracts.py check --manifest rewrite/owner-contracts.json",
     "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json --check-product-roster-and-linkage",
     "uv run python scripts/validate_load_profile.py tests/performance/profiles/backend_50.json",
-    'uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json --worktree "$reference_worktree" --python "$reference_python"',
+    "bash ../scripts/check-g001-reference.sh",
     "uv run --extra dev pytest tests/architecture",
     "uv run --extra dev pytest",
     "uv run --extra dev pytest --collect-only",
@@ -200,34 +201,60 @@ CUMULATIVE_CI_SCRIPT_PREAMBLE = (
     "set -euo pipefail",
     'repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
     'backend_root="$repository_root/backend"',
-    'ci_temp_root="$(mktemp -d)"',
-    'reference_worktree="$ci_temp_root/legacy-reference"',
+    'cd "$backend_root"',
+    "uv lock --check",
+    "uv sync --extra dev --frozen",
+)
+
+G001_REFERENCE_SCRIPT_LINES = (
+    "set -euo pipefail",
+    'repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"',
+    'backend_root="$repository_root/backend"',
+    'reference_temp_root="$(mktemp -d)"',
+    'reference_worktree="$reference_temp_root/legacy-reference"',
     "cleanup() {",
-    "status=$?",
+    "original_status=$?",
+    "worktree_remove_status=0",
+    "temp_remove_status=0",
+    "prune_status=0",
     "trap - EXIT INT TERM",
-    'git -C "$repository_root" worktree remove --force "$reference_worktree" >/dev/null 2>&1 || true',
-    'git -C "$repository_root" worktree prune',
-    'rm -rf "$ci_temp_root"',
-    'exit "$status"',
+    'git -C "$repository_root" worktree remove --force "$reference_worktree" >/dev/null 2>&1 || worktree_remove_status=$?',
+    'rm -rf "$reference_temp_root" || temp_remove_status=$?',
+    'if [ "$worktree_remove_status" -ne 0 ]; then',
+    'git -C "$repository_root" worktree prune || prune_status=$?',
+    'if [ "$prune_status" -ne 0 ]; then',
+    "prune_status=0",
+    'git -C "$repository_root" worktree prune || prune_status=$?',
+    "fi",
+    'if [ "$prune_status" -eq 0 ]; then',
+    "worktree_remove_status=0",
+    "fi",
+    "fi",
+    'if [ "$original_status" -ne 0 ]; then',
+    'exit "$original_status"',
+    "fi",
+    'if [ "$worktree_remove_status" -ne 0 ] || [ "$temp_remove_status" -ne 0 ] || [ "$prune_status" -ne 0 ]; then',
+    "exit 1",
+    "fi",
+    "exit 0",
     "}",
     "trap cleanup EXIT INT TERM",
     "git -C \"$repository_root\" cat-file -e '8ed4ae2f^{commit}'",
     'git -C "$repository_root" worktree add --detach "$reference_worktree" 8ed4ae2f',
     'uv sync --project "$reference_worktree/backend" --extra dev',
     'reference_python="$reference_worktree/backend/.venv/bin/python"',
-    'export CLAWITH_LEGACY_REFERENCE_AGENT_DATA_DIR="$ci_temp_root/persistence/legacy/agents"',
+    'export CLAWITH_LEGACY_REFERENCE_AGENT_DATA_DIR="$reference_temp_root/persistence/legacy/agents"',
     'export CLAWITH_LEGACY_REFERENCE_DATABASE_URL="postgresql+asyncpg://legacy:legacy@127.0.0.1:5432/clawith_legacy_reference"',
     'export CLAWITH_LEGACY_REFERENCE_REDIS_URL="redis://127.0.0.1:6379/14"',
     'export CLAWITH_LEGACY_REFERENCE_S3_PREFIX="clawith-legacy-reference/"',
-    'export CLAWITH_LEGACY_REFERENCE_STORAGE_LOCAL_ROOT="$ci_temp_root/persistence/legacy/storage"',
-    'export CLAWITH_TARGET_AGENT_DATA_DIR="$ci_temp_root/persistence/target/agents"',
+    'export CLAWITH_LEGACY_REFERENCE_STORAGE_LOCAL_ROOT="$reference_temp_root/persistence/legacy/storage"',
+    'export CLAWITH_TARGET_AGENT_DATA_DIR="$reference_temp_root/persistence/target/agents"',
     'export CLAWITH_TARGET_DATABASE_URL="postgresql+asyncpg://target:target@127.0.0.1:5432/clawith_target"',
     'export CLAWITH_TARGET_REDIS_URL="redis://127.0.0.1:6379/15"',
     'export CLAWITH_TARGET_S3_PREFIX="clawith-target/"',
-    'export CLAWITH_TARGET_STORAGE_LOCAL_ROOT="$ci_temp_root/persistence/target/storage"',
+    'export CLAWITH_TARGET_STORAGE_LOCAL_ROOT="$reference_temp_root/persistence/target/storage"',
     'cd "$backend_root"',
-    "uv lock --check",
-    "uv sync --extra dev --frozen",
+    'uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json --worktree "$reference_worktree" --python "$reference_python"',
 )
 
 
@@ -250,6 +277,19 @@ def _validate_cumulative_ci_script(source: str) -> None:
     expected = CUMULATIVE_CI_SCRIPT_PREAMBLE + REQUIRED_CUMULATIVE_GATE_COMMANDS
     if actual != expected:
         raise StartupContractError("CI gate script does not execute the exact cumulative gates in order")
+
+
+def _validate_g001_reference_script(source: str) -> None:
+    lines = source.splitlines()
+    if not lines or lines[0] != "#!/bin/bash":
+        raise StartupContractError("G001 reference script lacks the Bash entrypoint")
+    actual = tuple(
+        line.strip()
+        for line in lines
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    if actual != G001_REFERENCE_SCRIPT_LINES:
+        raise StartupContractError("G001 reference script is not the exact isolated check")
 
 
 def _yaml_continue_on_error(value: object) -> bool:
@@ -400,6 +440,7 @@ def _validate_ci_gate_sources(
     *,
     legacy_script_exists: bool,
     ci_script: str | None = None,
+    reference_script: str | None = None,
 ) -> None:
     try:
         drone_config = yaml.load(drone, Loader=yaml.BaseLoader)
@@ -409,8 +450,14 @@ def _validate_ci_gate_sources(
     except yaml.YAMLError as exc:
         raise StartupContractError("CI configuration is invalid YAML") from exc
     source = ci_script if ci_script is not None else CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    reference_source = (
+        reference_script
+        if reference_script is not None
+        else G001_REFERENCE_SCRIPT.read_text(encoding="utf-8")
+    )
     try:
         _validate_cumulative_ci_script(source)
+        _validate_g001_reference_script(reference_source)
     except StartupContractError as exc:
         raise StartupContractError("CI does not match the G002 gate-only contract") from exc
     drone_events = set(drone_config.get("trigger", {}).get("event", []))
@@ -1334,13 +1381,20 @@ def test_ci_workflow_rejects_continue_on_error() -> None:
 
 
 @pytest.mark.parametrize(
-    ("fail_gate", "expected_status"),
-    [(False, 0), (True, 19)],
-    ids=["success", "gate-failure"],
+    ("fail_gate", "fail_remove", "fail_first_prune", "expected_status"),
+    [
+        (False, False, False, 0),
+        (True, False, False, 19),
+        (False, True, False, 0),
+        (False, True, True, 0),
+    ],
+    ids=["success", "gate-failure", "remove-recovered", "prune-retried"],
 )
-def test_ci_gate_script_removes_temporary_worktree_on_exit(
+def test_g001_reference_script_removes_temporary_worktree_on_exit(
     tmp_path: Path,
     fail_gate: bool,
+    fail_remove: bool,
+    fail_first_prune: bool,
     expected_status: int,
 ) -> None:
     repository = tmp_path / "repository"
@@ -1350,10 +1404,14 @@ def test_ci_gate_script_removes_temporary_worktree_on_exit(
     scripts.mkdir(parents=True)
     backend.mkdir()
     fake_bin.mkdir()
-    script = scripts / "ci-g002-gates.sh"
-    script.write_text(CI_GATE_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    script = scripts / "check-g001-reference.sh"
+    script.write_text(
+        G001_REFERENCE_SCRIPT.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     script.chmod(0o755)
     temp_root = tmp_path / "ci-temp"
+    registry = tmp_path / "worktree-registry"
 
     _write_executable(
         fake_bin / "mktemp",
@@ -1368,13 +1426,21 @@ case "$*" in
     mkdir -p "$TEST_REFERENCE/backend/.venv/bin"
     printf '#!/bin/sh\nexit 0\n' > "$TEST_REFERENCE/backend/.venv/bin/python"
     chmod 755 "$TEST_REFERENCE/backend/.venv/bin/python"
+    printf registered > "$TEST_REGISTRY"
     ;;
-  *"worktree list"*)
-    if [ -d "$TEST_REFERENCE" ]; then
-      printf 'worktree %s\n' "$TEST_REFERENCE"
+  *"worktree remove"*)
+    if [ "${FAIL_REMOVE:-0}" = 1 ]; then
+      exit 31
     fi
+    /bin/rm -rf "$TEST_REFERENCE" "$TEST_REGISTRY"
     ;;
-  *"worktree remove"*) /bin/rm -rf "$TEST_REFERENCE" ;;
+  *"worktree prune"*)
+    if [ "${FAIL_FIRST_PRUNE:-0}" = 1 ] && [ ! -f "$TEST_PRUNE_MARKER" ]; then
+      printf attempted > "$TEST_PRUNE_MARKER"
+      exit 32
+    fi
+    /bin/rm -f "$TEST_REGISTRY"
+    ;;
 esac
 """,
     )
@@ -1391,8 +1457,12 @@ exit 0
     environment.update(
         {
             "FAIL_GATE": "1" if fail_gate else "0",
+            "FAIL_FIRST_PRUNE": "1" if fail_first_prune else "0",
+            "FAIL_REMOVE": "1" if fail_remove else "0",
             "PATH": f"{fake_bin}:{environment['PATH']}",
+            "TEST_PRUNE_MARKER": str(tmp_path / "prune-attempted"),
             "TEST_REFERENCE": str(temp_root / "legacy-reference"),
+            "TEST_REGISTRY": str(registry),
             "TEST_TEMP_ROOT": str(temp_root),
         }
     )
@@ -1408,6 +1478,7 @@ exit 0
 
     assert completed.returncode == expected_status, completed.stderr
     assert not temp_root.exists()
+    assert not registry.exists()
 
 
 def test_helm_quarantine_rejects_comment_spoof_and_unguarded_resource() -> None:

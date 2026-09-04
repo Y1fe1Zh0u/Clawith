@@ -24,6 +24,6 @@ All 401 rows remain `disposition_approved`. Their shared evidence is bound to th
 
 ## Verification
 
-`backend/rewrite/backend-capability-coverage-matrix.md` is Git-tracked with SHA-256 `ca5cbce4d01c8af731b93c3fab1ff1727fee96c854d3ac2e1ead63158e770a11`. The canonical coverage check reports `unreviewed=0`, `disposition_missing=0`, and `nonterminal=401`.
+`backend/rewrite/backend-capability-coverage-matrix.md` is Git-tracked, and the recursive authority gate validates its current recorded SHA-256 rather than relying on a duplicated prose literal. The canonical coverage check reports `unreviewed=0`, `disposition_missing=0`, and `nonterminal=401`.
 
 `backend/tests/architecture/test_rewrite_inventory.py` covers matching tracked authorities and rejects ignored, untracked, escaping, missing, malformed, and hash-drifted authorities. `backend/tests/architecture/test_rewrite_disposition_approval.py` verifies generator-side portability and decision-preserving evidence refresh. The focused inventory and disposition suite passes with 31 tests.

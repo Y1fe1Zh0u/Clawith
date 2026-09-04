@@ -53,6 +53,7 @@
         "backend/rewrite/product-contracts.json",
         "backend/rewrite/owner-dag.json",
         "backend/rewrite/legacy-black-box.json",
+        "scripts/check-g001-reference.sh",
         "backend/tests/performance/profiles/backend_50.json"
       ],
       "validations": [
@@ -83,7 +84,7 @@
         },
         {
           "id": "immutable-reference",
-          "command": "uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json",
+          "command": "bash ../scripts/check-g001-reference.sh",
           "artifacts": ["backend/artifacts/rewrite/G001/legacy-reference.json"]
         }
       ],
