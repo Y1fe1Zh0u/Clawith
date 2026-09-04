@@ -513,6 +513,66 @@ def test_reference_integrity_detects_head_content_and_dirty_changes(tmp_path: Pa
         rewrite_inventory._verify_reference(manifest, worktree, head, require_clean=False)
 
 
+def test_portable_reference_override_still_enforces_head_hash_and_cleanliness(
+    tmp_path: Path,
+) -> None:
+    worktree, head, content_hash = _init_reference(tmp_path)
+    configured = tmp_path / "configured-reference"
+    configured.mkdir()
+    manifest = {
+        "reference": {
+            "expected_head": head,
+            "tracked_content_hash": content_hash,
+            "worktree": str(configured),
+        },
+    }
+
+    with pytest.raises(rewrite_inventory.InventoryError, match="does not match"):
+        rewrite_inventory._resolve_reference_worktree(manifest, worktree)
+    resolved = rewrite_inventory._resolve_reference_worktree(
+        manifest,
+        worktree,
+        allow_portable_override=True,
+    )
+    assert resolved == worktree.resolve()
+
+    with pytest.raises(rewrite_inventory.InventoryError, match="HEAD mismatch"):
+        rewrite_inventory._verify_reference(
+            manifest,
+            resolved,
+            "definitely-not-the-head",
+            require_clean=True,
+        )
+    (worktree / "backend/app/main.py").write_text("app = None\n", encoding="utf-8")
+    with pytest.raises(rewrite_inventory.InventoryError, match="not clean"):
+        rewrite_inventory._verify_reference(manifest, resolved, head, require_clean=True)
+    with pytest.raises(rewrite_inventory.InventoryError, match="tracked content changed"):
+        rewrite_inventory._verify_reference(manifest, resolved, head, require_clean=False)
+
+
+def test_reference_python_override_must_be_an_executable_inside_worktree(
+    tmp_path: Path,
+) -> None:
+    worktree = tmp_path / "reference"
+    python = worktree / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.chmod(0o755)
+
+    assert rewrite_inventory._resolve_reference_python(worktree, python) == python
+
+    outside = tmp_path / "outside-python"
+    outside.write_text("#!/bin/sh\n", encoding="utf-8")
+    outside.chmod(0o755)
+    with pytest.raises(rewrite_inventory.InventoryError, match="inside"):
+        rewrite_inventory._resolve_reference_python(worktree, outside)
+    with pytest.raises(rewrite_inventory.InventoryError, match="executable file"):
+        rewrite_inventory._resolve_reference_python(
+            worktree,
+            worktree / ".venv/bin/missing",
+        )
+
+
 def test_bind_reference_records_the_clean_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = _fixture_source(tmp_path / "source")
     manifest_path = tmp_path / "rewrite/coverage.json"

@@ -8,6 +8,7 @@ import signal
 import stat
 import subprocess
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from app.infrastructure.config import ENV_FILE_PATH
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
+CI_GATE_SCRIPT = REPOSITORY_ROOT / "scripts/ci-g002-gates.sh"
+SHARED_CI_COMMAND = "bash scripts/ci-g002-gates.sh"
 SETUP = REPOSITORY_ROOT / "setup.sh"
 RESTART = REPOSITORY_ROOT / "restart.sh"
 BACKEND_ENV_EXAMPLE = BACKEND_ROOT / ".env.example"
@@ -167,57 +170,67 @@ def _yaml_executable_commands(source: str) -> list[str]:
     return commands
 
 
-def _exact_ci_gate_facts(commands: list[str]) -> set[str]:
-    expected = {
-        (
-            "uv",
-            "run",
-            "--extra",
-            "dev",
-            "pytest",
-            "tests/architecture",
-        ): "architecture-gate",
-        (
-            "uv",
-            "run",
-            "--extra",
-            "dev",
-            "pytest",
-            "--collect-only",
-        ): "collection-gate",
-        (
-            "uv",
-            "run",
-            "--extra",
-            "dev",
-            "ruff",
-            "check",
-            "app",
-            "tests",
-        ): "ruff-gate",
-        (
-            "uv",
-            "run",
-            "--extra",
-            "dev",
-            "pyright",
-            "app",
-        ): "pyright-gate",
-    }
-    facts: set[str] = set()
-    for command in commands:
-        for line in command.splitlines():
-            lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
-            lexer.commenters = "#"
-            lexer.whitespace_split = True
-            try:
-                tokens = tuple(lexer)
-            except ValueError:
-                continue
-            fact = expected.get(tokens)
-            if fact is not None:
-                facts.add(fact)
-    return facts
+REQUIRED_CUMULATIVE_GATE_COMMANDS = (
+    "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json",
+    "uv run python scripts/rewrite_inventory.py check --manifest rewrite/coverage.json --require-zero-unreviewed --require-zero-disposition-missing",
+    "uv run --extra dev pytest tests/architecture/test_governance.py tests/architecture/test_module_boundaries.py",
+    "uv run python scripts/check_owner_contracts.py check --manifest rewrite/owner-contracts.json",
+    "uv run python scripts/validate_goal_gates.py --manifest rewrite/goal-gates.json --check-product-roster-and-linkage",
+    "uv run python scripts/validate_load_profile.py tests/performance/profiles/backend_50.json",
+    'uv run python scripts/rewrite_inventory.py check-reference --manifest rewrite/coverage.json --expected-head 8ed4ae2f --require-clean --boot-smoke --black-box-manifest rewrite/legacy-black-box.json --worktree "$reference_worktree" --python "$reference_python"',
+    "uv run --extra dev pytest tests/architecture",
+    "uv run --extra dev pytest",
+    "uv run --extra dev pytest --collect-only",
+    "uv run --extra dev ruff check app tests",
+    "uv run --extra dev pyright app",
+)
+
+
+def _command_tokens(line: str) -> tuple[str, ...]:
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="|&;<>")
+    lexer.commenters = "#"
+    lexer.whitespace_split = True
+    return tuple(lexer)
+
+
+def _validate_cumulative_ci_script(source: str) -> None:
+    lines = source.splitlines()
+    if not lines or lines[0] != "#!/bin/bash" or "set -euo pipefail" not in lines:
+        raise StartupContractError("CI gate script lacks fail-closed Bash setup")
+    expected = tuple(_command_tokens(command) for command in REQUIRED_CUMULATIVE_GATE_COMMANDS)
+    actual: list[tuple[str, ...]] = []
+    gate_lines: list[int] = []
+    for line_number, line in enumerate(lines):
+        try:
+            tokens = _command_tokens(line)
+        except ValueError as exc:
+            raise StartupContractError("CI gate script contains invalid shell") from exc
+        if tokens[:2] == ("uv", "run"):
+            actual.append(tokens)
+            gate_lines.append(line_number)
+        if line == line.lstrip() and tokens[:1] == ("exit",):
+            raise StartupContractError("CI gate script can exit before cumulative gates finish")
+    if tuple(actual) != expected:
+        raise StartupContractError("CI gate script does not execute the exact cumulative gates in order")
+    first_gate, last_gate = gate_lines[0], gate_lines[-1]
+    for line in lines[first_gate : last_gate + 1]:
+        tokens = _command_tokens(line)
+        if not tokens:
+            continue
+        if tokens[0] in {"exit", "return", "break", "continue", "if", "case", "for", "while", "until"}:
+            raise StartupContractError("CI gate script can bypass a cumulative gate")
+
+
+def _yaml_continue_on_error(value: object) -> bool:
+    if isinstance(value, list):
+        return any(_yaml_continue_on_error(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    return any(
+        (str(key).casefold() == "continue-on-error" and str(nested).casefold() == "true")
+        or _yaml_continue_on_error(nested)
+        for key, nested in value.items()
+    )
 
 
 def _validate_setup_source(source: str) -> None:
@@ -355,13 +368,8 @@ def _validate_ci_gate_sources(
     github: str,
     *,
     legacy_script_exists: bool,
+    ci_script: str | None = None,
 ) -> None:
-    required_facts = {
-        "architecture-gate",
-        "collection-gate",
-        "pyright-gate",
-        "ruff-gate",
-    }
     try:
         drone_config = yaml.load(drone, Loader=yaml.BaseLoader)
         github_config = yaml.load(github, Loader=yaml.BaseLoader)
@@ -369,19 +377,27 @@ def _validate_ci_gate_sources(
         github_commands = _yaml_executable_commands(github)
     except yaml.YAMLError as exc:
         raise StartupContractError("CI configuration is invalid YAML") from exc
-    drone_facts = _shell_execution_facts("\n".join(drone_commands))
-    github_facts = _shell_execution_facts("\n".join(github_commands))
-    drone_gate_facts = _exact_ci_gate_facts(drone_commands)
-    github_gate_facts = _exact_ci_gate_facts(github_commands)
-    forbidden_facts = {"alembic", "checkpoint-installer", "docker", "legacy-ci"}
+    source = ci_script if ci_script is not None else CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    try:
+        _validate_cumulative_ci_script(source)
+    except StartupContractError as exc:
+        raise StartupContractError("CI does not match the G002 gate-only contract") from exc
     drone_events = set(drone_config.get("trigger", {}).get("event", []))
     github_triggers = github_config.get("on", {})
     github_push_branches = github_triggers.get("push", {}).get("branches", [])
+    github_steps = github_config.get("jobs", {}).get("backend-g002", {}).get("steps", [])
+    checkout = next(
+        (step for step in github_steps if step.get("uses") == "actions/checkout@v4"),
+        {},
+    )
     invalid = (
         legacy_script_exists
-        or not required_facts <= drone_gate_facts
-        or not required_facts <= github_gate_facts
-        or bool(forbidden_facts & (drone_facts | github_facts))
+        or drone_commands != [SHARED_CI_COMMAND]
+        or github_commands != [SHARED_CI_COMMAND]
+        or drone_config.get("clone", {}).get("depth") != "0"
+        or checkout.get("with", {}).get("fetch-depth") != "0"
+        or _yaml_continue_on_error(drone_config)
+        or _yaml_continue_on_error(github_config)
         or drone_events != {"pull_request", "push"}
         or set(github_triggers) != {"pull_request", "push", "workflow_dispatch"}
         or github_push_branches != ["develop"]
@@ -1129,7 +1145,8 @@ def test_ci_comments_cannot_supply_required_gate_or_trigger() -> None:
     github = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(
         encoding="utf-8"
     )
-    missing_gate = github.replace(
+    ci_script = CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    missing_gate = ci_script.replace(
         "uv run --extra dev pyright app",
         "echo pyright-disabled",
     )
@@ -1137,8 +1154,9 @@ def test_ci_comments_cannot_supply_required_gate_or_trigger() -> None:
     with pytest.raises(StartupContractError, match="gate-only"):
         _validate_ci_gate_sources(
             drone,
-            missing_gate,
+            github,
             legacy_script_exists=False,
+            ci_script=missing_gate,
         )
     missing_push = github.replace(
         "  push:\n    branches:\n      - develop\n",
@@ -1157,16 +1175,143 @@ def test_ci_short_circuit_or_echo_cannot_supply_required_gate() -> None:
     github = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(
         encoding="utf-8"
     )
-    spoofed = github.replace(
+    ci_script = CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    spoofed = ci_script.replace(
         "uv run --extra dev pyright app",
         "true || echo 'uv run --extra dev pyright app'",
     )
     with pytest.raises(StartupContractError, match="gate-only"):
         _validate_ci_gate_sources(
             drone,
-            spoofed,
+            github,
+            legacy_script_exists=False,
+            ci_script=spoofed,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda source: source.replace(
+            "uv run python scripts/validate_goal_gates.py",
+            "exit 0\nuv run python scripts/validate_goal_gates.py",
+            1,
+        ),
+        lambda source: source.replace(
+            "uv run --extra dev pytest tests/architecture\n",
+            "if false; then\nuv run --extra dev pytest tests/architecture\nfi\n",
+            1,
+        ),
+        lambda source: source.replace(
+            "uv run --extra dev pyright app",
+            "uv run --extra dev pyright app || true",
+        ),
+    ],
+    ids=["early-exit", "false-conditional", "ignored-failure"],
+)
+def test_ci_gate_script_rejects_unreachable_or_ignored_gates(
+    mutation: Callable[[str], str],
+) -> None:
+    source = CI_GATE_SCRIPT.read_text(encoding="utf-8")
+    poisoned = mutation(source)
+
+    with pytest.raises(StartupContractError):
+        _validate_cumulative_ci_script(poisoned)
+
+
+def test_ci_workflow_rejects_continue_on_error() -> None:
+    drone = (REPOSITORY_ROOT / ".github/drone.yml").read_text(encoding="utf-8")
+    github = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(
+        encoding="utf-8"
+    )
+    poisoned = github.replace(
+        "run: bash scripts/ci-g002-gates.sh",
+        "continue-on-error: true\n        run: bash scripts/ci-g002-gates.sh",
+    )
+
+    with pytest.raises(StartupContractError, match="gate-only"):
+        _validate_ci_gate_sources(
+            drone,
+            poisoned,
             legacy_script_exists=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("fail_gate", "expected_status"),
+    [(False, 0), (True, 19)],
+    ids=["success", "gate-failure"],
+)
+def test_ci_gate_script_removes_temporary_worktree_on_exit(
+    tmp_path: Path,
+    fail_gate: bool,
+    expected_status: int,
+) -> None:
+    repository = tmp_path / "repository"
+    scripts = repository / "scripts"
+    backend = repository / "backend"
+    fake_bin = tmp_path / "bin"
+    scripts.mkdir(parents=True)
+    backend.mkdir()
+    fake_bin.mkdir()
+    script = scripts / "ci-g002-gates.sh"
+    script.write_text(CI_GATE_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    temp_root = tmp_path / "ci-temp"
+
+    _write_executable(
+        fake_bin / "mktemp",
+        '#!/bin/sh\nmkdir -p "$TEST_TEMP_ROOT"\nprintf "%s\\n" "$TEST_TEMP_ROOT"\n',
+    )
+    _write_executable(
+        fake_bin / "git",
+        """#!/bin/sh
+case "$*" in
+  *"cat-file -e"*) exit 0 ;;
+  *"worktree add"*)
+    mkdir -p "$TEST_REFERENCE/backend/.venv/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$TEST_REFERENCE/backend/.venv/bin/python"
+    chmod 755 "$TEST_REFERENCE/backend/.venv/bin/python"
+    ;;
+  *"worktree list"*)
+    if [ -d "$TEST_REFERENCE" ]; then
+      printf 'worktree %s\n' "$TEST_REFERENCE"
+    fi
+    ;;
+  *"worktree remove"*) /bin/rm -rf "$TEST_REFERENCE" ;;
+esac
+""",
+    )
+    _write_executable(
+        fake_bin / "uv",
+        """#!/bin/sh
+if [ "${1:-}" = run ] && [ "${FAIL_GATE:-0}" = 1 ]; then
+  exit 19
+fi
+exit 0
+""",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "FAIL_GATE": "1" if fail_gate else "0",
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "TEST_REFERENCE": str(temp_root / "legacy-reference"),
+            "TEST_TEMP_ROOT": str(temp_root),
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(script)],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == expected_status, completed.stderr
+    assert not temp_root.exists()
 
 
 def test_helm_quarantine_rejects_comment_spoof_and_unguarded_resource() -> None:

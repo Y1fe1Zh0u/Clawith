@@ -769,9 +769,19 @@ def _tracked_content_hash(worktree: Path) -> str:
     return digest.hexdigest()
 
 
-def _resolve_reference_worktree(manifest: dict[str, Any], override: Path | None) -> Path:
+def _resolve_reference_worktree(
+    manifest: dict[str, Any],
+    override: Path | None,
+    *,
+    allow_portable_override: bool = False,
+) -> Path:
     configured = manifest.get("reference", {}).get("worktree")
-    if override is not None and configured and override.resolve() != Path(configured).resolve():
+    if (
+        override is not None
+        and configured
+        and override.resolve() != Path(configured).resolve()
+        and not allow_portable_override
+    ):
         raise InventoryError("reference worktree override does not match the manifest")
     raw = override or configured
     if not raw:
@@ -780,6 +790,19 @@ def _resolve_reference_worktree(manifest: dict[str, Any], override: Path | None)
     if not worktree.is_dir():
         raise InventoryError(f"reference worktree does not exist: {worktree}")
     return worktree
+
+
+def _resolve_reference_python(worktree: Path, override: Path | None) -> Path:
+    reference_python = override.resolve() if override else Path(sys.executable)
+    if override is None:
+        return reference_python
+    try:
+        reference_python.relative_to(worktree)
+    except ValueError as exc:
+        raise InventoryError("reference Python override must be inside the reference worktree") from exc
+    if not reference_python.is_file() or not os.access(reference_python, os.X_OK):
+        raise InventoryError("reference Python override is not an executable file")
+    return reference_python
 
 
 def _verify_reference(
@@ -882,10 +905,16 @@ def check_reference(
     boot_smoke: bool,
     black_box_manifest_path: Path,
     worktree_override: Path | None = None,
+    python_override: Path | None = None,
 ) -> None:
     manifest, _ = _load_validated(manifest_path)
-    worktree = _resolve_reference_worktree(manifest, worktree_override)
+    worktree = _resolve_reference_worktree(
+        manifest,
+        worktree_override,
+        allow_portable_override=True,
+    )
     _verify_reference(manifest, worktree, expected_head, require_clean=require_clean)
+    reference_python = _resolve_reference_python(worktree, python_override)
     black_box = _load_json(black_box_manifest_path)
     if black_box.get("schema_version") != SCHEMA_VERSION:
         raise InventoryError(f"unsupported black-box schema: {black_box.get('schema_version')}")
@@ -894,7 +923,7 @@ def check_reference(
     if boot_smoke:
         _run_fixture(
             backend,
-            [sys.executable, "-c", "from app.main import app; assert app is not None"],
+            [str(reference_python), "-c", "from app.main import app; assert app is not None"],
             environment,
             "boot-smoke",
         )
@@ -910,7 +939,7 @@ def check_reference(
             isinstance(part, str) for part in argv
         ):
             raise InventoryError("black-box fixture requires string id and argv")
-        command = [sys.executable if part == "{python}" else part for part in argv]
+        command = [str(reference_python) if part == "{python}" else part for part in argv]
         cwd = worktree / fixture.get("cwd", "backend")
         _run_fixture(cwd, command, environment, fixture_id)
 
@@ -988,6 +1017,7 @@ def _parser() -> argparse.ArgumentParser:
     reference.add_argument("--boot-smoke", action="store_true")
     reference.add_argument("--black-box-manifest", type=Path, required=True)
     reference.add_argument("--worktree", type=Path)
+    reference.add_argument("--python", type=Path)
 
     bind = subparsers.add_parser("bind-reference")
     bind.add_argument("--manifest", type=Path, required=True)
@@ -1030,6 +1060,7 @@ def main(argv: list[str] | None = None) -> int:
                 boot_smoke=args.boot_smoke,
                 black_box_manifest_path=args.black_box_manifest,
                 worktree_override=args.worktree,
+                python_override=args.python,
             )
             print("reference=valid")
         elif args.command == "bind-reference":

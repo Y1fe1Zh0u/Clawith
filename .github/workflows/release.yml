@@ -16,19 +16,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
-      - name: Install Backend dependencies
-        run: cd backend && uv sync --extra dev
-      - name: Validate health-only startup scripts
-        run: bash -n setup.sh restart.sh
-      - name: Run Backend gates
-        run: |
-          cd backend
-          uv run --extra dev pytest tests/architecture
-          uv run --extra dev pytest
-          uv run --extra dev pytest --collect-only
-          uv run --extra dev ruff check app tests
-          uv run --extra dev pyright app
+      - name: Run cumulative Backend gates
+        run: bash scripts/ci-g002-gates.sh

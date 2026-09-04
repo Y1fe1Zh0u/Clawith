@@ -2,18 +2,14 @@ kind: pipeline
 type: docker
 name: g002-backend-gates
 
+clone:
+  depth: 0
+
 steps:
   - name: backend-g002
     image: ghcr.io/astral-sh/uv:python3.13-bookworm
     commands:
-      - cd backend
-      - uv sync --extra dev
-      - bash -n ../setup.sh ../restart.sh
-      - uv run --extra dev pytest tests/architecture
-      - uv run --extra dev pytest
-      - uv run --extra dev pytest --collect-only
-      - uv run --extra dev ruff check app tests
-      - uv run --extra dev pyright app
+      - bash scripts/ci-g002-gates.sh
 
 trigger:
   event:
