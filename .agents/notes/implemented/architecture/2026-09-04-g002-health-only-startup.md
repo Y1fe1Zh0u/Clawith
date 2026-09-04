@@ -8,7 +8,7 @@ The target Settings owner reads `backend/.env`, but repository setup and restart
 
 ## Decision
 
-`backend/.env.example` is the sole local Backend template. `setup.sh` synchronizes only supported target keys into `backend/.env`, forces its complete async PostgreSQL URL to `clawith_target`, prepares the `clawith` role and `clawith_target` database, and installs Backend dependencies. It does not read or create a root `.env`, mutate schemas, run Alembic, install checkpoints, seed, repair, or start services.
+`backend/.env.example` is the sole local Backend template. `setup.sh` synchronizes only supported target keys into `backend/.env`, forces its complete async PostgreSQL URL to `clawith_target`, prepares the `clawith` role and `clawith_target` database, and installs Backend dependencies. The Settings owner independently requires the parsed database name to equal `clawith_target` for direct values, OS environment values, and dotenv values before application or Alembic consumers can create an engine. Rejection diagnostics identify only the required namespace and never render the URL or password. Setup does not read or create a root `.env`, mutate schemas, run Alembic, install checkpoints, seed, repair, or start services.
 
 `restart.sh` requires `backend/.env`, manages only its recorded Backend PID, starts one `uvicorn app.main:app --workers 1` process, and succeeds only after `/api/health` responds. It does not auto-select Docker, start the Frontend or product workers, inject legacy Runtime variables, or execute migrations. The public README describes this health-only state and treats Docker, CI/CD, deploy, and Helm as deferred paths rather than supported product startup.
 

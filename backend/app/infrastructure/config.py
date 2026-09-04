@@ -11,6 +11,7 @@ from sqlalchemy.exc import ArgumentError
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 VERSION_PATH = BACKEND_ROOT / "VERSION"
 ENV_FILE_PATH = BACKEND_ROOT / ".env"
+TARGET_DATABASE_NAME = "clawith_target"
 
 
 def reveal_database_url(value: SecretStr) -> URL:
@@ -67,6 +68,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DATABASE_URL must use postgresql+asyncpg and include username, password, "
                 f"host, port, and database{detail}"
+            )
+        if url.database != TARGET_DATABASE_NAME:
+            raise ValueError(
+                f"DATABASE_URL database must be exactly {TARGET_DATABASE_NAME}"
             )
         return value
 

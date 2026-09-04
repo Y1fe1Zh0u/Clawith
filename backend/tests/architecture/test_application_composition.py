@@ -15,7 +15,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app import application
 from app.infrastructure import config, database
-from app.infrastructure.config import Settings, reveal_database_url
+from app.infrastructure.config import TARGET_DATABASE_NAME, Settings, reveal_database_url
 from app.infrastructure.database import Base, DatabaseResources
 from app.main import app as asgi_app
 
@@ -134,6 +134,58 @@ def test_create_app_owns_database_resources_for_its_complete_lifespan(
 def test_target_configuration_rejects_incomplete_database_urls(database_url: str) -> None:
     with pytest.raises(ValidationError):
         _settings(DATABASE_URL=database_url)
+
+
+@pytest.mark.parametrize("database_name", ["clawith", "postgres", "clawith_shadow"])
+def test_target_configuration_rejects_non_target_database_names(
+    database_name: str,
+) -> None:
+    password = "database-name-secret"
+    database_url = (
+        f"postgresql+asyncpg://clawith:{password}@localhost:5432/{database_name}"
+    )
+
+    with pytest.raises(ValidationError, match=TARGET_DATABASE_NAME) as captured:
+        _settings(DATABASE_URL=database_url)
+
+    diagnostic = f"{captured.value!s}\n{captured.value!r}"
+    assert password not in diagnostic
+    assert database_url not in diagnostic
+
+
+def test_os_environment_database_name_is_validated_before_app_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password = "os-environment-secret"
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql+asyncpg://clawith:{password}@localhost:5432/clawith",
+    )
+    config.get_settings.cache_clear()
+    try:
+        with pytest.raises(ValidationError, match=TARGET_DATABASE_NAME) as captured:
+            application.create_app()
+    finally:
+        config.get_settings.cache_clear()
+
+    assert password not in str(captured.value)
+
+
+def test_dotenv_database_name_is_validated_without_secret_disclosure(
+    tmp_path: Path,
+) -> None:
+    password = "dotenv-database-secret"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DATABASE_URL="
+        f"postgresql+asyncpg://clawith:{password}@localhost:5432/clawith\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match=TARGET_DATABASE_NAME) as captured:
+        settings_factory(_env_file=env_file, APP_VERSION="test-version")
+
+    assert password not in str(captured.value)
 
 
 @pytest.mark.parametrize(

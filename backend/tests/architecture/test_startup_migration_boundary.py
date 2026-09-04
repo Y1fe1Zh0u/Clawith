@@ -461,6 +461,29 @@ def test_alembic_connection_failure_never_exposes_database_password() -> None:
     assert password not in diagnostic
 
 
+def test_alembic_rejects_non_target_database_before_connection() -> None:
+    password = "alembic-namespace-secret"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = (
+        f"postgresql+asyncpg://clawith:{password}@127.0.0.1:1/clawith"
+    )
+
+    completed = subprocess.run(
+        ["uv", "run", "alembic", "current"],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    diagnostic = f"{completed.stdout}\n{completed.stderr}"
+    assert completed.returncode != 0
+    assert "database must be exactly clawith_target" in diagnostic
+    assert "Alembic connection setup failed" not in diagnostic
+    assert password not in diagnostic
+
+
 @pytest.mark.parametrize(
     "bypass",
     [
