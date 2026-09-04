@@ -3828,7 +3828,10 @@ def _legacy_bootstrap_executable_facts(source: str) -> set[str]:
         for token in tokens:
             assignment = _SHELL_ASSIGNMENT.match(token)
             if assignment:
-                assignments[assignment.group(1)] = assignment.group(2)
+                assignments[assignment.group(1)] = _expand_shell_assignments(
+                    assignment.group(2),
+                    assignments,
+                )
 
         expanded_line = _expand_shell_assignments(line, assignments)
         expanded_tokens = _shell_tokens(expanded_line)
