@@ -18,11 +18,13 @@ Run Backend commands from `backend/`:
 | Run the complete Backend test suite | `uv run --extra dev pytest` |
 | Run lint checks | `uv run --extra dev ruff check .` |
 | Run static type checks | `uv run --extra dev pyright app` |
-| Apply database migrations | `uv run alembic upgrade head` |
+| Inspect frozen migration topology | `uv run alembic heads` |
 
 Use focused Pytest targets during development. Use the repository testing policy as the authority for when the complete Backend suite is required.
 
 Read [`alembic/AGENTS.md`](alembic/AGENTS.md) before creating or editing a database migration.
+
+G002 has no target schema baseline. Alembic execution commands, including current, upgrade, downgrade, stamp, and offline SQL generation, are unavailable until G008. Only structural `heads` and `history` inspection is supported; startup and CI never apply revisions.
 
 ## Application layout
 

@@ -180,16 +180,18 @@ def _validate_branch_decision(governance: str) -> None:
         raise GovernanceViolation("clean-break branch decision must name develop directly")
 
 
-def _validate_baseline_policy(alembic_governance: str) -> None:
+def _validate_g002_alembic_policy(alembic_governance: str) -> None:
     clauses = (
-        "The target schema has one initial-baseline exception.",
-        "After the target baseline is committed, it is immutable migration history.",
-        "Every schema change is a forward migration from the current single head.",
-        "The migration graph MUST always have **exactly one head**",
+        "G002 has no target schema baseline",
+        "Only read-only structural inspection is supported",
+        "`uv run alembic heads`",
+        "`uv run alembic history`",
+        "All other Alembic CLI and programmatic execution fail before database connection or mutation",
+        "G008 owns the reviewed one-time target baseline replacement",
     )
     missing = [clause for clause in clauses if clause not in alembic_governance]
     if missing:
-        raise GovernanceViolation(f"missing baseline policy clause: {missing[0]}")
+        raise GovernanceViolation(f"missing G002 Alembic policy clause: {missing[0]}")
 
 
 def _revision(source: str) -> tuple[str, str | None]:
@@ -257,8 +259,9 @@ def test_owner_dag_matches_the_exact_backend_schema_waves() -> None:
     _validate_owner_dag(dag, _wave_table(_text(BACKEND_RULES)))
 
 
-def test_alembic_and_backend_define_the_same_exact_schema_waves() -> None:
-    assert _wave_table(_text(ALEMBIC_RULES)) == _wave_table(_text(BACKEND_RULES)) == EXPECTED_WAVES
+def test_backend_defines_schema_waves_while_frozen_alembic_rules_do_not() -> None:
+    assert _wave_table(_text(BACKEND_RULES)) == EXPECTED_WAVES
+    assert _wave_table(_text(ALEMBIC_RULES)) == {}
 
 
 def test_owner_dag_rejects_a_schema_wave_drift_fixture() -> None:
@@ -335,18 +338,18 @@ def test_clean_break_governance_rejects_an_indirect_branch_fixture() -> None:
         _validate_branch_decision(governance)
 
 
-def test_alembic_governance_defines_one_baseline_then_forward_only_single_head() -> None:
-    _validate_baseline_policy(_text(ALEMBIC_RULES))
+def test_alembic_governance_quarantines_execution_until_g008() -> None:
+    _validate_g002_alembic_policy(_text(ALEMBIC_RULES))
 
 
-def test_baseline_policy_rejects_mutable_baseline_governance_fixture() -> None:
+def test_alembic_policy_rejects_an_executable_g002_fixture() -> None:
     governance = _text(ALEMBIC_RULES).replace(
-        "After the target baseline is committed, it is immutable migration history.",
-        "The target baseline may be regenerated after release.",
+        "All other Alembic CLI and programmatic execution fail before database connection or mutation",
+        "Upgrade commands may connect to the legacy database",
     )
 
-    with pytest.raises(GovernanceViolation, match="missing baseline policy clause"):
-        _validate_baseline_policy(governance)
+    with pytest.raises(GovernanceViolation, match="missing G002 Alembic policy clause"):
+        _validate_g002_alembic_policy(governance)
 
 
 def test_forward_migration_fixture_has_one_baseline_and_one_head() -> None:

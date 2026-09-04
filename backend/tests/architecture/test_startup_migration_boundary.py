@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 import ast
-import importlib.util
 import os
 import subprocess
-from contextlib import nullcontext
 from pathlib import Path
-from types import ModuleType
-from typing import Protocol, cast
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-
-from alembic import context as alembic_context
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = BACKEND_ROOT / "entrypoint.sh"
@@ -33,106 +26,6 @@ ALLOWED_ENTRYPOINT_STRUCTURES = {DIRECT_STARTUP, PRIVILEGE_DROP_STARTUP}
 
 class BoundaryViolation(ValueError):
     """A target startup or migration boundary admits legacy authority."""
-
-
-class AlembicEnvRuntime(Protocol):
-    async def run_async_migrations(self) -> None: ...
-
-
-class SanitizedAlembicFailure(Protocol):
-    stage: str
-    category: str
-    exception_class: str
-    sqlstate: str | None
-    revision: str | None
-    cleanup: SanitizedAlembicFailure | None
-
-
-class FakeAlembicConfig:
-    config_file_name: str | None = None
-
-    def __init__(self) -> None:
-        self.options: dict[str, str] = {}
-
-    def set_main_option(self, name: str, value: str) -> None:
-        self.options[name] = value
-
-    def get_main_option(self, name: str) -> str:
-        return self.options[name]
-
-
-class FakeMigrationContext:
-    def get_current_revision(self) -> None:
-        return None
-
-
-class FakeAsyncConnection:
-    def __init__(self, migration_error: Exception | None = None) -> None:
-        self.migration_error = migration_error
-        self.close_calls = 0
-
-    async def run_sync(self, _operation: object) -> None:
-        if self.migration_error is not None:
-            raise self.migration_error
-
-    async def close(self) -> None:
-        self.close_calls += 1
-
-
-class FakeAsyncEngine:
-    def __init__(
-        self,
-        *,
-        connection: FakeAsyncConnection | None = None,
-        connection_error: Exception | None = None,
-        disposal_error: Exception | None = None,
-    ) -> None:
-        self.connection = connection
-        self.connection_error = connection_error
-        self.disposal_error = disposal_error
-        self.dispose_calls = 0
-
-    async def connect(self) -> AsyncConnection:
-        if self.connection_error is not None:
-            raise self.connection_error
-        assert self.connection is not None
-        return cast(AsyncConnection, self.connection)
-
-    async def dispose(self) -> None:
-        self.dispose_calls += 1
-        if self.disposal_error is not None:
-            raise self.disposal_error
-
-
-class ConnectionFailure(ConnectionRefusedError):
-    sqlstate = "08001"
-
-
-class DatabaseFailure(RuntimeError):
-    sqlstate = "23505"
-    revision = "f064_previous_revision"
-
-
-class CleanupFailure(RuntimeError):
-    pass
-
-
-def _load_alembic_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[ModuleType, AlembicEnvRuntime]:
-    fake_config = FakeAlembicConfig()
-    monkeypatch.setattr(alembic_context, "config", fake_config, raising=False)
-    monkeypatch.setattr(alembic_context, "is_offline_mode", lambda: True)
-    monkeypatch.setattr(alembic_context, "configure", lambda **_kwargs: None)
-    monkeypatch.setattr(alembic_context, "get_context", FakeMigrationContext)
-    monkeypatch.setattr(alembic_context, "begin_transaction", nullcontext)
-    monkeypatch.setattr(alembic_context, "run_migrations", lambda: None)
-
-    spec = importlib.util.spec_from_file_location("_test_alembic_env", ALEMBIC_ENV)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module, cast(AlembicEnvRuntime, module)
 
 
 def _validate_entrypoint(source: str) -> None:
@@ -338,91 +231,6 @@ def test_alembic_environment_imports_only_target_infrastructure() -> None:
     _validate_alembic_imports(ALEMBIC_ENV.read_text(encoding="utf-8"))
 
 
-@pytest.mark.asyncio
-async def test_alembic_preserves_primary_failure_when_disposal_also_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    password = "primary-and-cleanup-secret"
-    engine = FakeAsyncEngine(
-        connection_error=ConnectionFailure(f"connection leaked {password}"),
-        disposal_error=CleanupFailure(f"cleanup leaked {password}"),
-    )
-    module, runtime = _load_alembic_env(monkeypatch)
-
-    def create_engine(_url: object, *, poolclass: object) -> AsyncEngine:
-        del poolclass
-        return cast(AsyncEngine, engine)
-
-    monkeypatch.setattr(module, "create_async_engine", create_engine)
-
-    with pytest.raises(RuntimeError) as captured:
-        await runtime.run_async_migrations()
-
-    failure = cast(SanitizedAlembicFailure, captured.value)
-    assert failure.stage == "connection setup"
-    assert failure.category == "network"
-    assert failure.exception_class == "ConnectionFailure"
-    assert failure.sqlstate == "08001"
-    assert failure.cleanup is not None
-    assert failure.cleanup.stage == "disposal cleanup"
-    assert failure.cleanup.exception_class == "CleanupFailure"
-    assert password not in str(captured.value)
-    assert captured.value.__cause__ is None
-    assert engine.dispose_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_alembic_migration_failure_retains_safe_sqlstate_and_revision(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    password = "migration-provider-secret"
-    connection = FakeAsyncConnection(
-        migration_error=DatabaseFailure(f"raw SQL and provider payload {password}"),
-    )
-    engine = FakeAsyncEngine(connection=connection)
-    module, runtime = _load_alembic_env(monkeypatch)
-
-    def create_engine(_url: object, *, poolclass: object) -> AsyncEngine:
-        del poolclass
-        return cast(AsyncEngine, engine)
-
-    monkeypatch.setattr(module, "create_async_engine", create_engine)
-
-    with pytest.raises(RuntimeError) as captured:
-        await runtime.run_async_migrations()
-
-    failure = cast(SanitizedAlembicFailure, captured.value)
-    assert failure.stage == "migration execution"
-    assert failure.category == "database"
-    assert failure.exception_class == "DatabaseFailure"
-    assert failure.sqlstate == "23505"
-    assert failure.revision == "f064_previous_revision"
-    assert failure.cleanup is None
-    assert password not in str(captured.value)
-    assert connection.close_calls == 1
-    assert engine.dispose_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_alembic_success_closes_connection_and_disposes_engine(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connection = FakeAsyncConnection()
-    engine = FakeAsyncEngine(connection=connection)
-    module, runtime = _load_alembic_env(monkeypatch)
-
-    def create_engine(_url: object, *, poolclass: object) -> AsyncEngine:
-        del poolclass
-        return cast(AsyncEngine, engine)
-
-    monkeypatch.setattr(module, "create_async_engine", create_engine)
-
-    await runtime.run_async_migrations()
-
-    assert connection.close_calls == 1
-    assert engine.dispose_calls == 1
-
-
 @pytest.mark.parametrize(
     "target_imports",
     [
@@ -437,15 +245,32 @@ def test_alembic_boundary_accepts_exact_target_imports(target_imports: str) -> N
     _validate_alembic_imports(f"{target_imports}\ntarget_metadata = Base.metadata\n")
 
 
-def test_alembic_connection_failure_never_exposes_database_password() -> None:
-    password = "alembic-failure-secret"
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["current"],
+        ["upgrade", "head"],
+        ["downgrade", "-1"],
+        ["upgrade", "head", "--sql"],
+        ["stamp", "head"],
+    ],
+)
+@pytest.mark.parametrize(
+    "invocation",
+    [["uv", "run", "alembic"], ["uv", "run", "python", "-m", "alembic"]],
+)
+def test_alembic_execution_is_quarantined_before_connection(
+    arguments: list[str],
+    invocation: list[str],
+) -> None:
+    password = "alembic-quarantine-secret"
     environment = os.environ.copy()
     environment["DATABASE_URL"] = (
         f"postgresql+asyncpg://clawith:{password}@127.0.0.1:1/clawith_target"
     )
 
     completed = subprocess.run(
-        ["uv", "run", "alembic", "current"],
+        [*invocation, *arguments],
         cwd=BACKEND_ROOT,
         env=environment,
         capture_output=True,
@@ -455,10 +280,59 @@ def test_alembic_connection_failure_never_exposes_database_password() -> None:
 
     diagnostic = f"{completed.stdout}\n{completed.stderr}"
     assert completed.returncode != 0
-    assert "Alembic connection setup failed" in diagnostic
-    assert "category=network" in diagnostic
-    assert "exception=ConnectionRefusedError" in diagnostic
+    assert "unavailable until the reviewed G008 target baseline" in diagnostic
+    assert "Alembic connection setup failed" not in diagnostic
     assert password not in diagnostic
+
+
+def test_programmatic_alembic_upgrade_is_quarantined_before_connection() -> None:
+    password = "programmatic-alembic-secret"
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = (
+        f"postgresql+asyncpg://clawith:{password}@127.0.0.1:1/clawith_target"
+    )
+    program = """
+from alembic import command
+from alembic.config import Config
+
+command.upgrade(Config("alembic.ini"), "head")
+"""
+
+    completed = subprocess.run(
+        ["uv", "run", "python", "-c", program],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    diagnostic = f"{completed.stdout}\n{completed.stderr}"
+    assert completed.returncode != 0
+    assert "unavailable until the reviewed G008 target baseline" in diagnostic
+    assert "Alembic connection setup failed" not in diagnostic
+    assert password not in diagnostic
+
+
+@pytest.mark.parametrize("command", ["heads", "history"])
+@pytest.mark.parametrize(
+    "invocation",
+    [["uv", "run", "alembic"], ["uv", "run", "python", "-m", "alembic"]],
+)
+def test_alembic_structural_inspection_remains_available(
+    command: str,
+    invocation: list[str],
+) -> None:
+    completed = subprocess.run(
+        [*invocation, command],
+        cwd=BACKEND_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "G008 target baseline" not in completed.stderr
 
 
 def test_alembic_rejects_non_target_database_before_connection() -> None:
