@@ -4,6 +4,7 @@ node_modules/
 dist/
 *.zip
 uv.lock
+!backend/uv.lock
 .vite/
 *.log
 pnpm-lock.yaml
@@ -34,7 +35,40 @@ ss-nodes.json
 _agent/
 _agents/
 
+# Commit the repository-owned Agent Note system and selected Clawith workflows.
+!.agents/
+.agents/*
+!.agents/notes/
+!.agents/notes/**
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/clawith-pre-push-checks/
+!.agents/skills/clawith-pre-push-checks/**
+!.agents/skills/clawith-code-review/
+!.agents/skills/clawith-code-review/**
+!.agents/skills/clawith-find-simplifications/
+!.agents/skills/clawith-find-simplifications/**
+!.agents/skills/clawith-prose-standard/
+!.agents/skills/clawith-prose-standard/**
+!.agents/skills/clawith-trim-cot-leakage/
+!.agents/skills/clawith-trim-cot-leakage/**
+
 # Internal docs
-docs/
+/RELEASE_NOTES.md
+/.coaligneignore
 .agents/rules/deploy.md
 backend/tests/test_agent_api_live.py
+.omx/
+.coaligne/
+.clawith-local-designs/
+
+# Local generated and temporary artifacts
+/.tmp/
+/tmp/
+/outputs/
+/docs/internal/
+
+# Local Toolathlon benchmark harness (never commit or deploy)
+backend/app/scripts/toolathlon_benchmark.py
+backend/app/services/agent_runtime/benchmark/
+backend/tests/test_agent_runtime_benchmark.py

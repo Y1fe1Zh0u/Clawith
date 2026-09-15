@@ -4,16 +4,21 @@ Supports two transport modes:
 1. Streamable HTTP (modern) — single URL, POST JSON-RPC, response as JSON or SSE
 2. SSE Transport (legacy but widely used) — GET /sse for event stream, POST /messages for requests
 
-Transport is auto-detected: tries Streamable HTTP first, falls back to SSE.
+Transport is auto-detected with read-only MCP requests before a business
+``tools/call`` is dispatched.  A business request is never replayed merely
+because its response was lost on one transport.
 Reference: https://modelcontextprotocol.io/docs
 """
 
-import httpx
 import json
-import asyncio
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+import httpx
 from loguru import logger
+
+
+class MCPTransportDetectionError(RuntimeError):
+    """Neither transport accepted a read-only MCP probe."""
 
 
 class MCPClient:
@@ -78,7 +83,9 @@ class MCPClient:
                     except json.JSONDecodeError:
                         pass
         if last_data is None:
-            raise Exception("No valid JSON found in SSE response")
+            raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                "No valid JSON found in SSE response"
+            )
         return last_data
 
     # ── Streamable HTTP Transport ────────────────────────────────
@@ -108,8 +115,8 @@ class MCPClient:
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=self._headers(),
             )
-        except Exception:
-            pass  # initialization failure is non-fatal — server may be stateless
+        except Exception:  # noqa: BLE001, S110 -- initialization is optional for stateless servers
+            pass
 
     async def _streamable_request(self, method: str, params: dict | None = None) -> dict:
         """Send a JSON-RPC request via Streamable HTTP transport."""
@@ -121,7 +128,7 @@ class MCPClient:
 
             resp = await client.post(self.server_url, json=body, headers=self._headers())
             if resp.status_code not in (200, 201):
-                raise Exception(f"HTTP {resp.status_code}")
+                resp.raise_for_status()
             return self._parse_response(resp)
 
     # ── SSE Transport ────────────────────────────────────────────
@@ -142,11 +149,14 @@ class MCPClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         messages_url = None
+        event_type = ""
 
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:  # noqa: SIM117
             async with client.stream("GET", sse_url, headers=headers) as resp:
                 if resp.status_code != 200:
-                    raise Exception(f"SSE connect failed: HTTP {resp.status_code}")
+                    raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                        f"SSE connect failed: HTTP {resp.status_code}"
+                    )
 
                 # Read SSE events until we get the endpoint event
                 async for line in resp.aiter_lines():
@@ -167,7 +177,9 @@ class MCPClient:
                         pass
 
         if not messages_url:
-            raise Exception("SSE endpoint did not return a messages URL")
+            raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                "SSE endpoint did not return a messages URL"
+            )
 
         return messages_url
 
@@ -192,11 +204,13 @@ class MCPClient:
 
         timeout = 60 if method == "tools/call" else 30
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:  # noqa: SIM117
             # Open the SSE stream
             async with client.stream("GET", sse_url, headers=headers_sse) as sse_resp:
                 if sse_resp.status_code != 200:
-                    raise Exception(f"SSE connect failed: HTTP {sse_resp.status_code}")
+                    raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                        f"SSE connect failed: HTTP {sse_resp.status_code}"
+                    )
 
                 messages_url = None
                 event_type = ""
@@ -217,7 +231,9 @@ class MCPClient:
                             break
 
                 if not messages_url:
-                    raise Exception("SSE endpoint did not return a messages URL")
+                    raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                        "SSE endpoint did not return a messages URL"
+                    )
 
                 # Phase 2: MCP handshake — initialize + initialized notification
                 init_body = {
@@ -238,6 +254,9 @@ class MCPClient:
 
                 # Send the actual request
                 post_resp = await client.post(messages_url, json=body, headers=headers_post)
+
+                if post_resp.status_code >= 400:
+                    post_resp.raise_for_status()
 
                 # Phase 3: Read the response — either from POST response or from SSE stream
                 if post_resp.status_code == 200:
@@ -265,45 +284,71 @@ class MCPClient:
                                 pass
 
                 if result is None:
-                    raise Exception("No response received from SSE transport")
+                    raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                        "No response received from SSE transport"
+                    )
                 return result
 
     # ── Auto-detect Transport ────────────────────────────────────
 
-    async def _detect_and_request(self, method: str, params: dict | None = None) -> dict:
-        """Auto-detect transport and send request.
+    async def _read_only_detect_and_request(
+        self,
+        method: str,
+        params: dict | None = None,
+    ) -> dict:
+        """Select a transport using a request that is safe to repeat."""
+        streamable_error_message = ""
+        try:
+            result = await self._streamable_request(method, params)
+            self._transport = "streamable"
+            return result
+        except Exception as streamable_err:  # noqa: BLE001 -- read-only detection may safely try both transports
+            streamable_error_message = str(streamable_err)
+            logger.info(
+                "[MCPClient] Streamable HTTP read-only probe failed ({}), "
+                "trying SSE transport...",
+                type(streamable_err).__name__,
+            )
 
-        Strategy: If transport is already known, use it directly.
-        Otherwise try Streamable HTTP first, fall back to SSE.
+        try:
+            result = await self._sse_request(method, params)
+            self._transport = "sse"
+            return result
+        except Exception as sse_err:
+            raise MCPTransportDetectionError(
+                f"Both transports failed. "
+                f"Streamable HTTP: {streamable_error_message}; "
+                f"SSE: {sse_err}"
+            ) from sse_err
+
+    async def _detect_transport(self) -> None:
+        """Determine the transport without dispatching a business tool call."""
+        if self._transport is not None:
+            return
+        await self._read_only_detect_and_request("tools/list")
+
+    async def _detect_and_request(self, method: str, params: dict | None = None) -> dict:
+        """Use one selected transport for a request.
+
+        Unknown transports are selected with ``tools/list``.  Calls that are
+        themselves read-only may be used as the probe result.  Once transport
+        selection finishes, ``tools/call`` is sent exactly once and failures
+        are returned to the caller without cross-transport replay.
         """
         if self._transport == "sse":
             return await self._sse_request(method, params)
         if self._transport == "streamable":
             return await self._streamable_request(method, params)
 
-        # Auto-detect: try Streamable HTTP first. Python clears exception
-        # variables after an `except ... as name` block exits, so keep a stable
-        # string copy for the later SSE fallback error.
-        streamable_error_message = ""
-        try:
-            result = await self._streamable_request(method, params)
-            self._transport = "streamable"
-            return result
-        except Exception as streamable_err:
-            streamable_error_message = str(streamable_err)
-            logger.info(f"[MCPClient] Streamable HTTP failed ({streamable_err}), trying SSE transport...")
+        if method in {"initialize", "tools/list"}:
+            return await self._read_only_detect_and_request(method, params)
 
-        # Fallback to SSE
-        try:
-            result = await self._sse_request(method, params)
-            self._transport = "sse"
-            return result
-        except Exception as sse_err:
-            raise Exception(
-                f"Both transports failed. "
-                f"Streamable HTTP: {streamable_error_message}; "
-                f"SSE: {sse_err}"
-            )
+        await self._detect_transport()
+        if self._transport == "streamable":
+            return await self._streamable_request(method, params)
+        if self._transport == "sse":
+            return await self._sse_request(method, params)
+        raise MCPTransportDetectionError("MCP transport was not selected")
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -315,7 +360,9 @@ class MCPClient:
             if "error" in data:
                 err = data["error"]
                 msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                raise Exception(f"MCP error: {msg}")
+                raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                    f"MCP error: {msg}"
+                )
 
             result = data.get("result", {})
             tools = result.get("tools", []) if isinstance(result, dict) else []
@@ -328,15 +375,26 @@ class MCPClient:
                 for t in tools
             ]
         except httpx.HTTPError as e:
-            raise Exception(f"Connection failed: {str(e)[:200]}")
+            raise Exception(  # noqa: TRY002 -- preserve the existing MCP adapter error contract
+                f"Connection failed: {str(e)[:200]}"
+            ) from e
+
+    async def call_tool_result(self, tool_name: str, arguments: dict) -> dict:
+        """Execute once and preserve the complete JSON-RPC response."""
+        data = await self._detect_and_request(
+            "tools/call",
+            {"name": tool_name, "arguments": arguments},
+        )
+        if not isinstance(data, dict):
+            raise ValueError(  # noqa: TRY004 -- preserve the existing MCP adapter error contract
+                "MCP tools/call returned a non-object response"
+            )
+        return data
 
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """Execute a tool on the MCP server."""
+        """Legacy text adapter for callers outside Durable Runtime."""
         try:
-            data = await self._detect_and_request(
-                "tools/call",
-                {"name": tool_name, "arguments": arguments},
-            )
+            data = await self.call_tool_result(tool_name, arguments)
 
             if "error" in data:
                 err = data["error"]
@@ -366,4 +424,6 @@ class MCPClient:
             return "\n".join(texts) if texts else str(result)
 
         except httpx.HTTPError as e:
+            return f"❌ MCP connection failed: {str(e)[:200]}"
+        except Exception as e:  # noqa: BLE001 -- legacy text adapter returns bounded failure text
             return f"❌ MCP connection failed: {str(e)[:200]}"

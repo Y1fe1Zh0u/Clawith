@@ -1,46 +1,58 @@
-import { useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from "react-router-dom";
 
-import { type AgentDetailTab, isAgentDetailSettingsTab } from '../agentDetailTabs';
+import {
+  type AgentDetailTab,
+  isAgentDetailSettingsTab,
+} from "../agentDetailTabs";
 
-function resolveInitialTab(isSettingsRoute: boolean, hashTab: string | null): AgentDetailTab {
-    if (!isSettingsRoute) return 'chat';
-    return isAgentDetailSettingsTab(hashTab) ? hashTab : 'status';
+function resolveInitialTab(
+  isSettingsRoute: boolean,
+  isDirectoryRoute: boolean,
+  hashTab: string | null,
+): AgentDetailTab {
+  if (isDirectoryRoute) return "relationships";
+  if (!isSettingsRoute) return "chat";
+  return isAgentDetailSettingsTab(hashTab) ? hashTab : "status";
 }
 
 export function useAgentDetailRoute({ agentId }: { agentId?: string }) {
-    const navigate = useNavigate();
-    const location = useLocation();
-    const isSettingsRoute = location.pathname.endsWith('/settings');
-    const isChatRoute = !isSettingsRoute;
-    const hashTab = location.hash ? location.hash.replace('#', '') : null;
-    const [activeTab, setActiveTabRaw] = useState<AgentDetailTab>(() => resolveInitialTab(isSettingsRoute, hashTab));
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isDirectoryRoute = location.pathname.endsWith("/directory");
+  const isSettingsPath = location.pathname.endsWith("/settings");
+  const isSettingsRoute = isSettingsPath || isDirectoryRoute;
+  const isChatRoute = !isSettingsRoute;
+  const hashTab = location.hash ? location.hash.replace("#", "") : null;
+  const activeTab = resolveInitialTab(
+    isSettingsRoute,
+    isDirectoryRoute,
+    hashTab,
+  );
 
-    useEffect(() => {
-        const nextTab = resolveInitialTab(isSettingsRoute, hashTab);
-        setActiveTabRaw((currentTab) => currentTab === nextTab ? currentTab : nextTab);
-    }, [hashTab, isSettingsRoute]);
+  const setActiveTab = (tab: AgentDetailTab) => {
+    if (tab === "chat") {
+      if (agentId) navigate(`/agents/${agentId}/chat`);
+      return;
+    }
 
-    const setActiveTab = (tab: AgentDetailTab) => {
-        if (tab === 'chat') {
-            setActiveTabRaw('chat');
-            if (agentId) navigate(`/agents/${agentId}/chat`);
-            return;
-        }
+    const nextTab = isAgentDetailSettingsTab(tab) ? tab : "status";
 
-        const nextTab = isAgentDetailSettingsTab(tab) ? tab : 'status';
-        setActiveTabRaw(nextTab);
-        if (agentId && !isSettingsRoute) {
-            navigate(`/agents/${agentId}/settings#${nextTab}`);
-            return;
-        }
-        window.history.replaceState(null, '', `#${nextTab}`);
-    };
+    if (agentId && nextTab === "relationships") {
+      navigate(`/agents/${agentId}/directory`);
+      return;
+    }
 
-    return {
-        activeTab,
-        isChatRoute,
-        isSettingsRoute,
-        setActiveTab,
-    };
+    if (agentId && (!isSettingsRoute || isDirectoryRoute)) {
+      navigate(`/agents/${agentId}/settings#${nextTab}`);
+      return;
+    }
+    navigate({ hash: `#${nextTab}` }, { replace: true });
+  };
+
+  return {
+    activeTab,
+    isChatRoute,
+    isSettingsRoute,
+    setActiveTab,
+  };
 }

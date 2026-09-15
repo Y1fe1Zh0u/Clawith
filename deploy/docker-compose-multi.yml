@@ -1,5 +1,6 @@
 services:
   postgres:
+    profiles: ["deferred-product"]
     image: postgres:15-alpine
     restart: unless-stopped
     networks:
@@ -7,16 +8,17 @@ services:
     environment:
       POSTGRES_USER: clawith
       POSTGRES_PASSWORD: clawith
-      POSTGRES_DB: clawith
+      POSTGRES_DB: clawith_target
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U clawith"]
+      test: ["CMD-SHELL", "pg_isready -U clawith -d clawith_target"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
+    profiles: ["deferred-product"]
     image: redis:7-alpine
     restart: unless-stopped
     networks:
@@ -30,6 +32,7 @@ services:
       retries: 5
 
   minio:
+    profiles: ["deferred-product"]
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -47,6 +50,7 @@ services:
       retries: 5
 
   backend-api:
+    profiles: ["deferred-product"]
     build:
       context: ../backend
       args:
@@ -55,7 +59,7 @@ services:
     restart: unless-stopped
     command: ["/bin/bash", "/app/entrypoint.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://clawith:clawith@postgres:5432/clawith
+      DATABASE_URL: postgresql+asyncpg://clawith:clawith@postgres:5432/clawith_target
       REDIS_URL: redis://redis:6379/0
       AGENT_DATA_DIR: /data/agents
       AGENT_TEMPLATE_DIR: /app/agent_template
@@ -71,10 +75,18 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-jwt-secret}
       PROCESS_ROLE: api
+      APP_WORKERS: ${APP_WORKERS:-2}
+      BCRYPT_WORKERS: ${BCRYPT_WORKERS:-4}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-40}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
+      LOGIN_SLOW_LOG_THRESHOLD_MS: ${LOGIN_SLOW_LOG_THRESHOLD_MS:-1000}
+      AGENT_RUNTIME_V2_ENABLED: "true"
+      AGENT_RUNTIME_V2_AGENT_IDS: ""
+      AGENT_RUNTIME_V2_SOURCE_TYPES: ""
       CORS_ORIGINS: '["*"]'
       FEISHU_APP_ID: ${FEISHU_APP_ID:-}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
-      DOCKER_NETWORK: clawith_yaojin_network
+      DOCKER_NETWORK: ${CLAWITH_DOCKER_NETWORK:-clawith_network}
       SS_CONFIG_FILE: /data/ss-nodes.json
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: ${PASSWORD_RESET_TOKEN_EXPIRE_MINUTES:-30}
@@ -87,6 +99,7 @@ services:
       - SYS_ADMIN
     security_opt:
       - seccomp=unconfined
+      - apparmor=unconfined
     networks:
       default:
         aliases:
@@ -105,6 +118,7 @@ services:
         max-file: "3"
 
   backend-trigger:
+    profiles: ["deferred-product"]
     build:
       context: ../backend
       args:
@@ -113,7 +127,7 @@ services:
     restart: unless-stopped
     command: ["/bin/bash", "/app/entrypoint.sh"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://clawith:clawith@postgres:5432/clawith
+      DATABASE_URL: postgresql+asyncpg://clawith:clawith@postgres:5432/clawith_target
       REDIS_URL: redis://redis:6379/0
       AGENT_DATA_DIR: /data/agents
       AGENT_TEMPLATE_DIR: /app/agent_template
@@ -129,10 +143,14 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-jwt-secret}
       PROCESS_ROLE: bootstrap,worker,connector
+      AGENT_RUNTIME_COMMAND_CONCURRENCY: ${AGENT_RUNTIME_COMMAND_CONCURRENCY:-10}
+      AGENT_RUNTIME_V2_ENABLED: "true"
+      AGENT_RUNTIME_V2_AGENT_IDS: ""
+      AGENT_RUNTIME_V2_SOURCE_TYPES: ""
       CORS_ORIGINS: '["*"]'
       FEISHU_APP_ID: ${FEISHU_APP_ID:-}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
-      DOCKER_NETWORK: clawith_yaojin_network
+      DOCKER_NETWORK: ${CLAWITH_DOCKER_NETWORK:-clawith_network}
       SS_CONFIG_FILE: /data/ss-nodes.json
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: ${PASSWORD_RESET_TOKEN_EXPIRE_MINUTES:-30}
@@ -140,10 +158,12 @@ services:
       - ./backend/agent_data:/data/agents
       - /var/run/docker.sock:/var/run/docker.sock
       - ./ss-nodes.json:/data/ss-nodes.json:ro
+    privileged: true
     cap_add:
       - SYS_ADMIN
     security_opt:
       - seccomp=unconfined
+      - apparmor=unconfined
     networks:
       - default
     depends_on:
@@ -160,6 +180,7 @@ services:
         max-file: "3"
 
   frontend:
+    profiles: ["deferred-product"]
     build: ./frontend
     restart: unless-stopped
     ports:
@@ -182,4 +203,4 @@ volumes:
 
 networks:
   default:
-    name: clawith_network
+    name: ${CLAWITH_DOCKER_NETWORK:-clawith_network}

@@ -1,11 +1,12 @@
 """Local docker-based sandbox backend."""
 
+import os
 import time
-from pathlib import Path
+
+from loguru import logger
 
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
-from loguru import logger
 
 # Lazy import docker to make it optional
 _docker = None
@@ -76,7 +77,7 @@ class DockerBackend(BaseSandboxBackend):
         try:
             self.client.ping()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 -- health normalizes Docker SDK failures.
             return False
 
     async def execute(
@@ -109,6 +110,18 @@ class DockerBackend(BaseSandboxBackend):
             "HOME": "/root",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
+        http_proxy = self.config.http_proxy or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
+        https_proxy = self.config.https_proxy or os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+        no_proxy = self.config.no_proxy or os.environ.get("no_proxy") or os.environ.get("NO_PROXY")
+        if http_proxy:
+            env["http_proxy"] = http_proxy
+            env["HTTP_PROXY"] = http_proxy
+        if https_proxy:
+            env["https_proxy"] = https_proxy
+            env["HTTPS_PROXY"] = https_proxy
+        if no_proxy:
+            env["no_proxy"] = no_proxy
+            env["NO_PROXY"] = no_proxy
 
         # Build docker run command
         if language == "python":
@@ -134,11 +147,12 @@ class DockerBackend(BaseSandboxBackend):
         # Network config
         network = None if not self.config.allow_network else "bridge"
 
+        container = None
         try:
             # Pull image if needed
             try:
                 self.client.images.get(image)
-            except Exception:
+            except Exception:  # noqa: BLE001 -- any SDK lookup miss triggers pull.
                 # Image not found, pull it
                 self.client.images.pull(image)
 
@@ -146,13 +160,13 @@ class DockerBackend(BaseSandboxBackend):
             container = self.client.containers.run(
                 image,
                 cmd,
-                detach=False,
+                detach=True,
                 mem_limit=memory_limit,
                 cpu_period=100000,  # Docker default
                 cpu_quota=int(float(cpu_limit) * 100000),
                 network_mode=network,
                 environment=env,
-                remove=True,
+                remove=False,
                 stdout=True,
                 stderr=True,
             )
@@ -176,10 +190,10 @@ class DockerBackend(BaseSandboxBackend):
                 error=None if exit_code == 0 else f"Exit code: {exit_code}"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- Docker failures become results.
             duration_ms = int((time.time() - start_time) * 1000)
             error_msg = str(e)
-            logger.exception(f"[Docker] Execution error")
+            logger.exception("[Docker] Execution error")
 
             # Handle timeout specifically
             if "timeout" in error_msg.lower():
@@ -200,3 +214,9 @@ class DockerBackend(BaseSandboxBackend):
                 duration_ms=duration_ms,
                 error=f"Docker execution error: {error_msg[:200]}"
             )
+        finally:
+            if container is not None:
+                try:
+                    container.remove(force=True)
+                except Exception:  # noqa: BLE001 -- best-effort SDK cleanup.
+                    logger.warning("[Docker] Failed to remove execution container")

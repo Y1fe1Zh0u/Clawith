@@ -1,11 +1,12 @@
 """E2B API-based sandbox backend."""
 
+import importlib
 import time
-from typing import Any
+
+from loguru import logger
 
 from app.services.sandbox.base import BaseSandboxBackend, ExecutionResult, SandboxCapabilities
 from app.services.sandbox.config import SandboxConfig
-from loguru import logger
 
 # Lazy import e2b to make it optional
 _e2b = None
@@ -16,8 +17,7 @@ def _get_e2b():
     global _e2b
     if _e2b is None:
         try:
-            import e2b
-            _e2b = e2b
+            _e2b = importlib.import_module("e2b")
         except ImportError:
             raise ImportError(
                 "e2b package is required for E2B backend. "
@@ -75,7 +75,7 @@ class E2bBackend(BaseSandboxBackend):
             # Try to list sandboxes to verify API is accessible
             await e2b_lib.AsyncSandbox.list(api_key=self.config.api_key)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 -- health normalizes SDK failures.
             return False
 
     async def execute(
@@ -133,38 +133,60 @@ class E2bBackend(BaseSandboxBackend):
                 cmd_str = f"{cmd} {args[0]} '{args[1]}'"
                 result = await sandbox.commands.run(cmd_str)
 
+            exit_code = result.exit_code
+            if not isinstance(exit_code, int):
+                raise RuntimeError(  # noqa: TRY004 -- malformed provider result
+                    "E2B response did not include an exit code"
+                )
             duration_ms = int((time.time() - start_time) * 1000)
 
             return ExecutionResult(
-                success=result.exit_code == 0,
+                success=exit_code == 0,
                 stdout=result.stdout or "",
                 stderr=result.stderr or "",
-                exit_code=result.exit_code or 0,
+                exit_code=exit_code,
                 duration_ms=duration_ms,
                 error=None
             )
 
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
-            error_msg = str(e)
-            logger.exception(f"[E2B] Execution error")
-
-            # Handle timeout
-            if "timeout" in error_msg.lower():
+            exit_code = getattr(e, "exit_code", None)
+            if isinstance(exit_code, int) and exit_code != 0:
                 return ExecutionResult(
                     success=False,
                     stdout="",
                     stderr="",
-                    exit_code=124,
+                    exit_code=exit_code,
                     duration_ms=duration_ms,
-                    error=f"Code execution timed out after {timeout}s"
+                    error=f"E2B command failed with exit code {exit_code}",
+                )
+            response = getattr(e, "response", None)
+            status_code = getattr(e, "status_code", None) or getattr(
+                response,
+                "status_code",
+                None,
+            )
+            if (
+                isinstance(status_code, int)
+                and 400 <= status_code < 500
+                and status_code != 408
+            ):
+                return ExecutionResult(
+                    success=False,
+                    stdout="",
+                    stderr="",
+                    exit_code=1,
+                    duration_ms=duration_ms,
+                    error=f"E2B rejected the request (HTTP {status_code})",
                 )
 
-            return ExecutionResult(
-                success=False,
-                stdout="",
-                stderr="",
-                exit_code=1,
-                duration_ms=duration_ms,
-                error=f"E2B execution error: {error_msg[:200]}"
+            # The remote sandbox/create or command request was already sent.
+            # A timeout, disconnect, 5xx, or malformed response cannot prove
+            # whether code executed, so let the Runtime typed boundary record
+            # unknown and prohibit fallback/retry.
+            logger.warning(
+                "[E2B] Remote execution outcome unknown after {}",
+                type(e).__name__,
             )
+            raise
